@@ -2,26 +2,148 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+  Design tokens — RGB triplets so Tailwind can compose alpha.
+  Dark is the default theme (class "dark" on <html>).
+*/
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: 255 255 255;
+  --surface: 247 247 245;
+  --card: 255 255 255;
+  --foreground: 25 25 25;
+  --muted-fg: 25 25 25;
+  --accent: 59 122 245;
+  --success: 15 157 88;
+  --danger: 212 76 71;
+  --warning: 203 145 47;
+  --line: 0 0 0;
+  --line-alpha: 0.08;
+  --glass-bg: 255 255 255;
+  --glass-alpha: 0.72;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+.dark {
+  --background: 25 25 25; /* #191919 */
+  --surface: 32 32 32; /* #202020 */
+  --card: 47 47 47; /* #2F2F2F */
+  --foreground: 255 255 255;
+  --muted-fg: 255 255 255;
+  --accent: 79 140 255; /* #4F8CFF */
+  --success: 74 196 132;
+  --danger: 235 107 99;
+  --warning: 226 163 84;
+  --line: 255 255 255;
+  --line-alpha: 0.05;
+  --glass-bg: 32 32 32;
+  --glass-alpha: 0.6;
+}
+
+* {
+  border-color: rgb(var(--line) / var(--line-alpha));
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  background: rgb(var(--background));
+  color: rgb(var(--foreground));
+  font-feature-settings: "ss01";
+  overflow-x: hidden;
 }
 
+::selection {
+  background: rgb(var(--accent) / 0.25);
+}
+
+/* Scrollbar — slim, rounded, calm; brightens only while grabbed */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--muted-fg) / 0.22) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--muted-fg) / 0.22);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--muted-fg) / 0.35);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:active {
+  background: rgb(var(--muted-fg) / 0.5);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Persian digits render nicely with Vazirmatn's built-in numerals */
+
 @layer utilities {
+  .glass {
+    background: rgb(var(--glass-bg) / var(--glass-alpha));
+    backdrop-filter: blur(20px) saturate(1.4);
+    -webkit-backdrop-filter: blur(20px) saturate(1.4);
+    border: 1px solid rgb(var(--line) / calc(var(--line-alpha) + 0.03));
+  }
+  .glass-strong {
+    background: rgb(var(--glass-bg) / calc(var(--glass-alpha) + 0.2));
+    backdrop-filter: blur(28px) saturate(1.5);
+    -webkit-backdrop-filter: blur(28px) saturate(1.5);
+    border: 1px solid rgb(var(--line) / calc(var(--line-alpha) + 0.04));
+  }
   .text-balance {
     text-wrap: balance;
+  }
+  .section-pad {
+    @apply py-24 md:py-32;
+  }
+}
+
+/* Soft top sheen on glass surfaces.
+   :where() keeps specificity at zero so positioning utilities
+   (e.g. `fixed` on modals) are never overridden. */
+:where(.glass, .glass-strong) {
+  position: relative;
+}
+.glass::before,
+.glass-strong::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    transparent 5%,
+    rgb(var(--line) / calc(var(--line-alpha) * 3)) 50%,
+    transparent 95%
+  );
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
