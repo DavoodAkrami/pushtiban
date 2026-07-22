@@ -47,7 +47,6 @@ import {
   type KeywordAutomation,
 } from "@/lib/automations";
 import { fa } from "@/lib/utils";
-import { FlowsPanel } from "@/components/dashboard/flows-panel";
 import { Camera, MessageCircle } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
@@ -735,7 +734,7 @@ const AutomationPanelContent = () => {
     <div className="mx-auto max-w-5xl">
       <header className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-2xl font-black">اتوماسیون</h1>
+          <h1 className="text-2xl font-black">پیام‌های آماده</h1>
           <p className="mt-2 max-w-2xl text-sm leading-7 text-muted">
             برای پیام‌های پرتکرار کلیدواژه یا فرمان تعریف کنید تا ربات تلگرام
             همان لحظه پاسخ آماده شما را بفرستد.
@@ -748,7 +747,7 @@ const AutomationPanelContent = () => {
           disabled={!canCreate}
           className="w-full shrink-0 sm:w-auto"
         >
-          اتوماسیون جدید
+          پیام آماده جدید
         </Button>
       </header>
 
@@ -813,10 +812,6 @@ const AutomationPanelContent = () => {
               کامل پیام تطبیق دارند.
             </span>
           </div>
-        )}
-
-        {bot && status === "succeeded" && (
-          <FlowsPanel bot={bot} />
         )}
 
         {loading && (

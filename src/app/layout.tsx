@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import localFont from "next/font/local";
 import { ThemeProvider } from "@/components/theme-provider";
 import { StoreProvider } from "@/store/provider";
+import "@xyflow/react/dist/style.css";
 import "./globals.css";
 
 const vazirmatn = localFont({

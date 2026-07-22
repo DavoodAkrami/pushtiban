@@ -10,12 +10,22 @@ type FlowsState = {
   status: LoadStatus;
   error: string | null;
   setupRequired: boolean;
+  detail: AutomationFlowDetail | null;
+  detailStatus: LoadStatus;
+  detailError: string | null;
 };
 
-type FlowMutationResponse = {
-  flow: AutomationFlow;
+type FlowMutationMeta = {
   webhookActive: boolean;
   commandsSynced: boolean;
+};
+
+type CreateFlowResponse = FlowMutationMeta & {
+  flow: AutomationFlow;
+};
+
+type UpdateFlowResponse = FlowMutationMeta & {
+  flow: AutomationFlowDetail;
 };
 
 type FlowDetailResponse = { flow: AutomationFlowDetail };
@@ -25,6 +35,9 @@ const initialState: FlowsState = {
   status: "idle",
   error: null,
   setupRequired: false,
+  detail: null,
+  detailStatus: "idle",
+  detailError: null,
 };
 
 const responseError = async (response: Response): Promise<FlowRequestError> => {
@@ -65,7 +78,7 @@ export const loadFlowDetail = createAsyncThunk<
 });
 
 export const createFlow = createAsyncThunk<
-  FlowMutationResponse,
+  CreateFlowResponse,
   { triggerType: "keyword" | "command"; triggerKeyword: string; name: string; commandDescription?: string; rootMessage: string },
   { rejectValue: FlowRequestError }
 >("flows/create", async (input, { rejectWithValue }) => {
@@ -76,14 +89,14 @@ export const createFlow = createAsyncThunk<
       body: JSON.stringify(input),
     });
     if (!response.ok) return rejectWithValue(await responseError(response));
-    return (await response.json()) as FlowMutationResponse;
+    return (await response.json()) as CreateFlowResponse;
   } catch {
     return rejectWithValue({ message: "اتصال برقرار نشد؛ اینترنت را بررسی کنید." });
   }
 });
 
 export const updateFlow = createAsyncThunk<
-  FlowMutationResponse & { nodes?: unknown },
+  UpdateFlowResponse,
   { id: string; changes: Record<string, unknown> },
   { rejectValue: FlowRequestError }
 >("flows/update", async ({ id, changes }, { rejectWithValue }) => {
@@ -94,7 +107,7 @@ export const updateFlow = createAsyncThunk<
       body: JSON.stringify(changes),
     });
     if (!response.ok) return rejectWithValue(await responseError(response));
-    return (await response.json()) as FlowMutationResponse;
+    return (await response.json()) as UpdateFlowResponse;
   } catch {
     return rejectWithValue({ message: "اتصال برقرار نشد؛ اینترنت را بررسی کنید." });
   }
@@ -135,15 +148,38 @@ const flowsSlice = createSlice({
         state.error = action.payload?.message ?? "فلوها بارگذاری نشدند.";
         state.setupRequired = action.payload?.setupRequired ?? false;
       })
+      .addCase(loadFlowDetail.pending, (state) => {
+        state.detail = null;
+        state.detailStatus = "loading";
+        state.detailError = null;
+      })
+      .addCase(loadFlowDetail.fulfilled, (state, action) => {
+        state.detail = action.payload.flow;
+        state.detailStatus = "succeeded";
+      })
+      .addCase(loadFlowDetail.rejected, (state, action) => {
+        state.detail = null;
+        state.detailStatus = "failed";
+        state.detailError =
+          action.payload?.message ?? "فلو موردنظر بارگذاری نشد.";
+      })
       .addCase(createFlow.fulfilled, (state, action) => {
         state.items.unshift(action.payload.flow);
       })
       .addCase(updateFlow.fulfilled, (state, action) => {
         const idx = state.items.findIndex((f) => f.id === action.payload.flow.id);
         if (idx >= 0) state.items[idx] = action.payload.flow;
+        if (state.detail?.id === action.payload.flow.id) {
+          state.detail = action.payload.flow;
+        }
       })
       .addCase(deleteFlow.fulfilled, (state, action) => {
         state.items = state.items.filter((f) => f.id !== action.payload.id);
+        if (state.detail?.id === action.payload.id) {
+          state.detail = null;
+          state.detailStatus = "idle";
+          state.detailError = null;
+        }
       });
   },
 });

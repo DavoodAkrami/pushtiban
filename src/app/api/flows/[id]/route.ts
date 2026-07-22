@@ -74,6 +74,16 @@ type FlowDetailRow = {
   automation_flow_nodes: NodeRow[];
 };
 
+const FLOW_DETAIL_SELECT = `
+  id, trigger_type, trigger_keyword, name, command_description, is_active, created_at, updated_at,
+  automation_flow_nodes (
+    id, flow_id, message_text, is_root,
+    automation_flow_buttons:automation_flow_buttons!automation_flow_buttons_node_id_fkey (
+      id, node_id, flow_id, label, action_type, next_node_id, url, position
+    )
+  )
+`;
+
 const toButton = (row: ButtonRow): FlowButton => ({
   id: row.id,
   nodeId: row.node_id,
@@ -126,13 +136,7 @@ export const GET = async (
     const admin = createAdminClient();
     const { data, error } = await admin
       .from("automation_flows")
-      .select(
-        `id, trigger_type, trigger_keyword, name, command_description, is_active, created_at, updated_at,
-         automation_flow_nodes (
-           id, flow_id, message_text, is_root,
-           automation_flow_buttons (id, node_id, flow_id, label, action_type, next_node_id, url, position)
-         )`
-      )
+      .select(FLOW_DETAIL_SELECT)
       .eq("id", params.id)
       .eq("user_id", user.id)
       .maybeSingle();
@@ -391,21 +395,18 @@ export const PATCH = async (
     ]);
 
     // Re-fetch updated flow
-    const { data: updated } = await admin
+    const { data: updated, error: updatedError } = await admin
       .from("automation_flows")
-      .select(
-        `id, trigger_type, trigger_keyword, name, command_description, is_active, created_at, updated_at,
-         automation_flow_nodes (
-           id, flow_id, message_text, is_root,
-           automation_flow_buttons (id, node_id, flow_id, label, action_type, next_node_id, url, position)
-         )`
-      )
+      .select(FLOW_DETAIL_SELECT)
       .eq("id", params.id)
       .eq("user_id", user.id)
       .maybeSingle();
 
+    if (updatedError || !updated)
+      return jsonError("فلو ذخیره شد، اما نسخه تازه آن بارگذاری نشد.", 500);
+
     return NextResponse.json({
-      flow: updated ? toFlowDetail(updated as FlowDetailRow) : null,
+      flow: toFlowDetail(updated as FlowDetailRow),
       webhookActive,
       commandsSynced,
     });

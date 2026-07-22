@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   Command,
@@ -28,7 +29,6 @@ import { Select, type SelectOption } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
-import { FlowBuilder } from "@/components/dashboard/flow-builder";
 import {
   cleanKeyword,
   isValidTelegramCommand,
@@ -42,19 +42,17 @@ import {
   FLOW_NAME_MAX_LENGTH,
   FLOW_NODE_MESSAGE_MAX_LENGTH,
   type AutomationFlow,
-  type AutomationFlowDetail,
 } from "@/lib/flows";
 import { fa } from "@/lib/utils";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   createFlow,
   deleteFlow,
-  loadFlowDetail,
   loadFlows,
   updateFlow,
   type FlowRequestError,
 } from "@/store/slices/flows-slice";
-import type { AutomationBot } from "@/lib/automations";
+import { loadAutomations } from "@/store/slices/automations-slice";
 
 // ─── Trigger type options ────────────────────────────────────────────────────
 
@@ -388,34 +386,44 @@ const FlowCard = ({
 
 // ─── FlowsPanel ───────────────────────────────────────────────────────────────
 
-export const FlowsPanel = ({ bot }: { bot: AutomationBot | null }) => {
+export const FlowsPanel = () => {
+  const router = useRouter();
   const dispatch = useAppDispatch();
   const { toast } = useToast();
-  const { items, status, error, setupRequired } = useAppSelector((s) => s.flows);
+  const {
+    items,
+    status: flowsStatus,
+    error: flowsError,
+    setupRequired: flowsSetupRequired,
+  } = useAppSelector((state) => state.flows);
+  const {
+    bot,
+    status: connectionStatus,
+    error: connectionError,
+    setupRequired: connectionSetupRequired,
+  } = useAppSelector((state) => state.automations);
 
   const [createOpen, setCreateOpen] = React.useState(false);
   const [deletingFlow, setDeletingFlow] = React.useState<AutomationFlow | null>(null);
   const [deleting, setDeleting] = React.useState(false);
   const [busyFlowId, setBusyFlowId] = React.useState<string | null>(null);
-  const [editingFlow, setEditingFlow] = React.useState<AutomationFlowDetail | null>(null);
-  const [loadingDetail, setLoadingDetail] = React.useState(false);
 
-  const loading = status === "idle" || status === "loading";
+  const loading =
+    flowsStatus === "idle" ||
+    flowsStatus === "loading" ||
+    connectionStatus === "idle" ||
+    connectionStatus === "loading";
+  const canCreate =
+    flowsStatus === "succeeded" &&
+    connectionStatus === "succeeded" &&
+    Boolean(bot) &&
+    !flowsSetupRequired &&
+    !connectionSetupRequired;
 
   React.useEffect(() => {
-    if (status === "idle") void dispatch(loadFlows());
-  }, [dispatch, status]);
-
-  const openEdit = async (flow: AutomationFlow) => {
-    setLoadingDetail(true);
-    const result = await dispatch(loadFlowDetail(flow.id));
-    setLoadingDetail(false);
-    if (loadFlowDetail.fulfilled.match(result)) {
-      setEditingFlow(result.payload.flow);
-    } else {
-      toast({ title: "فلو بارگذاری نشد؛ دوباره تلاش کنید.", variant: "error" });
-    }
-  };
+    if (flowsStatus === "idle") void dispatch(loadFlows());
+    if (connectionStatus === "idle") void dispatch(loadAutomations());
+  }, [connectionStatus, dispatch, flowsStatus]);
 
   const toggleFlow = async (flow: AutomationFlow, active: boolean) => {
     setBusyFlowId(flow.id);
@@ -444,111 +452,181 @@ export const FlowsPanel = ({ bot }: { bot: AutomationBot | null }) => {
     }
   };
 
-  if (editingFlow) {
-    return (
-      <FlowBuilder
-        flow={editingFlow}
-        onClose={() => setEditingFlow(null)}
-      />
-    );
-  }
-
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-4">
+    <div className="mx-auto max-w-5xl">
+      <header className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h3 className="text-sm font-bold">فلوهای مکالمه</h3>
-          <p className="mt-0.5 text-xs text-muted">
-            پیام‌های تعاملی با دکمه و مسیرهای زنجیره‌ای
+          <h1 className="text-2xl font-black">فلوها</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-7 text-muted">
+            مکالمه‌های چندمرحله‌ای ربات را روی یک بوم دیداری بسازید و هر دکمه
+            را به پیام بعدی، لینک یا پایان مسیر متصل کنید.
           </p>
         </div>
-        {bot && status === "succeeded" && (
-          <Button
-            type="button"
-            size="sm"
-            startIcon={<Plus className="size-4" />}
-            onClick={() => setCreateOpen(true)}
-            disabled={loadingDetail}
+        <Button
+          type="button"
+          startIcon={<Plus className="size-4" />}
+          onClick={() => setCreateOpen(true)}
+          disabled={!canCreate}
+          className="w-full shrink-0 sm:w-auto"
+        >
+          فلو جدید
+        </Button>
+      </header>
+
+      <div className="mt-8 space-y-5">
+        {(flowsSetupRequired || connectionSetupRequired) && (
+          <Alert
+            variant="warning"
+            title="راه‌اندازی فلوها کامل نشده است"
+            description={
+              flowsError ??
+              connectionError ??
+              "اسکریپت پایگاه داده فلوها را اجرا کنید، سپس دوباره بررسی کنید."
+            }
           >
-            فلو جدید
-          </Button>
+            <Button
+              type="button"
+              variant="link"
+              className="mt-2"
+              onClick={() => {
+                void dispatch(loadFlows());
+                void dispatch(loadAutomations());
+              }}
+            >
+              بررسی دوباره
+            </Button>
+          </Alert>
+        )}
+
+        {!flowsSetupRequired && flowsStatus === "failed" && (
+          <Alert
+            variant="error"
+            title="فلوها بارگذاری نشدند"
+            description={flowsError ?? "اتصال اینترنت را بررسی کنید."}
+          >
+            <Button
+              type="button"
+              variant="link"
+              className="mt-2"
+              onClick={() => void dispatch(loadFlows())}
+            >
+              تلاش دوباره
+            </Button>
+          </Alert>
+        )}
+
+        {!connectionSetupRequired && connectionStatus === "failed" && (
+          <Alert
+            variant="error"
+            title="وضعیت ربات بررسی نشد"
+            description={
+              connectionError ??
+              "اتصال اینترنت را بررسی کنید و دوباره تلاش کنید."
+            }
+          >
+            <Button
+              type="button"
+              variant="link"
+              className="mt-2"
+              onClick={() => void dispatch(loadAutomations())}
+            >
+              تلاش دوباره
+            </Button>
+          </Alert>
+        )}
+
+        {!loading && connectionStatus === "succeeded" && !bot && (
+          <Alert
+            variant="info"
+            title="ابتدا ربات تلگرام را متصل کنید"
+            description="از منوی حساب وارد تنظیمات و بخش اتصالات شوید. پس از اتصال ربات، می‌توانید اولین فلو را بسازید."
+          />
+        )}
+
+        {bot && connectionStatus === "succeeded" && (
+          <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface/30 px-4 py-3 sm:flex-row sm:items-center">
+            <span className="flex min-w-0 items-center gap-3">
+              <Icon icon={GitBranch} tile size="xs" tone="accent" />
+              <span className="min-w-0">
+                <span className="block text-xs text-muted">ربات متصل</span>
+                <span
+                  dir="ltr"
+                  className="block truncate text-start text-sm font-medium"
+                >
+                  @{bot.username}
+                </span>
+              </span>
+            </span>
+            <span className="text-xs leading-6 text-muted sm:ms-auto">
+              هر فلو با یک فرمان یا کلیدواژه شروع می‌شود.
+            </span>
+          </div>
+        )}
+
+        {loading && (
+          <div className="space-y-4" role="status" aria-label="در حال بارگذاری فلوها">
+            {[0, 1].map((item) => (
+              <div
+                key={item}
+                className="rounded-3xl border border-line bg-surface/35 p-5"
+              >
+                <div className="flex items-center gap-3">
+                  <Skeleton className="size-9 rounded-xl" />
+                  <div className="flex-1 space-y-2">
+                    <Skeleton className="h-4 w-32" />
+                    <Skeleton className="h-5 w-20 rounded-full" />
+                  </div>
+                  <Skeleton className="h-6 w-11 rounded-full" />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {!loading && flowsStatus === "succeeded" && bot && items.length === 0 && (
+          <section className="rounded-3xl border border-dashed border-line bg-surface/25 px-6 py-14 text-center">
+            <Icon icon={GitBranch} tile size="lg" tone="accent" />
+            <h2 className="mt-5 text-lg font-bold">اولین فلو را بسازید</h2>
+            <p className="mx-auto mt-2 max-w-lg text-sm leading-7 text-muted">
+              مثلاً فرمان /start را به یک پیام خوش‌آمدگویی وصل کنید و برای هر
+              انتخاب مشتری یک مسیر جدا بسازید.
+            </p>
+            <Button
+              type="button"
+              className="mt-6"
+              startIcon={<Plus className="size-4" />}
+              onClick={() => setCreateOpen(true)}
+            >
+              ساخت اولین فلو
+            </Button>
+          </section>
+        )}
+
+        {!loading && flowsStatus === "succeeded" && items.length > 0 && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted">{fa(items.length)} فلو</span>
+            </div>
+            <AnimatePresence initial={false}>
+              {items.map((flow) => (
+                <FlowCard
+                  key={flow.id}
+                  flow={flow}
+                  busy={busyFlowId === flow.id}
+                  onEdit={() => router.push(`/flow/${flow.id}`)}
+                  onDelete={() => setDeletingFlow(flow)}
+                  onToggle={(active) => void toggleFlow(flow, active)}
+                />
+              ))}
+            </AnimatePresence>
+          </div>
         )}
       </div>
-
-      {setupRequired && (
-        <Alert
-          variant="warning"
-          title="راه‌اندازی ناقص"
-          description={error ?? "اسکریپت پایگاه داده را اجرا کنید."}
-        >
-          <Button type="button" variant="link" className="mt-2" onClick={() => void dispatch(loadFlows())}>
-            بررسی دوباره
-          </Button>
-        </Alert>
-      )}
-
-      {!setupRequired && status === "failed" && (
-        <Alert variant="error" title="فلوها بارگذاری نشدند" description={error ?? "اتصال اینترنت را بررسی کنید."}>
-          <Button type="button" variant="link" className="mt-2" onClick={() => void dispatch(loadFlows())}>
-            تلاش دوباره
-          </Button>
-        </Alert>
-      )}
-
-      {loading && (
-        <div className="space-y-4">
-          {[0, 1].map((i) => (
-            <div key={i} className="rounded-3xl border border-line bg-surface/35 p-5">
-              <div className="flex items-center gap-3">
-                <Skeleton className="size-9 rounded-xl" />
-                <div className="flex-1 space-y-2">
-                  <Skeleton className="h-4 w-32" />
-                  <Skeleton className="h-5 w-20 rounded-full" />
-                </div>
-                <Skeleton className="h-6 w-11 rounded-full" />
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {!loading && status === "succeeded" && bot && items.length === 0 && (
-        <section className="rounded-3xl border border-dashed border-line bg-surface/25 px-6 py-10 text-center">
-          <Icon icon={GitBranch} tile size="md" tone="accent" />
-          <h4 className="mt-4 text-base font-bold">اولین فلو را بسازید</h4>
-          <p className="mx-auto mt-2 max-w-sm text-sm leading-7 text-muted">
-            مثلاً فرمان /start را به یک پیام خوش‌آمدگویی با دکمه‌های انتخابی وصل کنید.
-          </p>
-          <Button type="button" className="mt-6" startIcon={<Plus className="size-4" />} onClick={() => setCreateOpen(true)}>
-            ساخت اولین فلو
-          </Button>
-        </section>
-      )}
-
-      {!loading && status === "succeeded" && items.length > 0 && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-muted">{fa(items.length)} فلو</span>
-          </div>
-          <AnimatePresence initial={false}>
-            {items.map((flow) => (
-              <FlowCard
-                key={flow.id}
-                flow={flow}
-                busy={busyFlowId === flow.id || loadingDetail}
-                onEdit={() => void openEdit(flow)}
-                onDelete={() => setDeletingFlow(flow)}
-                onToggle={(active) => void toggleFlow(flow, active)}
-              />
-            ))}
-          </AnimatePresence>
-        </div>
-      )}
 
       <CreateFlowModal
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onCreated={() => {}}
+        onCreated={(flow) => router.push(`/flow/${flow.id}`)}
       />
       <DeleteFlowModal
         flow={deletingFlow}

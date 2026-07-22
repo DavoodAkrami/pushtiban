@@ -54,6 +54,38 @@ body {
   overflow-x: hidden;
 }
 
+.flow-canvas {
+  --xy-background-color: rgb(var(--background));
+  --xy-background-pattern-dots-color: rgb(var(--muted-fg) / 0.2);
+  --xy-edge-stroke: rgb(var(--accent) / 0.72);
+  --xy-edge-stroke-selected: rgb(var(--accent));
+  --xy-handle-background-color: rgb(var(--accent));
+  --xy-handle-border-color: rgb(var(--card));
+  --xy-minimap-background-color: rgb(var(--surface));
+  --xy-minimap-mask-background-color: rgb(var(--background) / 0.72);
+  --xy-minimap-node-background-color: rgb(var(--accent) / 0.7);
+  --xy-controls-button-background-color: rgb(var(--surface));
+  --xy-controls-button-background-color-hover: rgb(var(--card));
+  --xy-controls-button-color: rgb(var(--foreground));
+  --xy-controls-button-color-hover: rgb(var(--foreground));
+  --xy-controls-button-border-color: rgb(var(--line) / var(--line-alpha));
+  --xy-controls-box-shadow: 0 10px 30px rgb(var(--background) / 0.22);
+  --xy-selection-background-color: rgb(var(--accent) / 0.08);
+  --xy-selection-border: 1px dotted rgb(var(--accent) / 0.75);
+}
+
+.flow-canvas .react-flow__controls,
+.flow-canvas .react-flow__minimap {
+  overflow: hidden;
+  border: 1px solid rgb(var(--line) / var(--line-alpha));
+  border-radius: 1rem;
+  box-shadow: 0 10px 30px rgb(var(--background) / 0.18);
+}
+
+.flow-canvas .react-flow__controls-button:last-child {
+  border-bottom: 0;
+}
+
 ::selection {
   background: rgb(var(--accent) / 0.25);
 }

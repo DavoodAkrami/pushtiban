@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import * as AccordionPrimitive from "@radix-ui/react-accordion";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -11,9 +12,11 @@ import {
   Check,
   ChevronDown,
   ChevronsUpDown,
+  GitBranch,
   LayoutDashboard,
   LogOut,
   Menu,
+  MessageSquareText,
   Monitor,
   Moon,
   Palette,
@@ -39,9 +42,16 @@ import { useSessionProfile } from "@/store/use-session";
 const NAV_ITEMS = [
   { href: "/dashboard/overview", label: "نمای کلی", icon: LayoutDashboard },
   {
-    href: "/dashboard/automation",
     label: "اتوماسیون",
     icon: Workflow,
+    children: [
+      { href: "/flow", label: "فلوها", icon: GitBranch },
+      {
+        href: "/dashboard/automation",
+        label: "پیام‌های آماده",
+        icon: MessageSquareText,
+      },
+    ],
   },
   {
     href: "/dashboard/ai-assistance",
@@ -164,60 +174,197 @@ const UserChip = ({
 const DashboardNavigation = ({
   expanded,
   onNavigate,
+  onRequestExpand,
   pathname,
 }: {
   expanded: boolean;
   onNavigate?: () => void;
+  onRequestExpand?: () => void;
   pathname: string;
-}) => (
-  <nav
-    aria-label="بخش‌های داشبورد"
-    className={cn(
-      "mt-8 min-h-0 flex-1 overscroll-contain",
-      expanded ? "overflow-y-auto" : "overflow-visible"
-    )}
-  >
-    <ul className="space-y-1">
-      {NAV_ITEMS.map((item) => {
-        const active =
-          pathname === item.href || pathname.startsWith(`${item.href}/`);
-        const link = (
-          <Link
-            href={item.href}
-            onClick={() => onNavigate?.()}
-            aria-current={active ? "page" : undefined}
-            className={cn(
-              "flex h-11 w-full items-center gap-3 rounded-2xl px-3 text-sm transition-colors duration-300 hover:bg-card/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
-              !expanded && "justify-center px-0",
-              active
-                ? "bg-card/70 font-medium text-foreground"
-                : "text-muted"
-            )}
-          >
-            <item.icon className="size-[1.15rem] shrink-0" aria-hidden />
-            {expanded && <span className="truncate">{item.label}</span>}
-          </Link>
-        );
+}) => {
+  const reduce = useReducedMotion();
+  const automationActive =
+    pathname === "/flow" ||
+    pathname.startsWith("/flow/") ||
+    pathname === "/dashboard/automation" ||
+    pathname.startsWith("/dashboard/automation/");
+  const [automationOpen, setAutomationOpen] = React.useState(
+    automationActive ? "automation" : ""
+  );
 
-        return (
-          <li key={item.href}>
-            {expanded ? (
-              link
-            ) : (
-              <Tooltip
-                content={item.label}
-                side="end"
-                wrapperClassName="w-full"
-              >
-                {link}
-              </Tooltip>
-            )}
-          </li>
-        );
-      })}
-    </ul>
-  </nav>
-);
+  React.useEffect(() => {
+    if (automationActive) setAutomationOpen("automation");
+  }, [automationActive]);
+
+  return (
+    <nav
+      aria-label="بخش‌های داشبورد"
+      className={cn(
+        "mt-8 min-h-0 flex-1 overscroll-contain",
+        expanded ? "overflow-y-auto" : "overflow-visible"
+      )}
+    >
+      <ul className="space-y-1">
+        {NAV_ITEMS.map((item) => {
+          if (item.children) {
+            if (!expanded) {
+              const automationShortcut = (
+                <button
+                  type="button"
+                  aria-label="باز کردن زیرمنوی اتوماسیون"
+                  onClick={() => {
+                    setAutomationOpen("automation");
+                    onRequestExpand?.();
+                  }}
+                  className={cn(
+                    "flex h-11 w-full items-center justify-center rounded-2xl px-0 text-sm transition-colors duration-300 hover:bg-card/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+                    automationActive
+                      ? "bg-card/70 font-medium text-foreground"
+                      : "text-muted"
+                  )}
+                >
+                  <item.icon
+                    className="size-[1.15rem] shrink-0"
+                    aria-hidden
+                  />
+                </button>
+              );
+
+              return (
+                <li key={item.label}>
+                  <Tooltip
+                    content="باز کردن اتوماسیون"
+                    side="end"
+                    wrapperClassName="w-full"
+                  >
+                    {automationShortcut}
+                  </Tooltip>
+                </li>
+              );
+            }
+
+            const open = automationOpen === "automation";
+
+            return (
+              <li key={item.label}>
+                <AccordionPrimitive.Root
+                  type="single"
+                  collapsible
+                  value={automationOpen}
+                  onValueChange={setAutomationOpen}
+                >
+                  <AccordionPrimitive.Item value="automation">
+                    <AccordionPrimitive.Header>
+                      <AccordionPrimitive.Trigger
+                        className={cn(
+                          "flex h-11 w-full items-center gap-3 rounded-2xl px-3 text-sm transition-colors duration-300 hover:bg-card/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+                          automationActive
+                            ? "bg-card/70 font-medium text-foreground"
+                            : "text-muted"
+                        )}
+                      >
+                        <item.icon
+                          className="size-[1.15rem] shrink-0"
+                          aria-hidden
+                        />
+                        <span className="truncate">{item.label}</span>
+                        <motion.span
+                          animate={{ rotate: open ? 180 : 0 }}
+                          transition={{ duration: reduce ? 0 : 0.2, ease: luxe }}
+                          className="ms-auto shrink-0"
+                        >
+                          <ChevronDown className="size-4" aria-hidden />
+                        </motion.span>
+                      </AccordionPrimitive.Trigger>
+                    </AccordionPrimitive.Header>
+                    <AccordionPrimitive.Content asChild>
+                      <motion.div
+                        initial={
+                          reduce ? { opacity: 1 } : { height: 0, opacity: 0 }
+                        }
+                        animate={{ height: "auto", opacity: 1 }}
+                        transition={{ duration: reduce ? 0 : 0.24, ease: luxe }}
+                        className="overflow-hidden"
+                      >
+                        <ul className="space-y-1 pb-1 pt-1">
+                          {item.children.map((child) => {
+                            const childActive =
+                              pathname === child.href ||
+                              pathname.startsWith(`${child.href}/`);
+
+                            return (
+                              <li key={child.href}>
+                                <Link
+                                  href={child.href}
+                                  onClick={() => onNavigate?.()}
+                                  aria-current={childActive ? "page" : undefined}
+                                  className={cn(
+                                    "flex h-10 items-center gap-3 rounded-2xl pe-3 ps-10 text-sm transition-colors duration-300 hover:bg-card/55 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+                                    childActive
+                                      ? "font-medium text-accent"
+                                      : "text-muted"
+                                  )}
+                                >
+                                  <child.icon
+                                    className="size-4 shrink-0"
+                                    aria-hidden
+                                  />
+                                  <span className="truncate">
+                                    {child.label}
+                                  </span>
+                                </Link>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </motion.div>
+                    </AccordionPrimitive.Content>
+                  </AccordionPrimitive.Item>
+                </AccordionPrimitive.Root>
+              </li>
+            );
+          }
+
+          const active =
+            pathname === item.href || pathname.startsWith(`${item.href}/`);
+          const link = (
+            <Link
+              href={item.href}
+              onClick={() => onNavigate?.()}
+              aria-current={active ? "page" : undefined}
+              className={cn(
+                "flex h-11 w-full items-center gap-3 rounded-2xl px-3 text-sm transition-colors duration-300 hover:bg-card/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+                !expanded && "justify-center px-0",
+                active
+                  ? "bg-card/70 font-medium text-foreground"
+                  : "text-muted"
+              )}
+            >
+              <item.icon className="size-[1.15rem] shrink-0" aria-hidden />
+              {expanded && <span className="truncate">{item.label}</span>}
+            </Link>
+          );
+
+          return (
+            <li key={item.href}>
+              {expanded ? (
+                link
+              ) : (
+                <Tooltip
+                  content={item.label}
+                  side="end"
+                  wrapperClassName="w-full"
+                >
+                  {link}
+                </Tooltip>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
+  );
+};
 
 const AccountSection = ({
   actionsId,
@@ -785,6 +932,7 @@ export const DashboardShell = ({
             expanded={sidebarOpen}
             pathname={pathname}
             onNavigate={() => setDesktopProfileMenuOpen(false)}
+            onRequestExpand={() => setSidebarOpen(true)}
           />
 
           <AccountSection

@@ -1,21 +1,37 @@
 "use client";
 
 import * as React from "react";
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { useRouter } from "next/navigation";
+import { useTheme } from "next-themes";
+import { motion, useReducedMotion } from "framer-motion";
 import {
-  ChevronDown,
-  ChevronLeft,
+  Background,
+  BackgroundVariant,
+  Controls,
+  Handle,
+  MarkerType,
+  MiniMap,
+  Position,
+  ReactFlow,
+  type Edge,
+  type Node,
+  type NodeChange,
+  type NodeProps,
+} from "@xyflow/react";
+import {
+  ArrowRight,
+  CornerDownLeft,
+  Flag,
   GripVertical,
   Link2,
   MessageSquare,
   Plus,
   Save,
   Trash2,
+  Workflow,
   X,
 } from "lucide-react";
-import { luxe } from "@/components/motion/reveal";
 import { Button } from "@/components/ui/button";
-import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { Select, type SelectOption } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -28,10 +44,9 @@ import {
   type AutomationFlowDetail,
   type FlowButtonActionType,
 } from "@/lib/flows";
+import { cn, fa } from "@/lib/utils";
 import { useAppDispatch } from "@/store/hooks";
 import { updateFlow } from "@/store/slices/flows-slice";
-
-// ─── Draft types ────────────────────────────────────────────────────────────
 
 type DraftButton = {
   localId: string;
@@ -48,123 +63,268 @@ type DraftNode = {
   buttons: DraftButton[];
 };
 
-const uid = () => Math.random().toString(36).slice(2);
-
-const flowToTree = (flow: AutomationFlowDetail): DraftNode[] => {
-  const idMap = new Map<string, string>();
-  const nodes: DraftNode[] = flow.nodes.map((n) => {
-    const localId = uid();
-    idMap.set(n.id, localId);
-    return { localId, messageText: n.messageText, isRoot: n.isRoot, buttons: [] };
-  });
-  flow.nodes.forEach((n, i) => {
-    nodes[i].buttons = n.buttons.map((b) => ({
-      localId: uid(),
-      label: b.label,
-      actionType: b.actionType,
-      childLocalId: b.nextNodeId ? (idMap.get(b.nextNodeId) ?? null) : null,
-      url: b.url ?? "",
-    }));
-  });
-  return nodes;
+type ConversationNodeData = {
+  draft: DraftNode;
+  order: number;
 };
 
-const treeToApiNodes = (nodes: DraftNode[]) => {
+type ConversationCanvasNode = Node<ConversationNodeData, "conversation">;
+
+const uid = () =>
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2);
+
+const flowToDraft = (flow: AutomationFlowDetail): DraftNode[] => {
+  const idMap = new Map<string, string>();
+  const nodes: DraftNode[] = flow.nodes.map((node) => {
+    const localId = node.id;
+    idMap.set(node.id, localId);
+    return {
+      localId,
+      messageText: node.messageText,
+      isRoot: node.isRoot,
+      buttons: [],
+    } satisfies DraftNode;
+  });
+
+  flow.nodes.forEach((node, index) => {
+    nodes[index].buttons = node.buttons.map((button) => ({
+      localId: button.id,
+      label: button.label,
+      actionType: button.actionType,
+      childLocalId: button.nextNodeId
+        ? (idMap.get(button.nextNodeId) ?? null)
+        : null,
+      url: button.url ?? "",
+    }));
+  });
+
+  return nodes.sort((first, second) => Number(second.isRoot) - Number(first.isRoot));
+};
+
+const draftToApiNodes = (nodes: DraftNode[]) => {
   const indexMap = new Map<string, number>();
-  nodes.forEach((n, i) => indexMap.set(n.localId, i));
-  return nodes.map((n) => ({
-    messageText: n.messageText,
-    isRoot: n.isRoot,
-    buttons: n.buttons.map((b, pos) => ({
-      label: b.label,
-      actionType: b.actionType,
+  nodes.forEach((node, index) => indexMap.set(node.localId, index));
+
+  return nodes.map((node) => ({
+    messageText: node.messageText.trim(),
+    isRoot: node.isRoot,
+    buttons: node.buttons.map((button, position) => ({
+      label: button.label.trim(),
+      actionType: button.actionType,
       nextNodeIndex:
-        b.actionType === "node" && b.childLocalId != null
-          ? indexMap.get(b.childLocalId)
+        button.actionType === "node" && button.childLocalId
+          ? indexMap.get(button.childLocalId)
           : undefined,
-      url: b.actionType === "url" ? b.url : undefined,
-      position: pos,
+      url: button.actionType === "url" ? button.url.trim() : undefined,
+      position,
     })),
   }));
 };
 
-// ─── Button action options ───────────────────────────────────────────────────
+const initialPosition = (index: number) => ({
+  x: 640 - (index % 3) * 340,
+  y: 64 + Math.floor(index / 3) * 320,
+});
+
+const initialPositions = (nodes: DraftNode[]) =>
+  Object.fromEntries(
+    nodes.map((node, index) => [node.localId, initialPosition(index)])
+  );
 
 const actionOptions: SelectOption[] = [
-  { value: "node", label: "پیام بعدی", description: "به گره بعدی برو" },
-  { value: "url", label: "لینک خارجی", description: "باز کردن آدرس اینترنتی" },
-  { value: "end", label: "پایان مکالمه", description: "بدون عملکرد بیشتر" },
+  {
+    value: "node",
+    label: "پیام بعدی",
+    description: "ادامه مکالمه با یک پیام دیگر",
+  },
+  {
+    value: "url",
+    label: "باز کردن لینک",
+    description: "هدایت کاربر به یک آدرس اینترنتی",
+  },
+  {
+    value: "end",
+    label: "پایان مکالمه",
+    description: "بستن این مسیر بدون اقدام بعدی",
+  },
 ];
 
-// ─── ButtonEditor ────────────────────────────────────────────────────────────
+const actionLabels: Record<FlowButtonActionType, string> = {
+  node: "پیام",
+  url: "لینک",
+  end: "پایان",
+};
+
+const ConversationNode = ({ data, selected }: NodeProps<ConversationCanvasNode>) => {
+  const { draft, order } = data;
+
+  return (
+    <article
+      className={cn(
+        "w-[17.5rem] rounded-3xl border bg-card p-4 shadow-soft transition-colors duration-300",
+        selected ? "border-accent/70" : "border-line"
+      )}
+      aria-label={draft.isRoot ? "پیام شروع فلو" : `پیام ${fa(order + 1)}`}
+    >
+      <Handle
+        type="target"
+        position={Position.Right}
+        className="!size-3 !border-2 !border-card !bg-accent"
+      />
+
+      <header className="flex items-center gap-2.5">
+        <span
+          className={cn(
+            "flex size-9 shrink-0 items-center justify-center rounded-2xl",
+            draft.isRoot
+              ? "bg-accent/15 text-accent"
+              : "bg-surface text-muted"
+          )}
+        >
+          <MessageSquare className="size-4" aria-hidden />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-xs text-muted">
+            {draft.isRoot ? "شروع مکالمه" : `پیام ${fa(order + 1)}`}
+          </span>
+          <span className="mt-0.5 block truncate text-sm font-bold">
+            {draft.messageText.trim() || "پیام بدون متن"}
+          </span>
+        </span>
+        <GripVertical className="size-4 shrink-0 text-muted" aria-hidden />
+      </header>
+
+      <p
+        dir="auto"
+        className="mt-3 line-clamp-3 min-h-[3.75rem] whitespace-pre-wrap text-sm leading-6 text-muted"
+      >
+        {draft.messageText.trim() || "متن این پیام را از پنل ویرایش بنویسید."}
+      </p>
+
+      <div className="mt-3 border-t border-line pt-3">
+        {draft.buttons.length > 0 ? (
+          <div className="space-y-1.5">
+            {draft.buttons.slice(0, 3).map((button) => (
+              <div
+                key={button.localId}
+                className="flex items-center gap-2 rounded-2xl bg-surface/70 px-3 py-2 text-xs"
+              >
+                <span className="min-w-0 flex-1 truncate">
+                  {button.label || "دکمه بدون عنوان"}
+                </span>
+                <span className="shrink-0 text-muted">
+                  {actionLabels[button.actionType]}
+                </span>
+              </div>
+            ))}
+            {draft.buttons.length > 3 && (
+              <p className="px-2 text-xs text-muted">
+                {fa(draft.buttons.length - 3)} دکمه دیگر
+              </p>
+            )}
+          </div>
+        ) : (
+          <p className="text-xs text-muted">بدون دکمه</p>
+        )}
+      </div>
+
+      <Handle
+        type="source"
+        position={Position.Left}
+        className="!size-3 !border-2 !border-card !bg-accent"
+      />
+    </article>
+  );
+};
+
+const nodeTypes = { conversation: ConversationNode };
 
 const ButtonEditor = ({
-  btn,
+  button,
+  node,
   nodes,
   onChange,
   onRemove,
 }: {
-  btn: DraftButton;
+  button: DraftButton;
+  node: DraftNode;
   nodes: DraftNode[];
-  onChange: (b: DraftButton) => void;
+  onChange: (button: DraftButton) => void;
   onRemove: () => void;
 }) => {
-  const childOptions: SelectOption[] = nodes
-    .filter((n) => !n.isRoot)
-    .map((n) => ({
-      value: n.localId,
-      label: n.messageText.slice(0, 40) || "پیام بدون متن",
+  const destinationOptions: SelectOption[] = nodes
+    .filter((item) => item.localId !== node.localId)
+    .map((item, index) => ({
+      value: item.localId,
+      label: item.isRoot
+        ? "پیام شروع"
+        : item.messageText.trim().slice(0, 42) || `پیام ${fa(index + 1)}`,
     }));
 
   return (
-    <div className="rounded-2xl border border-line bg-background/60 p-3 space-y-3">
-      <div className="flex items-center gap-2">
-        <GripVertical className="size-4 shrink-0 text-muted" aria-hidden />
+    <div className="space-y-3 rounded-2xl border border-line bg-background/55 p-3">
+      <div className="flex items-start gap-2">
         <Input
-          id={`btn-label-${btn.localId}`}
-          dir="rtl"
-          placeholder="متن دکمه"
-          value={btn.label}
-          onChange={(e) => onChange({ ...btn, label: e.target.value })}
+          id={`flow-button-label-${button.localId}`}
+          label="عنوان دکمه"
+          placeholder="مثلاً مشاهده محصولات"
+          value={button.label}
+          onChange={(event) =>
+            onChange({ ...button, label: event.target.value })
+          }
           maxLength={FLOW_BUTTON_LABEL_MAX_LENGTH}
-          className="flex-1"
+          className="min-w-0 flex-1"
         />
         <button
           type="button"
           onClick={onRemove}
-          className="shrink-0 rounded-full p-1 text-muted hover:text-danger transition-colors"
           aria-label="حذف دکمه"
+          className="mt-8 flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-danger/10 hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/60"
         >
-          <X className="size-4" />
+          <X className="size-4" aria-hidden />
         </button>
       </div>
+
       <Select
-        id={`btn-action-${btn.localId}`}
-        label="عملکرد"
+        id={`flow-button-action-${button.localId}`}
+        label="عملکرد دکمه"
         options={actionOptions}
-        value={btn.actionType}
-        onChange={(v) =>
-          onChange({ ...btn, actionType: v as FlowButtonActionType, childLocalId: null, url: "" })
+        value={button.actionType}
+        onChange={(value) =>
+          onChange({
+            ...button,
+            actionType: value as FlowButtonActionType,
+            childLocalId: null,
+            url: "",
+          })
         }
       />
-      {btn.actionType === "node" && (
+
+      {button.actionType === "node" && (
         <Select
-          id={`btn-child-${btn.localId}`}
+          id={`flow-button-destination-${button.localId}`}
           label="پیام مقصد"
-          options={childOptions}
-          value={btn.childLocalId ?? ""}
-          onChange={(v) => onChange({ ...btn, childLocalId: v || null })}
-          placeholder="انتخاب پیام..."
+          options={destinationOptions}
+          value={button.childLocalId ?? ""}
+          onChange={(value) =>
+            onChange({ ...button, childLocalId: value || null })
+          }
+          placeholder="یک پیام را انتخاب کنید"
         />
       )}
-      {btn.actionType === "url" && (
+
+      {button.actionType === "url" && (
         <Input
-          id={`btn-url-${btn.localId}`}
+          id={`flow-button-url-${button.localId}`}
           dir="ltr"
           label="آدرس لینک"
           placeholder="https://example.com"
-          value={btn.url}
-          onChange={(e) => onChange({ ...btn, url: e.target.value })}
+          value={button.url}
+          onChange={(event) =>
+            onChange({ ...button, url: event.target.value })
+          }
           maxLength={FLOW_URL_MAX_LENGTH}
           startIcon={<Link2 />}
         />
@@ -173,250 +333,468 @@ const ButtonEditor = ({
   );
 };
 
-// ─── NodeCard ────────────────────────────────────────────────────────────────
-
-const NodeCard = ({
+const NodeInspector = ({
   node,
-  allNodes,
-  isRoot,
+  nodes,
   onChange,
   onRemove,
 }: {
   node: DraftNode;
-  allNodes: DraftNode[];
-  isRoot: boolean;
-  onChange: (n: DraftNode) => void;
+  nodes: DraftNode[];
+  onChange: (node: DraftNode) => void;
   onRemove: () => void;
 }) => {
-  const reduce = useReducedMotion();
-  const [open, setOpen] = React.useState(true);
-
   const addButton = () => {
     if (node.buttons.length >= FLOW_BUTTONS_PER_NODE_MAX) return;
     onChange({
       ...node,
       buttons: [
         ...node.buttons,
-        { localId: uid(), label: "", actionType: "end", childLocalId: null, url: "" },
+        {
+          localId: uid(),
+          label: "",
+          actionType: "end",
+          childLocalId: null,
+          url: "",
+        },
       ],
     });
   };
 
-  const updateButton = (idx: number, b: DraftButton) => {
-    const buttons = [...node.buttons];
-    buttons[idx] = b;
-    onChange({ ...node, buttons });
-  };
-
-  const removeButton = (idx: number) => {
-    onChange({ ...node, buttons: node.buttons.filter((_, i) => i !== idx) });
-  };
-
-  return (
-    <motion.div
-      layout={!reduce}
-      initial={reduce ? { opacity: 0 } : { opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={reduce ? { opacity: 0 } : { opacity: 0, y: -4 }}
-      transition={{ duration: reduce ? 0 : 0.25, ease: luxe }}
-      className="rounded-3xl border border-line bg-surface/35"
-    >
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-3 px-4 py-3 text-start"
-      >
-        <Icon icon={MessageSquare} tile size="xs" tone={isRoot ? "accent" : "muted"} />
-        <span className="flex-1 truncate text-sm font-medium">
-          {isRoot ? "پیام اول (ریشه)" : node.messageText.slice(0, 50) || "پیام بدون متن"}
-        </span>
-        <motion.span
-          animate={{ rotate: open ? 0 : -90 }}
-          transition={{ duration: 0.2 }}
-          className="shrink-0 text-muted"
-        >
-          <ChevronDown className="size-4" />
-        </motion.span>
-        {!isRoot && (
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); onRemove(); }}
-            className="shrink-0 rounded-full p-1 text-muted hover:text-danger transition-colors"
-            aria-label="حذف گره"
-          >
-            <Trash2 className="size-4" />
-          </button>
-        )}
-      </button>
-
-      <AnimatePresence initial={false}>
-        {open && (
-          <motion.div
-            key="content"
-            initial={reduce ? { opacity: 0 } : { opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={reduce ? { opacity: 0 } : { opacity: 0, height: 0 }}
-            transition={{ duration: reduce ? 0 : 0.25, ease: luxe }}
-            className="overflow-hidden"
-          >
-            <div className="space-y-4 px-4 pb-4">
-              <Textarea
-                id={`node-msg-${node.localId}`}
-                dir="rtl"
-                label="متن پیام"
-                placeholder="پیام ربات را بنویسید…"
-                value={node.messageText}
-                onChange={(e) => onChange({ ...node, messageText: e.target.value })}
-                maxLength={FLOW_NODE_MESSAGE_MAX_LENGTH}
-                showCount
-                rows={4}
-              />
-
-              {node.buttons.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-xs font-medium text-muted">دکمه‌ها</p>
-                  {node.buttons.map((btn, idx) => (
-                    <ButtonEditor
-                      key={btn.localId}
-                      btn={btn}
-                      nodes={allNodes}
-                      onChange={(b) => updateButton(idx, b)}
-                      onRemove={() => removeButton(idx)}
-                    />
-                  ))}
-                </div>
-              )}
-
-              {node.buttons.length < FLOW_BUTTONS_PER_NODE_MAX && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  startIcon={<Plus className="size-3.5" />}
-                  onClick={addButton}
-                >
-                  افزودن دکمه
-                </Button>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </motion.div>
-  );
-};
-
-// ─── FlowBuilder ─────────────────────────────────────────────────────────────
-
-export const FlowBuilder = ({
-  flow,
-  onClose,
-}: {
-  flow: AutomationFlowDetail;
-  onClose: () => void;
-}) => {
-  const dispatch = useAppDispatch();
-  const { toast } = useToast();
-  const [nodes, setNodes] = React.useState<DraftNode[]>(() => flowToTree(flow));
-  const [saving, setSaving] = React.useState(false);
-
-  const addNode = () => {
-    setNodes((prev) => [
-      ...prev,
-      { localId: uid(), messageText: "", isRoot: false, buttons: [] },
-    ]);
-  };
-
-  const updateNode = (localId: string, updated: DraftNode) => {
-    setNodes((prev) => prev.map((n) => (n.localId === localId ? updated : n)));
-  };
-
-  const removeNode = (localId: string) => {
-    setNodes((prev) => {
-      const filtered = prev.filter((n) => n.localId !== localId);
-      return filtered.map((n) => ({
-        ...n,
-        buttons: n.buttons.map((b) =>
-          b.childLocalId === localId ? { ...b, childLocalId: null } : b
-        ),
-      }));
+  const updateButton = (localId: string, button: DraftButton) => {
+    onChange({
+      ...node,
+      buttons: node.buttons.map((item) =>
+        item.localId === localId ? button : item
+      ),
     });
   };
 
-  const save = async () => {
-    const root = nodes.find((n) => n.isRoot);
-    if (!root?.messageText.trim()) {
-      toast({ title: "پیام اول را بنویسید.", variant: "error" });
-      return;
-    }
-    setSaving(true);
-    const result = await dispatch(
-      updateFlow({ id: flow.id, changes: { nodes: treeToApiNodes(nodes) } })
-    );
-    setSaving(false);
-    if (updateFlow.fulfilled.match(result)) {
-      toast({ title: "فلو ذخیره شد." });
-      if (!result.payload.commandsSynced) {
-        toast({ title: "منوی فرمان‌های تلگرام به‌روز نشد؛ اتصال را بررسی کنید.", variant: "warning" });
+  return (
+    <aside className="max-h-[44rem] overflow-y-auto border-t border-line bg-surface/75 p-4 lg:border-s lg:border-t-0 lg:p-5">
+      <header className="flex items-start gap-3 border-b border-line pb-4">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-accent/15 text-accent">
+          <MessageSquare className="size-4" aria-hidden />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-bold">
+            {node.isRoot ? "پیام شروع" : "ویرایش پیام"}
+          </span>
+          <span className="mt-1 block text-xs leading-5 text-muted">
+            متن پیام و مسیر هر دکمه را تنظیم کنید.
+          </span>
+        </span>
+        {!node.isRoot && (
+          <button
+            type="button"
+            onClick={onRemove}
+            aria-label="حذف پیام"
+            className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-danger/10 hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/60"
+          >
+            <Trash2 className="size-4" aria-hidden />
+          </button>
+        )}
+      </header>
+
+      <div className="mt-5 space-y-5">
+        <Textarea
+          id={`flow-node-message-${node.localId}`}
+          dir="rtl"
+          label="متن پیام"
+          placeholder="پیامی که ربات می‌فرستد…"
+          value={node.messageText}
+          onChange={(event) =>
+            onChange({ ...node, messageText: event.target.value })
+          }
+          maxLength={FLOW_NODE_MESSAGE_MAX_LENGTH}
+          showCount
+          rows={6}
+        />
+
+        <section aria-labelledby={`flow-buttons-title-${node.localId}`}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2
+                id={`flow-buttons-title-${node.localId}`}
+                className="text-sm font-bold"
+              >
+                دکمه‌ها
+              </h2>
+              <p className="mt-1 text-xs text-muted">
+                {fa(node.buttons.length)} از {fa(FLOW_BUTTONS_PER_NODE_MAX)}
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              startIcon={<Plus className="size-3.5" />}
+              onClick={addButton}
+              disabled={node.buttons.length >= FLOW_BUTTONS_PER_NODE_MAX}
+            >
+              افزودن دکمه
+            </Button>
+          </div>
+
+          {node.buttons.length > 0 ? (
+            <div className="mt-3 space-y-3">
+              {node.buttons.map((button) => (
+                <ButtonEditor
+                  key={button.localId}
+                  button={button}
+                  node={node}
+                  nodes={nodes}
+                  onChange={(updated) =>
+                    updateButton(button.localId, updated)
+                  }
+                  onRemove={() =>
+                    onChange({
+                      ...node,
+                      buttons: node.buttons.filter(
+                        (item) => item.localId !== button.localId
+                      ),
+                    })
+                  }
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="mt-3 rounded-2xl border border-dashed border-line bg-background/35 p-5 text-center">
+              <CornerDownLeft
+                className="mx-auto size-5 text-muted"
+                aria-hidden
+              />
+              <p className="mt-2 text-xs leading-6 text-muted">
+                برای ساخت مسیر بعدی، یک دکمه به این پیام اضافه کنید.
+              </p>
+            </div>
+          )}
+        </section>
+      </div>
+    </aside>
+  );
+};
+
+const validateDraft = (nodes: DraftNode[]) => {
+  if (nodes.length === 0 || nodes.filter((node) => node.isRoot).length !== 1) {
+    return "فلو باید دقیقاً یک پیام شروع داشته باشد.";
+  }
+
+  for (const node of nodes) {
+    if (!node.messageText.trim()) return "متن همه پیام‌ها را بنویسید.";
+
+    for (const button of node.buttons) {
+      if (!button.label.trim()) return "برای همه دکمه‌ها عنوان بنویسید.";
+      if (button.actionType === "node" && !button.childLocalId) {
+        return `پیام مقصد دکمه «${button.label.trim()}» را انتخاب کنید.`;
       }
-    } else {
-      const msg =
-        result.payload && typeof result.payload === "object" && "message" in result.payload
-          ? (result.payload as { message: string }).message
-          : "ذخیره انجام نشد؛ دوباره تلاش کنید.";
-      toast({ title: msg, variant: "error" });
+      if (button.actionType === "url") {
+        try {
+          const url = new URL(button.url.trim());
+          if (url.protocol !== "https:" && url.protocol !== "http:") {
+            return `آدرس دکمه «${button.label.trim()}» باید با http یا https شروع شود.`;
+          }
+        } catch {
+          return `آدرس دکمه «${button.label.trim()}» معتبر نیست.`;
+        }
+      }
     }
+  }
+
+  return null;
+};
+
+export const FlowBuilder = ({ flow }: { flow: AutomationFlowDetail }) => {
+  const router = useRouter();
+  const dispatch = useAppDispatch();
+  const { resolvedTheme } = useTheme();
+  const reduce = useReducedMotion();
+  const { toast } = useToast();
+  const initialDraft = React.useMemo(() => flowToDraft(flow), [flow]);
+  const [nodes, setNodes] = React.useState<DraftNode[]>(initialDraft);
+  const [positions, setPositions] = React.useState(() =>
+    initialPositions(initialDraft)
+  );
+  const [selectedNodeId, setSelectedNodeId] = React.useState<string | null>(
+    initialDraft[0]?.localId ?? null
+  );
+  const [saving, setSaving] = React.useState(false);
+  const [dirty, setDirty] = React.useState(false);
+
+  React.useEffect(() => {
+    setNodes(initialDraft);
+    setPositions(initialPositions(initialDraft));
+    setSelectedNodeId(initialDraft[0]?.localId ?? null);
+    setDirty(false);
+  }, [flow.id, initialDraft]);
+
+  const updateNode = React.useCallback((updatedNode: DraftNode) => {
+    setNodes((current) =>
+      current.map((node) =>
+        node.localId === updatedNode.localId ? updatedNode : node
+      )
+    );
+    setDirty(true);
+  }, []);
+
+  const removeNode = React.useCallback((localId: string) => {
+    setNodes((current) =>
+      current
+        .filter((node) => node.localId !== localId)
+        .map((node) => ({
+          ...node,
+          buttons: node.buttons.map((button) =>
+            button.childLocalId === localId
+              ? { ...button, childLocalId: null }
+              : button
+          ),
+        }))
+    );
+    setPositions((current) => {
+      const next = { ...current };
+      delete next[localId];
+      return next;
+    });
+    setSelectedNodeId((current) => (current === localId ? null : current));
+    setDirty(true);
+  }, []);
+
+  const addNode = () => {
+    const localId = uid();
+    const nextNode: DraftNode = {
+      localId,
+      messageText: "",
+      isRoot: false,
+      buttons: [],
+    };
+    setPositions((current) => ({
+      ...current,
+      [localId]: initialPosition(nodes.length),
+    }));
+    setNodes((current) => [...current, nextNode]);
+    setSelectedNodeId(localId);
+    setDirty(true);
   };
 
+  const canvasNodes = React.useMemo<ConversationCanvasNode[]>(
+    () =>
+      nodes.map((node, index) => ({
+        id: node.localId,
+        type: "conversation",
+        position: positions[node.localId] ?? initialPosition(index),
+        data: { draft: node, order: index },
+        selected: selectedNodeId === node.localId,
+      })),
+    [nodes, positions, selectedNodeId]
+  );
+
+  const edges = React.useMemo<Edge[]>(
+    () =>
+      nodes.flatMap((node) =>
+        node.buttons.flatMap((button) => {
+          if (button.actionType !== "node" || !button.childLocalId) return [];
+          return [
+            {
+              id: `${node.localId}-${button.localId}`,
+              source: node.localId,
+              target: button.childLocalId,
+              type: "smoothstep",
+              label: button.label || "ادامه",
+              markerEnd: {
+                type: MarkerType.ArrowClosed,
+                color: "rgb(var(--accent))",
+              },
+              style: {
+                stroke: "rgb(var(--accent) / 0.72)",
+                strokeWidth: 1.5,
+              },
+              labelStyle: {
+                fill: "rgb(var(--foreground))",
+                fontFamily: "inherit",
+                fontSize: 11,
+              },
+              labelBgStyle: {
+                fill: "rgb(var(--card))",
+                fillOpacity: 0.96,
+              },
+              labelBgPadding: [7, 4] as [number, number],
+              labelBgBorderRadius: 8,
+            },
+          ];
+        })
+      ),
+    [nodes]
+  );
+
+  const handleCanvasChanges = React.useCallback(
+    (changes: NodeChange<ConversationCanvasNode>[]) => {
+      setPositions((current) => {
+        let changed = false;
+        const next = { ...current };
+        changes.forEach((change) => {
+          if (change.type === "position" && change.position) {
+            next[change.id] = change.position;
+            changed = true;
+          }
+        });
+        return changed ? next : current;
+      });
+    },
+    []
+  );
+
+  const save = async () => {
+    const validationError = validateDraft(nodes);
+    if (validationError) {
+      toast({ title: "فلو آماده ذخیره نیست", description: validationError, variant: "error" });
+      return;
+    }
+
+    setSaving(true);
+    const result = await dispatch(
+      updateFlow({ id: flow.id, changes: { nodes: draftToApiNodes(nodes) } })
+    );
+    setSaving(false);
+
+    if (updateFlow.fulfilled.match(result)) {
+      setDirty(false);
+      toast({
+        title: "فلو ذخیره شد",
+        description: result.payload.commandsSynced
+          ? "پیام‌ها، دکمه‌ها و مسیرهای مکالمه به‌روز شدند."
+          : "فلو ذخیره شد، اما منوی فرمان‌های تلگرام به‌روز نشد.",
+        variant: result.payload.commandsSynced ? "success" : "warning",
+      });
+      return;
+    }
+
+    toast({
+      title: "فلو ذخیره نشد",
+      description:
+        result.payload?.message ?? "اتصال را بررسی کنید و دوباره تلاش کنید.",
+      variant: "error",
+    });
+  };
+
+  const selectedNode =
+    nodes.find((node) => node.localId === selectedNodeId) ?? nodes[0] ?? null;
+
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={onClose}
-          className="flex items-center gap-1.5 text-sm text-muted hover:text-foreground transition-colors"
-        >
-          <ChevronLeft className="size-4" />
-          بازگشت
-        </button>
-        <span className="text-muted">/</span>
-        <span className="text-sm font-medium truncate">{flow.name}</span>
-      </div>
+    <div className="mx-auto max-w-[96rem]">
+      <header className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
+          <button
+            type="button"
+            onClick={() => router.push("/flow")}
+            className="flex items-center gap-2 rounded-full text-sm text-muted transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+          >
+            <ArrowRight className="size-4" aria-hidden />
+            بازگشت به فلوها
+          </button>
+          <div className="mt-3 flex min-w-0 items-center gap-3">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-accent/15 text-accent">
+              <Workflow className="size-5" aria-hidden />
+            </span>
+            <div className="min-w-0">
+              <h1 className="truncate text-xl font-black sm:text-2xl">
+                {flow.name}
+              </h1>
+              <p className="mt-1 truncate text-xs text-muted sm:text-sm">
+                {flow.triggerType === "command"
+                  ? `فرمان ${flow.triggerKeyword}`
+                  : `کلیدواژه «${flow.triggerKeyword}»`}
+              </p>
+            </div>
+          </div>
+        </div>
 
-      <div className="space-y-3">
-        <AnimatePresence initial={false}>
-          {nodes.map((node) => (
-            <NodeCard
-              key={node.localId}
-              node={node}
-              allNodes={nodes}
-              isRoot={node.isRoot}
-              onChange={(updated) => updateNode(node.localId, updated)}
-              onRemove={() => removeNode(node.localId)}
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            startIcon={<Plus className="size-4" />}
+            onClick={addNode}
+            className="min-w-0 flex-1 sm:flex-none"
+          >
+            پیام جدید
+          </Button>
+          <Button
+            type="button"
+            loading={saving}
+            startIcon={<Save className="size-4" />}
+            onClick={() => void save()}
+            className="min-w-0 flex-1 sm:flex-none"
+          >
+            {dirty ? "ذخیره تغییرات" : "ذخیره فلو"}
+          </Button>
+        </div>
+      </header>
+
+      <motion.section
+        initial={reduce ? { opacity: 0 } : { opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: reduce ? 0 : 0.35 }}
+        className="grid min-h-[44rem] overflow-hidden rounded-3xl border border-line bg-background shadow-soft lg:grid-cols-[minmax(0,1fr)_23rem]"
+        aria-label="بوم طراحی فلو"
+      >
+        <div className="relative min-h-[60dvh] bg-background lg:min-h-[44rem]">
+          <ReactFlow<ConversationCanvasNode>
+            nodes={canvasNodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            onNodesChange={handleCanvasChanges}
+            onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+            onPaneClick={() => setSelectedNodeId(null)}
+            nodesConnectable={false}
+            deleteKeyCode={null}
+            fitView
+            fitViewOptions={{ padding: 0.2, minZoom: 0.45, maxZoom: 1 }}
+            minZoom={0.25}
+            maxZoom={1.6}
+            colorMode={resolvedTheme === "dark" ? "dark" : "light"}
+            className="flow-canvas"
+            proOptions={{ hideAttribution: true }}
+            aria-label="بوم دیداری پیام‌ها و مسیرهای فلو"
+          >
+            <Background variant={BackgroundVariant.Dots} gap={22} size={1} />
+            <Controls
+              position="bottom-right"
+              showInteractive={false}
+              aria-label="کنترل‌های بزرگ‌نمایی بوم"
             />
-          ))}
-        </AnimatePresence>
-      </div>
+            <MiniMap
+              position="bottom-left"
+              pannable
+              zoomable
+              nodeColor="rgb(var(--accent) / 0.7)"
+              maskColor="rgb(var(--background) / 0.72)"
+              ariaLabel="نمای کلی فلو"
+            />
+          </ReactFlow>
 
-      <div className="flex items-center gap-3">
-        <Button
-          type="button"
-          variant="ghost"
-          startIcon={<Plus className="size-4" />}
-          onClick={addNode}
-        >
-          افزودن پیام جدید
-        </Button>
-        <Button
-          type="button"
-          loading={saving}
-          startIcon={<Save className="size-4" />}
-          onClick={() => void save()}
-          className="ms-auto"
-        >
-          ذخیره فلو
-        </Button>
-      </div>
+          <div className="pointer-events-none absolute end-4 top-4 z-10 max-w-xs rounded-2xl border border-line bg-surface/90 px-3 py-2 text-xs leading-5 text-muted shadow-soft backdrop-blur-sm">
+            پیام‌ها را جابه‌جا کنید و برای ویرایش هر پیام روی آن بزنید.
+          </div>
+        </div>
+
+        {selectedNode ? (
+          <NodeInspector
+            key={selectedNode.localId}
+            node={selectedNode}
+            nodes={nodes}
+            onChange={updateNode}
+            onRemove={() => removeNode(selectedNode.localId)}
+          />
+        ) : (
+          <aside className="flex min-h-72 flex-col items-center justify-center border-t border-line bg-surface/75 p-8 text-center lg:border-s lg:border-t-0">
+            <Flag className="size-6 text-muted" aria-hidden />
+            <p className="mt-3 text-sm font-bold">یک پیام را انتخاب کنید</p>
+            <p className="mt-2 text-xs leading-6 text-muted">
+              با انتخاب پیام، متن، دکمه‌ها و عملکردهای آن اینجا نمایش داده می‌شوند.
+            </p>
+          </aside>
+        )}
+      </motion.section>
     </div>
   );
 };
