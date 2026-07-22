@@ -7,15 +7,15 @@ import { cn } from "@/lib/utils";
 type FieldState = "default" | "error" | "success";
 export type FieldDirection = "ltr" | "rtl";
 
-const RTL_SCRIPT_CHARACTER =
-  /[\p{Script=Arabic}\p{Script=Hebrew}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}\p{Script=Adlam}]/u;
-const LETTER_CHARACTER = /\p{Letter}/u;
+const RTL_CHARACTER = /[\u0591-\u07ff\ufb1d-\ufdfd\ufe70-\ufefc]/;
+const LTR_CHARACTER =
+  /[A-Za-z\u00c0-\u02b8\u0300-\u0590\u0800-\u1fff\u200e\u2c00-\ufb1c\ufdfe-\ufe6f\ufefd-\uffff]/;
 
-/** Resolve direction from the first strong letter, matching the behavior of dir="auto". */
+/** Resolve direction from the first directional character. */
 export const getFieldDirection = (value: unknown): FieldDirection => {
   for (const character of String(value ?? "")) {
-    if (RTL_SCRIPT_CHARACTER.test(character)) return "rtl";
-    if (LETTER_CHARACTER.test(character)) return "ltr";
+    if (RTL_CHARACTER.test(character)) return "rtl";
+    if (LTR_CHARACTER.test(character)) return "ltr";
   }
 
   return "rtl";
