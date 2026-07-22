@@ -86,6 +86,11 @@ body {
   border-bottom: 0;
 }
 
+.flow-canvas .react-flow__node {
+  backface-visibility: hidden;
+  will-change: transform;
+}
+
 ::selection {
   background: rgb(var(--accent) / 0.25);
 }

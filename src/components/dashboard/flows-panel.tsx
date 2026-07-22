@@ -7,6 +7,7 @@ import {
   Command,
   GitBranch,
   Hash,
+  Pencil,
   Plus,
   Trash2,
 } from "lucide-react";
@@ -29,6 +30,7 @@ import { Select, type SelectOption } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
+import { Tooltip } from "@/components/ui/tooltip";
 import {
   cleanKeyword,
   isValidTelegramCommand,
@@ -42,12 +44,14 @@ import {
   FLOW_NAME_MAX_LENGTH,
   FLOW_NODE_MESSAGE_MAX_LENGTH,
   type AutomationFlow,
+  type AutomationFlowDetail,
 } from "@/lib/flows";
 import { fa } from "@/lib/utils";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   createFlow,
   deleteFlow,
+  loadFlowDetail,
   loadFlows,
   updateFlow,
   type FlowRequestError,
@@ -85,16 +89,18 @@ const errorMessage = (error: unknown) => {
   return "درخواست انجام نشد؛ دوباره تلاش کنید.";
 };
 
-// ─── Create flow modal ────────────────────────────────────────────────────────
+// ─── Flow editor modal ────────────────────────────────────────────────────────
 
-const CreateFlowModal = ({
+const FlowEditorModal = ({
+  flow,
   open,
   onOpenChange,
   onCreated,
 }: {
+  flow: AutomationFlowDetail | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreated: (flow: AutomationFlow) => void;
+  onCreated?: (flow: AutomationFlow) => void;
 }) => {
   const dispatch = useAppDispatch();
   const { toast } = useToast();
@@ -105,16 +111,19 @@ const CreateFlowModal = ({
   const [rootMessage, setRootMessage] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [errors, setErrors] = React.useState<Record<string, string>>({});
+  const editing = Boolean(flow);
 
   React.useEffect(() => {
     if (!open) return;
-    setTriggerType("command");
-    setKeyword("/");
-    setCommandDescription("");
-    setName("");
-    setRootMessage("");
+    setTriggerType(flow?.triggerType ?? "command");
+    setKeyword(flow?.triggerKeyword ?? "/");
+    setCommandDescription(flow?.commandDescription ?? "");
+    setName(flow?.name ?? "");
+    setRootMessage(
+      flow?.nodes.find((node) => node.isRoot)?.messageText ?? ""
+    );
     setErrors({});
-  }, [open]);
+  }, [flow, open]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -150,12 +159,49 @@ const CreateFlowModal = ({
     if (Object.keys(errs).length > 0) { setErrors(errs); return; }
 
     setSaving(true);
+
+    if (flow) {
+      const result = await dispatch(
+        updateFlow({
+          id: flow.id,
+          changes: {
+            triggerType,
+            triggerKeyword: cleanedKeyword,
+            name: name.trim(),
+            commandDescription:
+              triggerType === "command" ? commandDescription.trim() : null,
+            rootMessage: rootMessage.trim(),
+          },
+        })
+      );
+      setSaving(false);
+
+      if (updateFlow.fulfilled.match(result)) {
+        toast({
+          title: "تغییرات فلو ذخیره شد",
+          description: result.payload.commandsSynced
+            ? "محرک و پیام شروع فلو به‌روز شدند."
+            : "فلو ذخیره شد، اما منوی فرمان‌های تلگرام به‌روز نشد.",
+          variant: result.payload.commandsSynced ? "success" : "warning",
+        });
+        onOpenChange(false);
+      } else {
+        toast({
+          title: "تغییرات فلو ذخیره نشد",
+          description: errorMessage(result.payload),
+          variant: "error",
+        });
+      }
+      return;
+    }
+
     const result = await dispatch(
       createFlow({
         triggerType,
         triggerKeyword: cleanedKeyword,
         name: name.trim(),
-        commandDescription: triggerType === "command" ? commandDescription.trim() : undefined,
+        commandDescription:
+          triggerType === "command" ? commandDescription.trim() : undefined,
         rootMessage: rootMessage.trim(),
       })
     );
@@ -165,7 +211,7 @@ const CreateFlowModal = ({
       toast({ title: "فلو ساخته شد." });
       if (!result.payload.commandsSynced)
         toast({ title: "منوی فرمان‌های تلگرام به‌روز نشد؛ اتصال را بررسی کنید.", variant: "warning" });
-      onCreated(result.payload.flow);
+      onCreated?.(result.payload.flow);
       onOpenChange(false);
     } else {
       toast({ title: errorMessage(result.payload), variant: "error" });
@@ -176,9 +222,11 @@ const CreateFlowModal = ({
     <Modal open={open} onOpenChange={(o) => { if (!saving) onOpenChange(o); }}>
       <ModalContent size="lg" closeDisabled={saving} className="flex max-h-[calc(100dvh-2.5rem)] flex-col overflow-hidden p-0">
         <ModalHeader className="mb-0 shrink-0 px-5 pb-4 pt-5 sm:px-7 sm:pb-5 sm:pt-7">
-          <ModalTitle>فلو جدید</ModalTitle>
+          <ModalTitle>{editing ? "ویرایش فلو" : "فلو جدید"}</ModalTitle>
           <ModalDescription>
-            یک مکالمه تعاملی با دکمه و پیام‌های زنجیره‌ای بسازید.
+            {editing
+              ? "نام، محرک و پیام شروع این فلو را ویرایش کنید."
+              : "یک مکالمه تعاملی با دکمه و پیام‌های زنجیره‌ای بسازید."}
           </ModalDescription>
         </ModalHeader>
         <form onSubmit={(e) => void submit(e)} noValidate className="flex min-h-0 flex-1 flex-col">
@@ -264,7 +312,7 @@ const CreateFlowModal = ({
               انصراف
             </Button>
             <Button type="submit" loading={saving} className="w-full sm:w-auto">
-              ساخت فلو
+              {editing ? "ذخیره تغییرات" : "ساخت فلو"}
             </Button>
           </ModalFooter>
         </form>
@@ -313,25 +361,45 @@ const FlowCard = ({
   busy,
   onDelete,
   onEdit,
+  onOpen,
   onToggle,
 }: {
   flow: AutomationFlow;
   busy: boolean;
   onDelete: () => void;
   onEdit: () => void;
+  onOpen: () => void;
   onToggle: (active: boolean) => void;
 }) => {
   const reduce = useReducedMotion();
   const isCommand = flow.triggerType === "command";
 
+  const openFromCard = (event: React.MouseEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("button, a, input, label, [role='switch']")) return;
+    onOpen();
+  };
+
   return (
     <motion.article
+      role="link"
+      tabIndex={0}
+      aria-label={`باز کردن فلو ${flow.name}`}
       layout={!reduce}
       initial={reduce ? { opacity: 0 } : { opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={reduce ? { opacity: 0 } : { opacity: 0, y: -6 }}
+      whileHover={reduce ? undefined : { y: -2 }}
       transition={{ duration: reduce ? 0 : 0.3, ease: luxe }}
-      className="rounded-3xl border border-line bg-surface/35 p-4 sm:p-5"
+      onClick={openFromCard}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+      className="cursor-pointer rounded-3xl border border-line bg-surface/35 p-4 shadow-soft transition-colors duration-300 hover:border-accent/30 hover:bg-surface/60 hover:shadow-lift focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:p-5"
     >
       <header className="flex items-center justify-between gap-4">
         <div className="flex min-w-0 items-center gap-3">
@@ -360,25 +428,32 @@ const FlowCard = ({
           onChange={(e) => onToggle(e.target.checked)}
         />
       </header>
-      <footer className="mt-4 flex items-center gap-2 border-t border-line pt-3">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={onEdit}
-          disabled={busy}
-        >
-          ویرایش فلو
-        </Button>
-        <button
-          type="button"
-          onClick={onDelete}
-          disabled={busy}
-          className="ms-auto rounded-full p-1.5 text-muted hover:text-danger transition-colors disabled:opacity-40"
-          aria-label={`حذف فلو ${flow.name}`}
-        >
-          <Trash2 className="size-4" />
-        </button>
+      <footer className="mt-4 flex justify-end gap-1 border-t border-line pt-3">
+        <Tooltip content="ویرایش" side="top">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={onEdit}
+            disabled={busy}
+            aria-label={`ویرایش فلو ${flow.name}`}
+          >
+            <Pencil className="size-4" aria-hidden />
+          </Button>
+        </Tooltip>
+        <Tooltip content="حذف" side="top">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={onDelete}
+            disabled={busy}
+            className="hover:text-danger"
+            aria-label={`حذف فلو ${flow.name}`}
+          >
+            <Trash2 className="size-4" aria-hidden />
+          </Button>
+        </Tooltip>
       </footer>
     </motion.article>
   );
@@ -391,6 +466,7 @@ export const FlowsPanel = () => {
   const dispatch = useAppDispatch();
   const { toast } = useToast();
   const {
+    detail,
     items,
     status: flowsStatus,
     error: flowsError,
@@ -404,6 +480,7 @@ export const FlowsPanel = () => {
   } = useAppSelector((state) => state.automations);
 
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [editingFlowId, setEditingFlowId] = React.useState<string | null>(null);
   const [deletingFlow, setDeletingFlow] = React.useState<AutomationFlow | null>(null);
   const [deleting, setDeleting] = React.useState(false);
   const [busyFlowId, setBusyFlowId] = React.useState<string | null>(null);
@@ -424,6 +501,23 @@ export const FlowsPanel = () => {
     if (flowsStatus === "idle") void dispatch(loadFlows());
     if (connectionStatus === "idle") void dispatch(loadAutomations());
   }, [connectionStatus, dispatch, flowsStatus]);
+
+  const openEdit = async (flow: AutomationFlow) => {
+    setBusyFlowId(flow.id);
+    const result = await dispatch(loadFlowDetail(flow.id));
+    setBusyFlowId(null);
+
+    if (loadFlowDetail.fulfilled.match(result)) {
+      setEditingFlowId(flow.id);
+      return;
+    }
+
+    toast({
+      title: "اطلاعات فلو بارگذاری نشد",
+      description: errorMessage(result.payload),
+      variant: "error",
+    });
+  };
 
   const toggleFlow = async (flow: AutomationFlow, active: boolean) => {
     setBusyFlowId(flow.id);
@@ -613,7 +707,8 @@ export const FlowsPanel = () => {
                   key={flow.id}
                   flow={flow}
                   busy={busyFlowId === flow.id}
-                  onEdit={() => router.push(`/flow/${flow.id}`)}
+                  onOpen={() => router.push(`/dashboard/flow/${flow.id}`)}
+                  onEdit={() => void openEdit(flow)}
                   onDelete={() => setDeletingFlow(flow)}
                   onToggle={(active) => void toggleFlow(flow, active)}
                 />
@@ -623,10 +718,20 @@ export const FlowsPanel = () => {
         )}
       </div>
 
-      <CreateFlowModal
+      <FlowEditorModal
+        flow={null}
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onCreated={(flow) => router.push(`/flow/${flow.id}`)}
+        onCreated={(flow) => router.push(`/dashboard/flow/${flow.id}`)}
+      />
+      <FlowEditorModal
+        flow={
+          editingFlowId && detail?.id === editingFlowId ? detail : null
+        }
+        open={Boolean(editingFlowId && detail?.id === editingFlowId)}
+        onOpenChange={(open) => {
+          if (!open) setEditingFlowId(null);
+        }}
       />
       <DeleteFlowModal
         flow={deletingFlow}

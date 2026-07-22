@@ -1,13 +1,6 @@
-import type { Metadata } from "next";
-import { FlowDetailPage } from "@/components/dashboard/flow-detail-page";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = {
-  title: "ویرایش فلو — پشتیبان",
-  description: "طراحی دیداری پیام‌ها، دکمه‌ها و مسیرهای یک فلو.",
-};
+const LegacyFlowPage = ({ params }: { params: { flowId: string } }) =>
+  redirect(`/dashboard/flow/${params.flowId}`);
 
-const FlowPage = ({ params }: { params: { flowId: string } }) => (
-  <FlowDetailPage flowId={params.flowId} />
-);
-
-export default FlowPage;
+export default LegacyFlowPage;

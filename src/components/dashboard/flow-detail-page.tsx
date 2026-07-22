@@ -74,7 +74,7 @@ export const FlowDetailPage = ({ flowId }: { flowId: string }) => {
       <div className="mx-auto max-w-3xl">
         <button
           type="button"
-          onClick={() => router.push("/flow")}
+          onClick={() => router.push("/dashboard/flow")}
           className="mb-5 flex items-center gap-2 rounded-full text-sm text-muted transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
         >
           <ArrowRight className="size-4" aria-hidden />
@@ -102,7 +102,7 @@ export const FlowDetailPage = ({ flowId }: { flowId: string }) => {
               size="sm"
               variant="ghost"
               startIcon={<Workflow className="size-4" />}
-              onClick={() => router.push("/flow")}
+              onClick={() => router.push("/dashboard/flow")}
             >
               مشاهده فلوها
             </Button>

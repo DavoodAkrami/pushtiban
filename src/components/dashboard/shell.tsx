@@ -45,7 +45,7 @@ const NAV_ITEMS = [
     label: "اتوماسیون",
     icon: Workflow,
     children: [
-      { href: "/flow", label: "فلوها", icon: GitBranch },
+      { href: "/dashboard/flow", label: "فلوها", icon: GitBranch },
       {
         href: "/dashboard/automation",
         label: "پیام‌های آماده",
@@ -184,8 +184,8 @@ const DashboardNavigation = ({
 }) => {
   const reduce = useReducedMotion();
   const automationActive =
-    pathname === "/flow" ||
-    pathname.startsWith("/flow/") ||
+    pathname === "/dashboard/flow" ||
+    pathname.startsWith("/dashboard/flow/") ||
     pathname === "/dashboard/automation" ||
     pathname.startsWith("/dashboard/automation/");
   const [automationOpen, setAutomationOpen] = React.useState(

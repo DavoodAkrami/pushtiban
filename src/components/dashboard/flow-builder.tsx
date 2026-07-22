@@ -13,9 +13,9 @@ import {
   MiniMap,
   Position,
   ReactFlow,
+  useNodesState,
   type Edge,
   type Node,
-  type NodeChange,
   type NodeProps,
 } from "@xyflow/react";
 import {
@@ -128,11 +128,6 @@ const initialPosition = (index: number) => ({
   y: 64 + Math.floor(index / 3) * 320,
 });
 
-const initialPositions = (nodes: DraftNode[]) =>
-  Object.fromEntries(
-    nodes.map((node, index) => [node.localId, initialPosition(index)])
-  );
-
 const actionOptions: SelectOption[] = [
   {
     value: "node",
@@ -157,11 +152,12 @@ const actionLabels: Record<FlowButtonActionType, string> = {
   end: "پایان",
 };
 
-const ConversationNode = ({ data, selected }: NodeProps<ConversationCanvasNode>) => {
-  const { draft, order } = data;
+const ConversationNode = React.memo(
+  ({ data, selected }: NodeProps<ConversationCanvasNode>) => {
+    const { draft, order } = data;
 
-  return (
-    <article
+    return (
+      <article
       className={cn(
         "w-[17.5rem] rounded-3xl border bg-card p-4 shadow-soft transition-colors duration-300",
         selected ? "border-accent/70" : "border-line"
@@ -235,9 +231,11 @@ const ConversationNode = ({ data, selected }: NodeProps<ConversationCanvasNode>)
         position={Position.Left}
         className="!size-3 !border-2 !border-card !bg-accent"
       />
-    </article>
-  );
-};
+      </article>
+    );
+  }
+);
+ConversationNode.displayName = "ConversationNode";
 
 const nodeTypes = { conversation: ConversationNode };
 
@@ -426,7 +424,6 @@ const NodeInspector = ({
             </div>
             <Button
               type="button"
-              variant="ghost"
               size="sm"
               startIcon={<Plus className="size-3.5" />}
               onClick={addButton}
@@ -512,9 +509,19 @@ export const FlowBuilder = ({ flow }: { flow: AutomationFlowDetail }) => {
   const { toast } = useToast();
   const initialDraft = React.useMemo(() => flowToDraft(flow), [flow]);
   const [nodes, setNodes] = React.useState<DraftNode[]>(initialDraft);
-  const [positions, setPositions] = React.useState(() =>
-    initialPositions(initialDraft)
+  const initialCanvasNodes = React.useMemo<ConversationCanvasNode[]>(
+    () =>
+      initialDraft.map((node, index) => ({
+        id: node.localId,
+        type: "conversation",
+        position: initialPosition(index),
+        data: { draft: node, order: index },
+        selected: index === 0,
+      })),
+    [initialDraft]
   );
+  const [canvasNodes, setCanvasNodes, onCanvasNodesChange] =
+    useNodesState<ConversationCanvasNode>(initialCanvasNodes);
   const [selectedNodeId, setSelectedNodeId] = React.useState<string | null>(
     initialDraft[0]?.localId ?? null
   );
@@ -523,10 +530,30 @@ export const FlowBuilder = ({ flow }: { flow: AutomationFlowDetail }) => {
 
   React.useEffect(() => {
     setNodes(initialDraft);
-    setPositions(initialPositions(initialDraft));
+    setCanvasNodes(initialCanvasNodes);
     setSelectedNodeId(initialDraft[0]?.localId ?? null);
     setDirty(false);
-  }, [flow.id, initialDraft]);
+  }, [flow.id, initialCanvasNodes, initialDraft, setCanvasNodes]);
+
+  React.useEffect(() => {
+    setCanvasNodes((currentCanvasNodes) =>
+      nodes.map((node, index) => {
+        const current = currentCanvasNodes.find(
+          (canvasNode) => canvasNode.id === node.localId
+        );
+
+        return {
+          ...(current ?? {
+            id: node.localId,
+            type: "conversation" as const,
+            position: initialPosition(index),
+          }),
+          data: { draft: node, order: index },
+          selected: selectedNodeId === node.localId,
+        };
+      })
+    );
+  }, [nodes, selectedNodeId, setCanvasNodes]);
 
   const updateNode = React.useCallback((updatedNode: DraftNode) => {
     setNodes((current) =>
@@ -550,11 +577,6 @@ export const FlowBuilder = ({ flow }: { flow: AutomationFlowDetail }) => {
           ),
         }))
     );
-    setPositions((current) => {
-      const next = { ...current };
-      delete next[localId];
-      return next;
-    });
     setSelectedNodeId((current) => (current === localId ? null : current));
     setDirty(true);
   }, []);
@@ -567,26 +589,10 @@ export const FlowBuilder = ({ flow }: { flow: AutomationFlowDetail }) => {
       isRoot: false,
       buttons: [],
     };
-    setPositions((current) => ({
-      ...current,
-      [localId]: initialPosition(nodes.length),
-    }));
     setNodes((current) => [...current, nextNode]);
     setSelectedNodeId(localId);
     setDirty(true);
   };
-
-  const canvasNodes = React.useMemo<ConversationCanvasNode[]>(
-    () =>
-      nodes.map((node, index) => ({
-        id: node.localId,
-        type: "conversation",
-        position: positions[node.localId] ?? initialPosition(index),
-        data: { draft: node, order: index },
-        selected: selectedNodeId === node.localId,
-      })),
-    [nodes, positions, selectedNodeId]
-  );
 
   const edges = React.useMemo<Edge[]>(
     () =>
@@ -624,23 +630,6 @@ export const FlowBuilder = ({ flow }: { flow: AutomationFlowDetail }) => {
         })
       ),
     [nodes]
-  );
-
-  const handleCanvasChanges = React.useCallback(
-    (changes: NodeChange<ConversationCanvasNode>[]) => {
-      setPositions((current) => {
-        let changed = false;
-        const next = { ...current };
-        changes.forEach((change) => {
-          if (change.type === "position" && change.position) {
-            next[change.id] = change.position;
-            changed = true;
-          }
-        });
-        return changed ? next : current;
-      });
-    },
-    []
   );
 
   const save = async () => {
@@ -685,7 +674,7 @@ export const FlowBuilder = ({ flow }: { flow: AutomationFlowDetail }) => {
         <div className="min-w-0">
           <button
             type="button"
-            onClick={() => router.push("/flow")}
+            onClick={() => router.push("/dashboard/flow")}
             className="flex items-center gap-2 rounded-full text-sm text-muted transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
           >
             <ArrowRight className="size-4" aria-hidden />
@@ -711,15 +700,6 @@ export const FlowBuilder = ({ flow }: { flow: AutomationFlowDetail }) => {
         <div className="flex items-center gap-2">
           <Button
             type="button"
-            variant="outline"
-            startIcon={<Plus className="size-4" />}
-            onClick={addNode}
-            className="min-w-0 flex-1 sm:flex-none"
-          >
-            پیام جدید
-          </Button>
-          <Button
-            type="button"
             loading={saving}
             startIcon={<Save className="size-4" />}
             onClick={() => void save()}
@@ -742,7 +722,7 @@ export const FlowBuilder = ({ flow }: { flow: AutomationFlowDetail }) => {
             nodes={canvasNodes}
             edges={edges}
             nodeTypes={nodeTypes}
-            onNodesChange={handleCanvasChanges}
+            onNodesChange={onCanvasNodesChange}
             onNodeClick={(_, node) => setSelectedNodeId(node.id)}
             onPaneClick={() => setSelectedNodeId(null)}
             nodesConnectable={false}
@@ -772,7 +752,19 @@ export const FlowBuilder = ({ flow }: { flow: AutomationFlowDetail }) => {
             />
           </ReactFlow>
 
-          <div className="pointer-events-none absolute end-4 top-4 z-10 max-w-xs rounded-2xl border border-line bg-surface/90 px-3 py-2 text-xs leading-5 text-muted shadow-soft backdrop-blur-sm">
+          <div className="absolute start-4 top-4 z-10">
+            <Button
+              type="button"
+              size="sm"
+              startIcon={<Plus className="size-4" />}
+              onClick={addNode}
+              className="shadow-lift"
+            >
+              افزودن پیام جدید
+            </Button>
+          </div>
+
+          <div className="pointer-events-none absolute end-4 top-4 z-10 hidden max-w-xs rounded-2xl border border-line bg-surface/90 px-3 py-2 text-xs leading-5 text-muted shadow-soft backdrop-blur-sm sm:block">
             پیام‌ها را جابه‌جا کنید و برای ویرایش هر پیام روی آن بزنید.
           </div>
         </div>

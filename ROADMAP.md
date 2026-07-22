@@ -58,10 +58,13 @@ How to use:
 
 - [ ] Telegram keyword and slash-command automations with owner-written ready
       replies and synchronized Telegram command menus
-- [x] Dedicated `/flow` workspace for interactive Telegram automations, with
+- [x] Dedicated `/dashboard/flow` workspace for interactive Telegram automations, with
       direct post-creation navigation, a visual message canvas, inline-button
       next-message / URL / end actions, and an expandable automation section
       in the dashboard navigation
+- [ ] Move the flow workspace to `/dashboard/flow`, add card-first navigation
+      and metadata editing, harden live Telegram flow delivery, and refine the
+      canvas creation and drag interactions
 - [ ] Knowledge-base ingestion: upload docs / paste text / crawl site
 - [ ] AI assistant configuration (name, tone, model selection)
 - [ ] Chat playground for testing the assistant against the knowledge base

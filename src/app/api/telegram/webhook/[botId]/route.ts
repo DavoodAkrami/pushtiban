@@ -131,6 +131,13 @@ type NodeRow = {
   automation_flow_buttons: ButtonRow[];
 };
 
+const FLOW_NODE_SELECT = `
+  id, message_text,
+  automation_flow_buttons:automation_flow_buttons!automation_flow_buttons_node_id_fkey (
+    id, label, action_type, next_node_id, url, position
+  )
+`;
+
 const buildInlineKeyboard = (buttons: ButtonRow[]) => {
   const sorted = [...buttons].sort((a, b) => a.position - b.position);
   const rows: { text: string; callback_data?: string; url?: string }[][] = [];
@@ -236,9 +243,7 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
     const nodeId = data.slice("flow_node:".length);
     const { data: node, error: nodeError } = await admin
       .from("automation_flow_nodes")
-      .select(
-        "id, message_text, automation_flow_buttons (id, label, action_type, next_node_id, url, position)"
-      )
+      .select(FLOW_NODE_SELECT)
       .eq("id", nodeId)
       .maybeSingle();
 
@@ -293,9 +298,7 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
   if (flow) {
     const { data: rootNode, error: rootError } = await admin
       .from("automation_flow_nodes")
-      .select(
-        "id, message_text, automation_flow_buttons (id, label, action_type, next_node_id, url, position)"
-      )
+      .select(FLOW_NODE_SELECT)
       .eq("flow_id", flow.id)
       .eq("is_root", true)
       .maybeSingle();

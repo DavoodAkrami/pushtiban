@@ -1,11 +1,5 @@
-import type { Metadata } from "next";
-import { FlowsPanel } from "@/components/dashboard/flows-panel";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = {
-  title: "فلوها — پشتیبان",
-  description: "ساخت و مدیریت فلوهای تعاملی ربات تلگرام.",
-};
+const LegacyFlowsPage = () => redirect("/dashboard/flow");
 
-const FlowsPage = () => <FlowsPanel />;
-
-export default FlowsPage;
+export default LegacyFlowsPage;

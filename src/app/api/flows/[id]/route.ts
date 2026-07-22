@@ -175,6 +175,7 @@ export const PATCH = async (
     name?: unknown;
     commandDescription?: unknown;
     isActive?: unknown;
+    rootMessage?: unknown;
     nodes?: unknown;
   };
   try {
@@ -185,9 +186,20 @@ export const PATCH = async (
 
   const hasNodes = Object.prototype.hasOwnProperty.call(body, "nodes");
   const hasActive = Object.prototype.hasOwnProperty.call(body, "isActive");
+  const hasRootMessage = Object.prototype.hasOwnProperty.call(
+    body,
+    "rootMessage"
+  );
 
   if (hasActive && typeof body.isActive !== "boolean")
     return jsonError("وضعیت فلو معتبر نیست.", 400);
+  if (
+    hasRootMessage &&
+    (typeof body.rootMessage !== "string" ||
+      !body.rootMessage.trim() ||
+      body.rootMessage.trim().length > FLOW_NODE_MESSAGE_MAX_LENGTH)
+  )
+    return jsonError("متن پیام اول نامعتبر است.", 400);
 
   try {
     const admin = createAdminClient();
@@ -276,6 +288,18 @@ export const PATCH = async (
       if (updateError.code === "23505")
         return jsonError("برای این کلیدواژه قبلاً یک فلو ساخته‌اید.", 409);
       return jsonError("تغییرات ذخیره نشد.", 500);
+    }
+
+    if (hasRootMessage) {
+      const { error: rootMessageError } = await admin
+        .from("automation_flow_nodes")
+        .update({ message_text: (body.rootMessage as string).trim() })
+        .eq("flow_id", params.id)
+        .eq("user_id", user.id)
+        .eq("is_root", true);
+
+      if (rootMessageError)
+        return jsonError("متن پیام اول ذخیره نشد.", 500);
     }
 
     // Replace node/button tree if provided
