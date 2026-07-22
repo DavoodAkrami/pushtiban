@@ -53,7 +53,7 @@ const setTelegramWebhook = async ({
         body: JSON.stringify({
           url,
           secret_token: secret,
-          allowed_updates: ["message"],
+          allowed_updates: ["message", "callback_query"],
           drop_pending_updates: false,
         }),
         cache: "no-store",
@@ -179,21 +179,39 @@ export const syncTelegramCommandMenu = async ({
 
   if (connectionError || !connection) return false;
 
-  const { data, error } = await admin
-    .from("telegram_keyword_automations")
-    .select("keyword, command_description")
-    .eq("telegram_connection_id", connectionId)
-    .eq("user_id", userId)
-    .eq("trigger_type", "command")
-    .eq("is_active", true)
-    .order("created_at", { ascending: true })
-    .limit(TELEGRAM_COMMANDS_MAX_COUNT + 1);
+  const [simpleResult, flowResult] = await Promise.all([
+    admin
+      .from("telegram_keyword_automations")
+      .select("keyword, command_description")
+      .eq("telegram_connection_id", connectionId)
+      .eq("user_id", userId)
+      .eq("trigger_type", "command")
+      .eq("is_active", true)
+      .order("created_at", { ascending: true })
+      .limit(TELEGRAM_COMMANDS_MAX_COUNT + 1),
+    admin
+      .from("automation_flows")
+      .select("trigger_keyword, command_description")
+      .eq("telegram_connection_id", connectionId)
+      .eq("user_id", userId)
+      .eq("trigger_type", "command")
+      .eq("is_active", true)
+      .order("created_at", { ascending: true })
+      .limit(TELEGRAM_COMMANDS_MAX_COUNT + 1),
+  ]);
 
-  if (error || !data || data.length > TELEGRAM_COMMANDS_MAX_COUNT) return false;
+  if (simpleResult.error || flowResult.error) return false;
 
-  const commands = data.map((row) => ({
+  const combined = [
+    ...(simpleResult.data ?? []).map((r) => ({ keyword: r.keyword, description: r.command_description })),
+    ...(flowResult.data ?? []).map((r) => ({ keyword: r.trigger_keyword, description: r.command_description })),
+  ];
+
+  if (combined.length > TELEGRAM_COMMANDS_MAX_COUNT) return false;
+
+  const commands = combined.map((row) => ({
     command: row.keyword.replace(/^\//, ""),
-    description: row.command_description?.trim() ?? "",
+    description: row.description?.trim() ?? "",
   }));
 
   if (

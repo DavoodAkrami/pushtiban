@@ -58,6 +58,10 @@ How to use:
 
 - [ ] Telegram keyword and slash-command automations with owner-written ready
       replies and synchronized Telegram command menus
+- [ ] Interactive flow automations: multi-step Telegram conversations with
+      inline buttons (next-message / URL / end actions), a collapsible
+      drill-down builder, and a channel-tabbed automation page ready for
+      Instagram and WhatsApp
 - [ ] Knowledge-base ingestion: upload docs / paste text / crawl site
 - [ ] AI assistant configuration (name, tone, model selection)
 - [ ] Chat playground for testing the assistant against the knowledge base

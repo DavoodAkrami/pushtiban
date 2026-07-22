@@ -47,6 +47,8 @@ import {
   type KeywordAutomation,
 } from "@/lib/automations";
 import { fa } from "@/lib/utils";
+import { FlowsPanel } from "@/components/dashboard/flows-panel";
+import { Instagram, MessageCircle } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   createAutomation,
@@ -561,6 +563,50 @@ const RuleCard = ({
   );
 };
 
+// Channel selector — Telegram is live; others reserved for future services.
+const channels = [
+  { id: "telegram", label: "تلگرام", icon: Send, available: true },
+  { id: "instagram", label: "اینستاگرام", icon: Instagram, available: false },
+  { id: "whatsapp", label: "واتساپ", icon: MessageCircle, available: false },
+] as const;
+
+const ChannelTabs = () => {
+  const [active, setActive] = React.useState<string>("telegram");
+
+  return (
+    <div className="mt-6 flex flex-wrap gap-2" role="tablist" aria-label="کانال‌ها">
+      {channels.map((channel) => {
+        const isActive = active === channel.id;
+        return (
+          <button
+            key={channel.id}
+            type="button"
+            role="tab"
+            aria-selected={isActive}
+            disabled={!channel.available}
+            onClick={() => channel.available && setActive(channel.id)}
+            className={`group flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition-colors ${
+              isActive
+                ? "border-accent/40 bg-accent/10 text-accent"
+                : channel.available
+                  ? "border-line bg-surface/40 text-foreground hover:bg-surface/70"
+                  : "cursor-not-allowed border-line bg-surface/20 text-muted"
+            }`}
+          >
+            <channel.icon className="size-4" aria-hidden />
+            {channel.label}
+            {!channel.available && (
+              <Badge variant="muted" className="ms-1">
+                به‌زودی
+              </Badge>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+};
+
 const AutomationPanelContent = () => {
   const dispatch = useAppDispatch();
   const { toast } = useToast();
@@ -706,6 +752,8 @@ const AutomationPanelContent = () => {
         </Button>
       </header>
 
+      <ChannelTabs />
+
       <div className="mt-8 space-y-5">
         {setupRequired && (
           <Alert
@@ -765,6 +813,10 @@ const AutomationPanelContent = () => {
               کامل پیام تطبیق دارند.
             </span>
           </div>
+        )}
+
+        {bot && status === "succeeded" && (
+          <FlowsPanel bot={bot} />
         )}
 
         {loading && (
