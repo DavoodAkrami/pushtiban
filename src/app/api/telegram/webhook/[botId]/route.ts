@@ -13,6 +13,7 @@ export const runtime = "nodejs";
 
 const MAX_BODY_BYTES = 128_000;
 const TELEGRAM_TIMEOUT_MS = 8_000;
+const TELEGRAM_TYPING_REFRESH_MS = 4_000;
 const BOT_ID_RE = /^\d{1,24}$/;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -117,6 +118,33 @@ const telegramPost = async (
     return false;
   } finally {
     clearTimeout(timeout);
+  }
+};
+
+const withTelegramTyping = async <T>({
+  chatId,
+  task,
+  token,
+}: {
+  chatId: number;
+  task: () => Promise<T>;
+  token: string;
+}) => {
+  const sendTyping = () =>
+    telegramPost(token, "sendChatAction", {
+      chat_id: chatId,
+      action: "typing",
+    });
+
+  void sendTyping();
+  const refresh = setInterval(() => {
+    void sendTyping();
+  }, TELEGRAM_TYPING_REFRESH_MS);
+
+  try {
+    return await task();
+  } finally {
+    clearInterval(refresh);
   }
 };
 
@@ -485,7 +513,11 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
     return NextResponse.json({ ok: true });
   }
 
-  const aiReply = await generateTelegramAiReply(text);
+  const aiReply = await withTelegramTyping({
+    chatId,
+    token,
+    task: () => generateTelegramAiReply(text),
+  });
   const sent = await telegramPost(token, "sendMessage", {
     chat_id: chatId,
     text:
