@@ -69,6 +69,8 @@ How to use:
       interactive Telegram flows
 - [ ] Knowledge-base ingestion: upload docs / paste text / crawl site
 - [ ] AI assistant configuration (name, tone, model selection)
+- [ ] AI assistant on/off control with Telegram fallback after flows and
+      prepared messages
 - [ ] Chat playground for testing the assistant against the knowledge base
 - [x] Guided signup onboarding with Telegram connection, live bot verification,
       and an animated customer-order demo

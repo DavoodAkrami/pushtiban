@@ -5,6 +5,7 @@ import {
   toTelegramCommandKeyword,
   type AutomationTriggerType,
 } from "@/lib/automations";
+import { generateTelegramAiReply } from "@/lib/ai/telegram-assistant";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decryptTelegramToken } from "@/lib/telegram/token-crypto";
 
@@ -270,7 +271,7 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
   const admin = createAdminClient();
   const { data: connection, error: connectionError } = await admin
     .from("telegram_connections")
-    .select("id, bot_username, token_ciphertext, webhook_secret")
+    .select("id, user_id, bot_username, token_ciphertext, webhook_secret")
     .eq("bot_id", params.botId)
     .maybeSingle();
 
@@ -460,11 +461,36 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
   if (automationError) {
     return NextResponse.json({ error: "Unavailable" }, { status: 503 });
   }
-  if (!automation) return NextResponse.json({ ok: true });
+  if (automation) {
+    const sent = await telegramPost(token, "sendMessage", {
+      chat_id: chatId,
+      text: automation.reply_text,
+    });
+    return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+  }
 
+  // Slash commands never fall through to AI, including unknown commands.
+  if (parsedCommand.detected) {
+    return NextResponse.json({ ok: true });
+  }
+
+  const { data: aiSettings, error: aiSettingsError } = await admin
+    .from("ai_assistant_settings")
+    .select("is_enabled")
+    .eq("user_id", connection.user_id)
+    .maybeSingle();
+
+  // Fail closed: if settings cannot be verified, do not send the message to AI.
+  if (aiSettingsError || !aiSettings?.is_enabled) {
+    return NextResponse.json({ ok: true });
+  }
+
+  const aiReply = await generateTelegramAiReply(text);
   const sent = await telegramPost(token, "sendMessage", {
     chat_id: chatId,
-    text: automation.reply_text,
+    text:
+      aiReply ??
+      "در حال حاضر امکان پاسخ‌گویی هوشمند نیست؛ کمی بعد دوباره تلاش کنید.",
   });
   return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
 };
