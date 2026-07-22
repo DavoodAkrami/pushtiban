@@ -5,7 +5,6 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   ChevronDown,
   ChevronLeft,
-  ExternalLink,
   GripVertical,
   Link2,
   MessageSquare,
@@ -13,7 +12,6 @@ import {
   Save,
   Trash2,
   X,
-  XCircle,
 } from "lucide-react";
 import { luxe } from "@/components/motion/reveal";
 import { Button } from "@/components/ui/button";

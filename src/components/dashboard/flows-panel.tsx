@@ -3,7 +3,6 @@
 import * as React from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
-  Bot,
   Command,
   GitBranch,
   Hash,

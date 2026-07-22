@@ -48,7 +48,7 @@ import {
 } from "@/lib/automations";
 import { fa } from "@/lib/utils";
 import { FlowsPanel } from "@/components/dashboard/flows-panel";
-import { Instagram, MessageCircle } from "lucide-react";
+import { Camera, MessageCircle } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   createAutomation,
@@ -566,7 +566,7 @@ const RuleCard = ({
 // Channel selector — Telegram is live; others reserved for future services.
 const channels = [
   { id: "telegram", label: "تلگرام", icon: Send, available: true },
-  { id: "instagram", label: "اینستاگرام", icon: Instagram, available: false },
+  { id: "instagram", label: "اینستاگرام", icon: Camera, available: false },
   { id: "whatsapp", label: "واتساپ", icon: MessageCircle, available: false },
 ] as const;
 
