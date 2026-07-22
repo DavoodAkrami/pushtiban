@@ -5,6 +5,21 @@ import { AlertCircle, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type FieldState = "default" | "error" | "success";
+export type FieldDirection = "ltr" | "rtl";
+
+const RTL_SCRIPT_CHARACTER =
+  /[\p{Script=Arabic}\p{Script=Hebrew}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}\p{Script=Adlam}]/u;
+const LETTER_CHARACTER = /\p{Letter}/u;
+
+/** Resolve direction from the first strong letter, matching the behavior of dir="auto". */
+export const getFieldDirection = (value: unknown): FieldDirection => {
+  for (const character of String(value ?? "")) {
+    if (RTL_SCRIPT_CHARACTER.test(character)) return "rtl";
+    if (LETTER_CHARACTER.test(character)) return "ltr";
+  }
+
+  return "rtl";
+};
 
 export interface FieldWrapperProps {
   label?: string;
@@ -15,7 +30,7 @@ export interface FieldWrapperProps {
 }
 
 /** Shared label / message chrome for inputs, textareas and selects. */
-export function FieldWrapper({
+export const FieldWrapper = ({
   id,
   label,
   hint,
@@ -23,7 +38,7 @@ export function FieldWrapper({
   success,
   required,
   children,
-}: FieldWrapperProps & { id: string; children: React.ReactNode }) {
+}: FieldWrapperProps & { id: string; children: React.ReactNode }) => {
   const message = error ?? success ?? hint;
   return (
     <div className="w-full">
@@ -56,9 +71,9 @@ export function FieldWrapper({
       )}
     </div>
   );
-}
+};
 
-export function fieldStateClasses(state: FieldState) {
+export const fieldStateClasses = (state: FieldState) => {
   return cn(
     // Notion-style focus: the border deepens — no outline, no ring flash
     "w-full rounded-2xl border bg-surface/60 text-sm text-foreground transition-colors duration-300 ease-luxe placeholder:text-muted/70",
@@ -69,7 +84,7 @@ export function fieldStateClasses(state: FieldState) {
         ? "border-success/50 focus:border-success"
         : "border-line focus:border-accent/60 focus:bg-surface"
   );
-}
+};
 
 export interface InputProps
   extends React.InputHTMLAttributes<HTMLInputElement>,
@@ -91,6 +106,9 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
       startIcon,
       endIcon,
       id: idProp,
+      onChange,
+      defaultValue,
+      value,
       ...props
     },
     ref
@@ -98,6 +116,11 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
     const autoId = React.useId();
     const id = idProp ?? autoId;
     const state: FieldState = error ? "error" : success ? "success" : "default";
+    const [uncontrolledValue, setUncontrolledValue] = React.useState(
+      defaultValue ?? ""
+    );
+    const direction = getFieldDirection(value ?? uncontrolledValue);
+
     return (
       <FieldWrapper
         id={id}
@@ -107,28 +130,36 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
         success={success}
         required={required}
       >
-        <div className="relative">
+        <div className="relative" dir={direction}>
           {startIcon && (
             <span className="pointer-events-none absolute inset-y-0 start-4 flex items-center text-muted [&>svg]:size-4">
               {startIcon}
             </span>
           )}
           <input
+            {...props}
             id={id}
             ref={ref}
+            dir={direction}
+            value={value}
+            defaultValue={defaultValue}
             aria-invalid={!!error || undefined}
             aria-describedby={
               error || success || hint ? `${id}-message` : undefined
             }
             aria-required={required || undefined}
+            onChange={(event) => {
+              setUncontrolledValue(event.target.value);
+              onChange?.(event);
+            }}
             className={cn(
               fieldStateClasses(state),
               "h-12 px-4",
               startIcon && "ps-11",
               endIcon && "pe-11",
-              className
+              className,
+              "text-start"
             )}
-            {...props}
           />
           {endIcon && (
             <span className="absolute inset-y-0 end-4 flex items-center text-muted [&>svg]:size-4">

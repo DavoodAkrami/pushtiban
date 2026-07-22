@@ -26,6 +26,7 @@ How to use:
 - [x] Design-system scrollbar applied site-wide
 - [x] Viewport-aware select dropdowns (flip up / internal scroll)
 - [x] Skeleton loading components (card, text, large block)
+- [ ] Language-aware input direction and non-resizable textareas
 - [x] Developer docs: `CONTRIBUTING.md` + agent rules in `CLAUDE.md`
 - [ ] Pricing section (built, currently commented out — re-enable when plans
       are final)

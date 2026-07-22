@@ -5,6 +5,7 @@ import { cn, fa } from "@/lib/utils";
 import {
   FieldWrapper,
   fieldStateClasses,
+  getFieldDirection,
   type FieldWrapperProps,
 } from "@/components/ui/input";
 
@@ -30,6 +31,7 @@ const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
       onChange,
       defaultValue,
       value,
+      rows,
       ...props
     },
     ref
@@ -37,9 +39,13 @@ const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
     const autoId = React.useId();
     const id = idProp ?? autoId;
     const state = error ? "error" : success ? "success" : "default";
-    const [count, setCount] = React.useState(
-      String(value ?? defaultValue ?? "").length
+    const [uncontrolledValue, setUncontrolledValue] = React.useState(
+      defaultValue ?? ""
     );
+    const currentValue = value ?? uncontrolledValue;
+    const direction = getFieldDirection(currentValue);
+    const count = String(currentValue).length;
+
     return (
       <FieldWrapper
         id={id}
@@ -49,11 +55,13 @@ const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
         success={success}
         required={required}
       >
-        <div className="relative">
+        <div className="relative" dir={direction}>
           <textarea
+            {...props}
             id={id}
             ref={ref}
-            rows={4}
+            dir={direction}
+            rows={rows ?? 4}
             maxLength={maxLength}
             value={value}
             defaultValue={defaultValue}
@@ -63,16 +71,16 @@ const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
             }
             aria-required={required || undefined}
             onChange={(e) => {
-              setCount(e.target.value.length);
+              setUncontrolledValue(e.target.value);
               onChange?.(e);
             }}
             className={cn(
               fieldStateClasses(state),
-              "min-h-28 resize-y px-4 py-3 leading-7",
+              "min-h-28 px-4 py-3 leading-7",
               showCount && maxLength && "pb-8",
-              className
+              className,
+              "resize-none text-start"
             )}
-            {...props}
           />
           {showCount && maxLength && (
             <span

@@ -61,15 +61,15 @@ export const isTelegramAiConfigured = () =>
 export const generateTelegramAiReply = async (question: string) => {
   const providers = [
     {
+      id: "openai",
+      client: getOpenAIClient(),
+      model: process.env.TELEGRAM_AI_OPENAI_MODEL?.trim() || DEFAULT_OPENAI_MODEL,
+    },
+    {
       id: "nvidia-nim",
       client: getNvidiaNimClient(),
       model:
         process.env.TELEGRAM_AI_NVIDIA_MODEL?.trim() || DEFAULT_NVIDIA_MODEL,
-    },
-    {
-      id: "openai",
-      client: getOpenAIClient(),
-      model: process.env.TELEGRAM_AI_OPENAI_MODEL?.trim() || DEFAULT_OPENAI_MODEL,
     },
   ] as const;
 
