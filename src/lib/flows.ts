@@ -1,8 +1,10 @@
 export const FLOW_NAME_MAX_LENGTH = 100;
 export const FLOW_NODE_MESSAGE_MAX_LENGTH = 4096;
 export const FLOW_BUTTON_LABEL_MAX_LENGTH = 64;
+export const FLOW_BACK_BUTTON_LABEL_MAX_LENGTH = 64;
 export const FLOW_BUTTONS_PER_NODE_MAX = 8;
 export const FLOW_URL_MAX_LENGTH = 2048;
+export const DEFAULT_FLOW_BACK_BUTTON_LABEL = "بازگشت";
 
 export type FlowButtonActionType = "node" | "url" | "end";
 
@@ -22,6 +24,9 @@ export type FlowNode = {
   flowId: string;
   messageText: string;
   isRoot: boolean;
+  replaceOnButtonClick: boolean;
+  backButtonEnabled: boolean;
+  backButtonLabel: string;
   buttons: FlowButton[];
 };
 

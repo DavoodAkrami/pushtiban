@@ -11,7 +11,9 @@ import {
 } from "@/lib/automations";
 import {
   FLOW_BUTTON_LABEL_MAX_LENGTH,
+  FLOW_BACK_BUTTON_LABEL_MAX_LENGTH,
   FLOW_BUTTONS_PER_NODE_MAX,
+  DEFAULT_FLOW_BACK_BUTTON_LABEL,
   FLOW_NAME_MAX_LENGTH,
   FLOW_NODE_MESSAGE_MAX_LENGTH,
   FLOW_URL_MAX_LENGTH,
@@ -59,6 +61,9 @@ type NodeRow = {
   flow_id: string;
   message_text: string;
   is_root: boolean;
+  replace_on_button_click: boolean;
+  back_button_enabled: boolean;
+  back_button_label: string;
   automation_flow_buttons: ButtonRow[];
 };
 
@@ -77,7 +82,7 @@ type FlowDetailRow = {
 const FLOW_DETAIL_SELECT = `
   id, trigger_type, trigger_keyword, name, command_description, is_active, created_at, updated_at,
   automation_flow_nodes (
-    id, flow_id, message_text, is_root,
+    id, flow_id, message_text, is_root, replace_on_button_click, back_button_enabled, back_button_label,
     automation_flow_buttons:automation_flow_buttons!automation_flow_buttons_node_id_fkey (
       id, node_id, flow_id, label, action_type, next_node_id, url, position
     )
@@ -100,6 +105,9 @@ const toNode = (row: NodeRow): FlowNode => ({
   flowId: row.flow_id,
   messageText: row.message_text,
   isRoot: row.is_root,
+  replaceOnButtonClick: row.replace_on_button_click,
+  backButtonEnabled: row.back_button_enabled,
+  backButtonLabel: row.back_button_label,
   buttons: (row.automation_flow_buttons ?? [])
     .sort((a, b) => a.position - b.position)
     .map(toButton),
@@ -193,6 +201,8 @@ export const PATCH = async (
 
   if (hasActive && typeof body.isActive !== "boolean")
     return jsonError("وضعیت فلو معتبر نیست.", 400);
+  if (hasNodes && !Array.isArray(body.nodes))
+    return jsonError("پیام‌های فلو معتبر نیستند.", 400);
   if (
     hasRootMessage &&
     (typeof body.rootMessage !== "string" ||
@@ -212,6 +222,19 @@ export const PATCH = async (
 
     if (readError) return jsonError("فلو بارگذاری نشد.", 500);
     if (!existing) return jsonError("فلو موردنظر پیدا نشد.", 404);
+
+    if (hasNodes) {
+      const { error: schemaError } = await admin
+        .from("automation_flow_nodes")
+        .select("replace_on_button_click, back_button_enabled, back_button_label")
+        .limit(1);
+      if (schemaError) {
+        return jsonError(
+          "برای ذخیره این تنظیمات، ابتدا نسخه تازه اسکریپت flows.sql را در Supabase اجرا کنید.",
+          503
+        );
+      }
+    }
 
     const triggerType: AutomationTriggerType =
       typeof body.triggerType === "string" &&
@@ -314,11 +337,16 @@ export const PATCH = async (
       type NodeInput = {
         messageText: string;
         isRoot: boolean;
+        replaceOnButtonClick: boolean;
+        backButtonEnabled: boolean;
+        backButtonLabel: string;
         buttons: ButtonInput[];
       };
       const nodes = body.nodes as NodeInput[];
 
       // Validate
+      if (nodes.length === 0 || nodes.filter((node) => node.isRoot).length !== 1)
+        return jsonError("فلو باید دقیقاً یک پیام شروع داشته باشد.", 400);
       for (const node of nodes) {
         if (
           typeof node.messageText !== "string" ||
@@ -328,6 +356,17 @@ export const PATCH = async (
           return jsonError("متن پیام نامعتبر است.", 400);
         if (!Array.isArray(node.buttons))
           return jsonError("دکمه‌ها نامعتبر هستند.", 400);
+        if (
+          typeof node.replaceOnButtonClick !== "boolean" ||
+          typeof node.backButtonEnabled !== "boolean"
+        )
+          return jsonError("تنظیمات رفتار پیام معتبر نیست.", 400);
+        if (
+          typeof node.backButtonLabel !== "string" ||
+          !node.backButtonLabel.trim() ||
+          node.backButtonLabel.trim().length > FLOW_BACK_BUTTON_LABEL_MAX_LENGTH
+        )
+          return jsonError("عنوان دکمه بازگشت نامعتبر است.", 400);
         if (node.buttons.length > FLOW_BUTTONS_PER_NODE_MAX)
           return jsonError(`هر پیام حداکثر ${FLOW_BUTTONS_PER_NODE_MAX} دکمه می‌تواند داشته باشد.`, 400);
         for (const btn of node.buttons) {
@@ -362,6 +401,10 @@ export const PATCH = async (
             user_id: user.id,
             message_text: n.messageText.trim(),
             is_root: n.isRoot,
+            replace_on_button_click: n.replaceOnButtonClick,
+            back_button_enabled: n.backButtonEnabled,
+            back_button_label:
+              n.backButtonLabel.trim() || DEFAULT_FLOW_BACK_BUTTON_LABEL,
           }))
         )
         .select("id");

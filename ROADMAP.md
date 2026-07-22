@@ -65,6 +65,8 @@ How to use:
 - [ ] Move the flow workspace to `/dashboard/flow`, add card-first navigation
       and metadata editing, harden live Telegram flow delivery, and refine the
       canvas creation and drag interactions
+- [ ] Add per-message replacement delivery and a customizable back action to
+      interactive Telegram flows
 - [ ] Knowledge-base ingestion: upload docs / paste text / crawl site
 - [ ] AI assistant configuration (name, tone, model selection)
 - [ ] Chat playground for testing the assistant against the knowledge base

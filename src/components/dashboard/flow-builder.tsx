@@ -32,13 +32,16 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select, type SelectOption } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import {
   FLOW_BUTTON_LABEL_MAX_LENGTH,
+  FLOW_BACK_BUTTON_LABEL_MAX_LENGTH,
   FLOW_BUTTONS_PER_NODE_MAX,
+  DEFAULT_FLOW_BACK_BUTTON_LABEL,
   FLOW_NODE_MESSAGE_MAX_LENGTH,
   FLOW_URL_MAX_LENGTH,
   type AutomationFlowDetail,
@@ -60,6 +63,9 @@ type DraftNode = {
   localId: string;
   messageText: string;
   isRoot: boolean;
+  replaceOnButtonClick: boolean;
+  backButtonEnabled: boolean;
+  backButtonLabel: string;
   buttons: DraftButton[];
 };
 
@@ -84,6 +90,10 @@ const flowToDraft = (flow: AutomationFlowDetail): DraftNode[] => {
       localId,
       messageText: node.messageText,
       isRoot: node.isRoot,
+      replaceOnButtonClick: node.replaceOnButtonClick,
+      backButtonEnabled: node.backButtonEnabled,
+      backButtonLabel:
+        node.backButtonLabel || DEFAULT_FLOW_BACK_BUTTON_LABEL,
       buttons: [],
     } satisfies DraftNode;
   });
@@ -110,6 +120,10 @@ const draftToApiNodes = (nodes: DraftNode[]) => {
   return nodes.map((node) => ({
     messageText: node.messageText.trim(),
     isRoot: node.isRoot,
+    replaceOnButtonClick: node.replaceOnButtonClick,
+    backButtonEnabled: node.backButtonEnabled,
+    backButtonLabel:
+      node.backButtonLabel.trim() || DEFAULT_FLOW_BACK_BUTTON_LABEL,
     buttons: node.buttons.map((button, position) => ({
       label: button.label.trim(),
       actionType: button.actionType,
@@ -198,6 +212,21 @@ const ConversationNode = React.memo(
       >
         {draft.messageText.trim() || "متن این پیام را از پنل ویرایش بنویسید."}
       </p>
+
+      {(draft.replaceOnButtonClick || draft.backButtonEnabled) && (
+        <div className="mt-3 flex flex-wrap gap-1.5 text-[11px] text-muted">
+          {draft.replaceOnButtonClick && (
+            <span className="rounded-full bg-accent/10 px-2 py-1 text-accent">
+              جایگزینی پیام
+            </span>
+          )}
+          {draft.backButtonEnabled && (
+            <span className="rounded-full bg-surface px-2 py-1">
+              دکمه بازگشت
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="mt-3 border-t border-line pt-3">
         {draft.buttons.length > 0 ? (
@@ -409,6 +438,95 @@ const NodeInspector = ({
           rows={6}
         />
 
+        <section
+          aria-labelledby={`flow-navigation-title-${node.localId}`}
+          className="rounded-2xl border border-line bg-background/55 p-3.5"
+        >
+          <h2
+            id={`flow-navigation-title-${node.localId}`}
+            className="text-sm font-bold"
+          >
+            رفتار مسیر
+          </h2>
+          <p className="mt-1 text-xs leading-5 text-muted">
+            نحوه نمایش پیام بعدی و مسیر برگشت را مشخص کنید.
+          </p>
+
+          <div className="mt-4 space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <label
+                  htmlFor={`flow-node-replace-${node.localId}`}
+                  className="text-sm font-medium"
+                >
+                  جایگزینی همین پیام
+                </label>
+                <p
+                  id={`flow-node-replace-description-${node.localId}`}
+                  className="mt-1 text-xs leading-5 text-muted"
+                >
+                  با انتخاب دکمه، متن فعلی به پیام مقصد تبدیل می‌شود.
+                </p>
+              </div>
+              <Switch
+                id={`flow-node-replace-${node.localId}`}
+                checked={node.replaceOnButtonClick}
+                onChange={(event) =>
+                  onChange({
+                    ...node,
+                    replaceOnButtonClick: event.target.checked,
+                  })
+                }
+                aria-describedby={`flow-node-replace-description-${node.localId}`}
+              />
+            </div>
+
+            <div className="border-t border-line pt-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <label
+                    htmlFor={`flow-node-back-${node.localId}`}
+                    className="text-sm font-medium"
+                  >
+                    نمایش دکمه بازگشت
+                  </label>
+                  <p
+                    id={`flow-node-back-description-${node.localId}`}
+                    className="mt-1 text-xs leading-5 text-muted"
+                  >
+                    وقتی کاربر از پیام دیگری به اینجا برسد، می‌تواند برگردد.
+                  </p>
+                </div>
+                <Switch
+                  id={`flow-node-back-${node.localId}`}
+                  checked={node.backButtonEnabled}
+                  onChange={(event) =>
+                    onChange({
+                      ...node,
+                      backButtonEnabled: event.target.checked,
+                    })
+                  }
+                  aria-describedby={`flow-node-back-description-${node.localId}`}
+                />
+              </div>
+
+              {node.backButtonEnabled && (
+                <Input
+                  id={`flow-node-back-label-${node.localId}`}
+                  label="متن دکمه بازگشت"
+                  placeholder={DEFAULT_FLOW_BACK_BUTTON_LABEL}
+                  value={node.backButtonLabel}
+                  onChange={(event) =>
+                    onChange({ ...node, backButtonLabel: event.target.value })
+                  }
+                  maxLength={FLOW_BACK_BUTTON_LABEL_MAX_LENGTH}
+                  className="mt-3"
+                />
+              )}
+            </div>
+          </div>
+        </section>
+
         <section aria-labelledby={`flow-buttons-title-${node.localId}`}>
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -479,6 +597,9 @@ const validateDraft = (nodes: DraftNode[]) => {
 
   for (const node of nodes) {
     if (!node.messageText.trim()) return "متن همه پیام‌ها را بنویسید.";
+    if (node.backButtonEnabled && !node.backButtonLabel.trim()) {
+      return "متن دکمه بازگشت را بنویسید.";
+    }
 
     for (const button of node.buttons) {
       if (!button.label.trim()) return "برای همه دکمه‌ها عنوان بنویسید.";
@@ -587,6 +708,9 @@ export const FlowBuilder = ({ flow }: { flow: AutomationFlowDetail }) => {
       localId,
       messageText: "",
       isRoot: false,
+      replaceOnButtonClick: false,
+      backButtonEnabled: false,
+      backButtonLabel: DEFAULT_FLOW_BACK_BUTTON_LABEL,
       buttons: [],
     };
     setNodes((current) => [...current, nextNode]);

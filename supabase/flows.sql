@@ -33,14 +33,35 @@ create table if not exists public.automation_flows (
 );
 
 create table if not exists public.automation_flow_nodes (
-  id           uuid primary key default gen_random_uuid(),
-  flow_id      uuid not null references public.automation_flows(id) on delete cascade,
-  user_id      uuid not null references auth.users(id) on delete cascade,
-  message_text text not null check (char_length(message_text) between 1 and 4096),
-  is_root      boolean not null default false,
-  created_at   timestamptz not null default now(),
-  updated_at   timestamptz not null default now()
+  id                      uuid primary key default gen_random_uuid(),
+  flow_id                 uuid not null references public.automation_flows(id) on delete cascade,
+  user_id                 uuid not null references auth.users(id) on delete cascade,
+  message_text            text not null check (char_length(message_text) between 1 and 4096),
+  is_root                 boolean not null default false,
+  replace_on_button_click boolean not null default false,
+  back_button_enabled     boolean not null default false,
+  back_button_label       text not null default 'بازگشت'
+    check (char_length(back_button_label) between 1 and 64),
+  created_at              timestamptz not null default now(),
+  updated_at              timestamptz not null default now()
 );
+
+alter table public.automation_flow_nodes
+  add column if not exists replace_on_button_click boolean not null default false,
+  add column if not exists back_button_enabled boolean not null default false,
+  add column if not exists back_button_label text not null default 'بازگشت';
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'automation_flow_nodes_back_button_label_check'
+  ) then
+    alter table public.automation_flow_nodes
+      add constraint automation_flow_nodes_back_button_label_check
+      check (char_length(back_button_label) between 1 and 64);
+  end if;
+end $$;
 
 create unique index if not exists automation_flow_nodes_one_root_per_flow
   on public.automation_flow_nodes (flow_id)
