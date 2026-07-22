@@ -364,7 +364,7 @@ const ConnectionFlow = () => {
             <Input
               label="توکن ربات"
               type="password"
-              dir="ltr"
+              dir="rtl"
               className="text-start"
               placeholder="123456789:AA..."
               autoComplete="off"

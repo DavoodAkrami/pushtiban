@@ -24,6 +24,12 @@ type LoadResponse = {
 type MutationResponse = {
   automation: KeywordAutomation;
   webhookActive: boolean;
+  commandsSynced: boolean;
+};
+
+type DeleteResponse = {
+  id: string;
+  commandsSynced: boolean;
 };
 
 const initialState: AutomationsState = {
@@ -67,7 +73,12 @@ export const loadAutomations = createAsyncThunk<
 
 export const createAutomation = createAsyncThunk<
   MutationResponse,
-  { keyword: string; replyText: string },
+  {
+    triggerType: KeywordAutomation["triggerType"];
+    keyword: string;
+    commandDescription: string | null;
+    replyText: string;
+  },
   { rejectValue: AutomationRequestError }
 >("automations/create", async (input, { rejectWithValue }) => {
   try {
@@ -89,7 +100,13 @@ export const updateAutomation = createAsyncThunk<
   MutationResponse,
   {
     id: string;
-    changes: { keyword?: string; replyText?: string; isActive?: boolean };
+    changes: {
+      triggerType?: KeywordAutomation["triggerType"];
+      keyword?: string;
+      commandDescription?: string | null;
+      replyText?: string;
+      isActive?: boolean;
+    };
   },
   { rejectValue: AutomationRequestError }
 >("automations/update", async ({ id, changes }, { rejectWithValue }) => {
@@ -109,7 +126,7 @@ export const updateAutomation = createAsyncThunk<
 });
 
 export const deleteAutomation = createAsyncThunk<
-  string,
+  DeleteResponse,
   string,
   { rejectValue: AutomationRequestError }
 >("automations/delete", async (id, { rejectWithValue }) => {
@@ -118,7 +135,8 @@ export const deleteAutomation = createAsyncThunk<
       method: "DELETE",
     });
     if (!response.ok) return rejectWithValue(await responseError(response));
-    return id;
+    const data = (await response.json()) as { commandsSynced?: boolean };
+    return { id, commandsSynced: data.commandsSynced === true };
   } catch {
     return rejectWithValue({
       message: "اتصال برقرار نشد؛ اینترنت را بررسی کنید و دوباره تلاش کنید.",
@@ -157,7 +175,7 @@ const automationsSlice = createSlice({
         if (index >= 0) state.items[index] = action.payload.automation;
       })
       .addCase(deleteAutomation.fulfilled, (state, action) => {
-        state.items = state.items.filter((item) => item.id !== action.payload);
+        state.items = state.items.filter((item) => item.id !== action.payload.id);
       });
   },
 });

@@ -56,7 +56,8 @@ How to use:
 
 ## Phase 3 — Core product
 
-- [ ] Telegram keyword automations with owner-written ready replies
+- [ ] Telegram keyword and slash-command automations with owner-written ready
+      replies and synchronized Telegram command menus
 - [ ] Knowledge-base ingestion: upload docs / paste text / crawl site
 - [ ] AI assistant configuration (name, tone, model selection)
 - [ ] Chat playground for testing the assistant against the knowledge base

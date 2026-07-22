@@ -14,6 +14,7 @@ create table if not exists public.telegram_keyword_automations (
   id                     uuid primary key default gen_random_uuid(),
   user_id                uuid not null references auth.users (id) on delete cascade,
   telegram_connection_id uuid not null,
+  trigger_type           text not null default 'keyword',
   keyword                text not null check (
                            char_length(keyword) between 1 and 80
                          ),
@@ -23,6 +24,7 @@ create table if not exists public.telegram_keyword_automations (
   reply_text             text not null check (
                            char_length(reply_text) between 1 and 4096
                          ),
+  command_description    text,
   is_active              boolean not null default true,
   created_at             timestamptz not null default now(),
   updated_at             timestamptz not null default now(),
@@ -34,8 +36,55 @@ create table if not exists public.telegram_keyword_automations (
     unique (telegram_connection_id, keyword_normalized)
 );
 
+alter table public.telegram_keyword_automations
+  add column if not exists trigger_type text not null default 'keyword',
+  add column if not exists command_description text;
+
+-- Preserve slash-command rules created before trigger types were introduced.
+update public.telegram_keyword_automations
+set trigger_type = 'command',
+    command_description = coalesce(
+      nullif(btrim(command_description), ''),
+      'دریافت پاسخ آماده'
+    )
+where keyword_normalized ~ '^/[a-z0-9_]{1,32}$';
+
+update public.telegram_keyword_automations
+set command_description = null
+where trigger_type = 'keyword';
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'telegram_keyword_automations_trigger_type_check'
+  ) then
+    alter table public.telegram_keyword_automations
+      add constraint telegram_keyword_automations_trigger_type_check
+      check (trigger_type in ('keyword', 'command'));
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'telegram_keyword_automations_command_check'
+  ) then
+    alter table public.telegram_keyword_automations
+      add constraint telegram_keyword_automations_command_check
+      check (
+        (trigger_type = 'keyword' and command_description is null)
+        or
+        (
+          trigger_type = 'command'
+          and keyword_normalized ~ '^/[a-z0-9_]{1,32}$'
+          and char_length(command_description) between 1 and 256
+        )
+      );
+  end if;
+end;
+$$;
+
 comment on table public.telegram_keyword_automations is
-  'Exact-match Telegram keywords and owner-written prepared replies.';
+  'Telegram exact-match keywords and slash commands with owner-written prepared replies.';
 
 create or replace function public.set_updated_at()
 returns trigger
@@ -56,6 +105,14 @@ create trigger telegram_keyword_automations_set_updated_at
 create index if not exists telegram_keyword_automations_active_lookup_idx
   on public.telegram_keyword_automations (
     telegram_connection_id,
+    keyword_normalized
+  )
+  where is_active;
+
+create index if not exists telegram_keyword_automations_active_trigger_lookup_idx
+  on public.telegram_keyword_automations (
+    telegram_connection_id,
+    trigger_type,
     keyword_normalized
   )
   where is_active;

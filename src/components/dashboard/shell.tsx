@@ -571,6 +571,7 @@ export const DashboardShell = ({
   const desktopAccountTriggerRef = React.useRef<HTMLButtonElement>(null);
   const mobileAccountTriggerRef = React.useRef<HTMLButtonElement>(null);
   const mobileMenuTriggerRef = React.useRef<HTMLButtonElement>(null);
+  const pageScrollRef = React.useRef<HTMLDivElement>(null);
   const profile = useSessionProfile();
   const pathname = usePathname();
   const router = useRouter();
@@ -708,6 +709,7 @@ export const DashboardShell = ({
     setMobileNavOpen(false);
     setMobileProfileMenuOpen(false);
     setDesktopProfileMenuOpen(false);
+    pageScrollRef.current?.scrollTo({ top: 0 });
   }, [pathname]);
 
   React.useEffect(() => {
@@ -725,7 +727,7 @@ export const DashboardShell = ({
   }, []);
 
   return (
-    <div className="min-h-dvh bg-background xl:flex">
+    <div className="h-dvh overflow-hidden bg-background xl:flex">
       <motion.aside
         aria-label="سایدبار داشبورد"
         onClick={handleDesktopSidebarClick}
@@ -800,7 +802,11 @@ export const DashboardShell = ({
         </div>
       </motion.aside>
 
-      <div className="min-w-0 flex-1">
+      <div
+        ref={pageScrollRef}
+        dir="rtl"
+        className="h-dvh min-w-0 flex-1 overflow-y-auto overscroll-contain"
+      >
         <DialogPrimitive.Root
           open={mobileNavOpen}
           onOpenChange={changeMobileNavigation}

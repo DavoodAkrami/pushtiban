@@ -1,6 +1,10 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
-import { normalizeKeyword } from "@/lib/automations";
+import {
+  normalizeKeyword,
+  toTelegramCommandKeyword,
+  type AutomationTriggerType,
+} from "@/lib/automations";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decryptTelegramToken } from "@/lib/telegram/token-crypto";
 
@@ -12,13 +16,70 @@ const BOT_ID_RE = /^\d{1,24}$/;
 
 type RouteContext = { params: { botId: string } };
 
+type TelegramMessageEntity = {
+  type?: string;
+  offset?: number;
+  length?: number;
+};
+
 type TelegramUpdate = {
   update_id?: number;
   message?: {
     message_id?: number;
     text?: string;
+    entities?: TelegramMessageEntity[];
     chat?: { id?: number };
     from?: { is_bot?: boolean };
+  };
+};
+
+type ParsedCommand = {
+  detected: boolean;
+  keyword: string | null;
+};
+
+const parseTelegramCommand = ({
+  botUsername,
+  entities,
+  text,
+}: {
+  botUsername: string;
+  entities?: TelegramMessageEntity[];
+  text: string;
+}): ParsedCommand => {
+  const commandEntity = entities?.find(
+    (entity) =>
+      entity.type === "bot_command" &&
+      entity.offset === 0 &&
+      typeof entity.length === "number" &&
+      entity.length > 0
+  );
+  const fallbackMatch = commandEntity
+    ? null
+    : text.match(/^\/[a-zA-Z0-9_]{1,32}(?:@[a-zA-Z0-9_]{5,32})?(?=\s|$)/);
+  const commandToken = commandEntity
+    ? text.slice(0, commandEntity.length as number)
+    : fallbackMatch?.[0];
+
+  if (!commandToken) return { detected: false, keyword: null };
+
+  const match = commandToken.match(
+    /^\/([a-zA-Z0-9_]{1,32})(?:@([a-zA-Z0-9_]{5,32}))?$/
+  );
+  if (!match) return { detected: true, keyword: null };
+
+  const targetUsername = match[2];
+  if (
+    targetUsername &&
+    targetUsername.toLocaleLowerCase("en-US") !==
+      botUsername.toLocaleLowerCase("en-US")
+  ) {
+    return { detected: true, keyword: null };
+  }
+
+  return {
+    detected: true,
+    keyword: toTelegramCommandKeyword(match[1]),
   };
 };
 
@@ -76,7 +137,7 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
   const admin = createAdminClient();
   const { data: connection, error: connectionError } = await admin
     .from("telegram_connections")
-    .select("id, token_ciphertext, webhook_secret")
+    .select("id, bot_username, token_ciphertext, webhook_secret")
     .eq("bot_id", params.botId)
     .maybeSingle();
 
@@ -112,7 +173,19 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
     return NextResponse.json({ ok: true });
   }
 
-  const keywordNormalized = normalizeKeyword(text);
+  const parsedCommand = parseTelegramCommand({
+    botUsername: connection.bot_username,
+    entities: message?.entities,
+    text,
+  });
+  if (parsedCommand.detected && !parsedCommand.keyword) {
+    return NextResponse.json({ ok: true });
+  }
+
+  const triggerType: AutomationTriggerType = parsedCommand.detected
+    ? "command"
+    : "keyword";
+  const keywordNormalized = parsedCommand.keyword ?? normalizeKeyword(text);
   if (!keywordNormalized) {
     return NextResponse.json({ ok: true });
   }
@@ -121,6 +194,7 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
     .from("telegram_keyword_automations")
     .select("reply_text")
     .eq("telegram_connection_id", connection.id)
+    .eq("trigger_type", triggerType)
     .eq("keyword_normalized", keywordNormalized)
     .eq("is_active", true)
     .maybeSingle();

@@ -71,7 +71,13 @@ const ModalContent = React.forwardRef<
             />
           </DialogPrimitive.Overlay>
           <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto p-5">
-            <DialogPrimitive.Content asChild forceMount ref={ref} {...props}>
+            <DialogPrimitive.Content
+              asChild
+              forceMount
+              ref={ref}
+              dir="rtl"
+              {...props}
+            >
               <motion.div
                 initial={
                   reduce ? { opacity: 0 } : { opacity: 0, y: 10, scale: 0.97 }

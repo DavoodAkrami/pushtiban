@@ -5,6 +5,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   ArrowLeft,
   Bot,
+  Command,
   Hash,
   MessageSquareText,
   Pencil,
@@ -29,13 +30,20 @@ import {
   ModalTitle,
 } from "@/components/ui/modal";
 import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
+import { Select, type SelectOption } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
+  cleanTelegramCommand,
   cleanKeyword,
+  isValidTelegramCommand,
   KEYWORD_MAX_LENGTH,
   REPLY_MAX_LENGTH,
+  TELEGRAM_COMMAND_DESCRIPTION_MAX_LENGTH,
+  TELEGRAM_COMMAND_MAX_LENGTH,
+  toTelegramCommandKeyword,
+  type AutomationTriggerType,
   type KeywordAutomation,
 } from "@/lib/automations";
 import { fa } from "@/lib/utils";
@@ -48,7 +56,27 @@ import {
   type AutomationRequestError,
 } from "@/store/slices/automations-slice";
 
-type RuleDraft = { keyword: string; replyText: string };
+type RuleDraft = {
+  triggerType: AutomationTriggerType;
+  keyword: string;
+  commandDescription: string | null;
+  replyText: string;
+};
+
+const triggerTypeOptions: SelectOption[] = [
+  {
+    value: "keyword",
+    label: "کلیدواژه",
+    description: "تطبیق دقیق با متن کامل پیام",
+    icon: <Hash className="size-4" aria-hidden />,
+  },
+  {
+    value: "command",
+    label: "فرمان تلگرام",
+    description: "نمایش در منوی / ربات",
+    icon: <Command className="size-4" aria-hidden />,
+  },
+];
 
 const errorMessage = (error: unknown) => {
   if (
@@ -73,33 +101,72 @@ const RuleEditorModal = ({
   onSave: (draft: RuleDraft) => Promise<boolean>;
   open: boolean;
 }) => {
+  const [triggerType, setTriggerType] =
+    React.useState<AutomationTriggerType>("keyword");
   const [keyword, setKeyword] = React.useState("");
+  const [commandDescription, setCommandDescription] = React.useState("");
   const [replyText, setReplyText] = React.useState("");
   const [keywordError, setKeywordError] = React.useState("");
+  const [commandDescriptionError, setCommandDescriptionError] =
+    React.useState("");
   const [replyError, setReplyError] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const editing = Boolean(automation);
 
   React.useEffect(() => {
     if (!open) return;
-    setKeyword(automation?.keyword ?? "");
+    setTriggerType(automation?.triggerType ?? "keyword");
+    setKeyword(
+      automation?.triggerType === "command"
+        ? toTelegramCommandKeyword(automation.keyword) || "/"
+        : automation?.keyword ?? ""
+    );
+    setCommandDescription(automation?.commandDescription ?? "");
     setReplyText(automation?.replyText ?? "");
     setKeywordError("");
+    setCommandDescriptionError("");
     setReplyError("");
   }, [automation, open]);
 
   const saveRule = async (event: React.FormEvent) => {
     event.preventDefault();
-    const cleanedKeyword = cleanKeyword(keyword);
+    const cleanedKeyword =
+      triggerType === "command"
+        ? toTelegramCommandKeyword(keyword)
+        : cleanKeyword(keyword);
+    const cleanedCommandDescription = commandDescription.trim();
     const cleanedReply = replyText.trim();
     let valid = true;
 
-    if (!cleanedKeyword) {
-      setKeywordError("یک کلیدواژه وارد کنید.");
-      valid = false;
-    } else if (cleanedKeyword.length > KEYWORD_MAX_LENGTH) {
-      setKeywordError("کلیدواژه حداکثر ۸۰ نویسه است.");
-      valid = false;
+    if (triggerType === "command") {
+      if (!cleanTelegramCommand(keyword)) {
+        setKeywordError("یک فرمان وارد کنید.");
+        valid = false;
+      } else if (!isValidTelegramCommand(keyword)) {
+        setKeywordError(
+          "فقط حروف انگلیسی کوچک، عدد و زیرخط؛ حداکثر ۳۲ نویسه."
+        );
+        valid = false;
+      }
+
+      if (!cleanedCommandDescription) {
+        setCommandDescriptionError("توضیحی برای منوی فرمان بنویسید.");
+        valid = false;
+      } else if (
+        cleanedCommandDescription.length >
+        TELEGRAM_COMMAND_DESCRIPTION_MAX_LENGTH
+      ) {
+        setCommandDescriptionError("توضیح منو حداکثر ۲۵۶ نویسه است.");
+        valid = false;
+      }
+    } else {
+      if (!cleanedKeyword) {
+        setKeywordError("یک کلیدواژه وارد کنید.");
+        valid = false;
+      } else if (cleanedKeyword.length > KEYWORD_MAX_LENGTH) {
+        setKeywordError("کلیدواژه حداکثر ۸۰ نویسه است.");
+        valid = false;
+      }
     }
 
     if (!cleanedReply) {
@@ -114,14 +181,22 @@ const RuleEditorModal = ({
 
     setSaving(true);
     const saved = await onSave({
+      triggerType,
       keyword: cleanedKeyword,
+      commandDescription:
+        triggerType === "command" ? cleanedCommandDescription : null,
       replyText: cleanedReply,
     });
     setSaving(false);
     if (saved) onOpenChange(false);
   };
 
-  const previewKeyword = cleanKeyword(keyword) || "help";
+  const previewKeyword =
+    triggerType === "command"
+      ? toTelegramCommandKeyword(keyword) || "/help"
+      : cleanKeyword(keyword) || "help";
+  const previewCommandDescription =
+    commandDescription.trim() || "دریافت راهنمای کامل";
   const previewReply = replyText.trim() || "متن راهنمای شما اینجا نمایش داده می‌شود.";
 
   return (
@@ -131,41 +206,101 @@ const RuleEditorModal = ({
         if (!saving) onOpenChange(nextOpen);
       }}
     >
-      <ModalContent size="lg" closeDisabled={saving}>
-        <ModalHeader>
+      <ModalContent
+        size="lg"
+        closeDisabled={saving}
+        className="flex max-h-[calc(100dvh-2.5rem)] flex-col overflow-hidden p-0"
+      >
+        <ModalHeader className="mb-0 shrink-0 px-5 pb-4 pt-5 sm:px-7 sm:pb-5 sm:pt-7">
           <ModalTitle>
-            {editing ? "ویرایش پاسخ کلیدواژه‌ای" : "پاسخ کلیدواژه‌ای جدید"}
+            {editing ? "ویرایش اتوماسیون" : "اتوماسیون جدید"}
           </ModalTitle>
           <ModalDescription>
-            وقتی متن پیام دقیقاً با کلیدواژه برابر باشد، ربات پاسخ آماده شما را
-            می‌فرستد.
+            {triggerType === "command"
+              ? "فرمان در منوی ربات نمایش داده می‌شود و پاسخ آماده شما را می‌فرستد."
+              : "وقتی متن پیام دقیقاً با کلیدواژه برابر باشد، ربات پاسخ آماده شما را می‌فرستد."}
           </ModalDescription>
         </ModalHeader>
 
-        <form onSubmit={saveRule} noValidate>
-          <div className="space-y-5">
+        <form
+          onSubmit={saveRule}
+          noValidate
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-5 pb-6 pt-1 sm:px-7">
+            <Select
+              id="automation-trigger-type"
+              label="نوع محرک"
+              options={triggerTypeOptions}
+              value={triggerType}
+              onChange={(value) => {
+                const nextTriggerType = value as AutomationTriggerType;
+                if (nextTriggerType !== triggerType) {
+                  setKeyword(nextTriggerType === "command" ? "/" : "");
+                  setCommandDescription("");
+                }
+                setTriggerType(nextTriggerType);
+                setKeywordError("");
+                setCommandDescriptionError("");
+              }}
+              disabled={saving}
+            />
+
             <Input
               id="automation-keyword"
-              dir="auto"
-              label="کلیدواژه"
-              hint="فاصله‌های ابتدا و انتها و بزرگی حروف نادیده گرفته می‌شود."
-              placeholder="help"
+              dir="rtl"
+              label={triggerType === "command" ? "فرمان" : "کلیدواژه"}
+              hint={
+                triggerType === "command"
+                  ? "/ خودکار افزوده می‌شود؛ حروف بزرگ هم خودکار کوچک می‌شوند."
+                  : "فاصله‌های ابتدا و انتها و بزرگی حروف نادیده گرفته می‌شود."
+              }
+              placeholder={triggerType === "command" ? "/help" : "help"}
               value={keyword}
               onChange={(event) => {
-                setKeyword(event.target.value);
+                setKeyword(
+                  triggerType === "command"
+                    ? toTelegramCommandKeyword(event.target.value) || "/"
+                    : event.target.value
+                );
                 if (keywordError) setKeywordError("");
               }}
               error={keywordError}
-              maxLength={KEYWORD_MAX_LENGTH}
-              startIcon={<Hash />}
+              maxLength={
+                triggerType === "command"
+                  ? TELEGRAM_COMMAND_MAX_LENGTH + 2
+                  : KEYWORD_MAX_LENGTH
+              }
+              startIcon={triggerType === "command" ? <Command /> : <Hash />}
               autoComplete="off"
               disabled={saving}
               required
             />
 
+            {triggerType === "command" && (
+              <Input
+                id="automation-command-description"
+                dir="rtl"
+                label="توضیح در منوی تلگرام"
+                hint="این متن کنار فرمان در فهرست / ربات دیده می‌شود."
+                placeholder="دریافت راهنمای کامل"
+                value={commandDescription}
+                onChange={(event) => {
+                  setCommandDescription(event.target.value);
+                  if (commandDescriptionError) setCommandDescriptionError("");
+                }}
+                error={commandDescriptionError}
+                maxLength={TELEGRAM_COMMAND_DESCRIPTION_MAX_LENGTH}
+                startIcon={<MessageSquareText />}
+                autoComplete="off"
+                disabled={saving}
+                required
+              />
+            )}
+
             <Textarea
               id="automation-reply"
-              dir="auto"
+              dir="rtl"
               label="متن پاسخ آماده"
               hint="راهنما، لینک یا هر متنی را که مشتری باید دریافت کند بنویسید."
               placeholder="سلام! برای شروع، راهنمای زیر را دنبال کنید…"
@@ -201,6 +336,11 @@ const RuleEditorModal = ({
                   >
                     {previewKeyword}
                   </code>
+                  {triggerType === "command" && (
+                    <span className="mt-1.5 block truncate text-xs text-muted">
+                      {previewCommandDescription}
+                    </span>
+                  )}
                 </div>
 
                 <ArrowLeft
@@ -224,16 +364,21 @@ const RuleEditorModal = ({
             </section>
           </div>
 
-          <ModalFooter>
+          <ModalFooter className="mt-0 shrink-0 flex-col-reverse border-t border-line px-5 py-4 sm:flex-row sm:px-7 sm:py-5">
             <Button
               type="button"
               variant="ghost"
               onClick={() => onOpenChange(false)}
               disabled={saving}
+              className="w-full sm:w-auto"
             >
               انصراف
             </Button>
-            <Button type="submit" loading={saving}>
+            <Button
+              type="submit"
+              loading={saving}
+              className="w-full sm:w-auto"
+            >
               {editing ? "ذخیره تغییرات" : "ساخت اتوماسیون"}
             </Button>
           </ModalFooter>
@@ -264,8 +409,7 @@ const DeleteRuleModal = ({
       <ModalHeader>
         <ModalTitle>حذف اتوماسیون؟</ModalTitle>
         <ModalDescription>
-          پس از حذف، ربات دیگر به کلیدواژه «{automation?.keyword}» پاسخ آماده
-          نمی‌دهد.
+          پس از حذف، ربات دیگر به «{automation?.keyword}» پاسخ آماده نمی‌دهد.
         </ModalDescription>
       </ModalHeader>
       <ModalFooter>
@@ -304,6 +448,7 @@ const RuleCard = ({
   onToggle: (active: boolean) => void;
 }) => {
   const reduce = useReducedMotion();
+  const isCommand = automation.triggerType === "command";
 
   return (
     <motion.article
@@ -316,9 +461,16 @@ const RuleCard = ({
     >
       <header className="flex items-center justify-between gap-4">
         <div className="flex min-w-0 items-center gap-3">
-          <Icon icon={Workflow} tile size="sm" tone={automation.isActive ? "accent" : "muted"} />
+          <Icon
+            icon={isCommand ? Command : Workflow}
+            tile
+            size="sm"
+            tone={automation.isActive ? "accent" : "muted"}
+          />
           <div className="min-w-0">
-            <p className="truncate text-sm font-bold">پاسخ کلیدواژه‌ای</p>
+            <p className="truncate text-sm font-bold">
+              {isCommand ? "فرمان تلگرام" : "پاسخ کلیدواژه‌ای"}
+            </p>
             <Badge
               variant={automation.isActive ? "success" : "muted"}
               dot
@@ -339,8 +491,12 @@ const RuleCard = ({
       <div className="mt-5 grid gap-3 border-y border-line py-5 md:grid-cols-[minmax(0,0.9fr)_auto_minmax(0,1.35fr)] md:items-center">
         <div className="min-w-0 rounded-2xl bg-background/45 p-4">
           <p className="flex items-center gap-2 text-xs text-muted">
-            <MessageSquareText className="size-4 shrink-0" aria-hidden />
-            پیام مشتری
+            {isCommand ? (
+              <Command className="size-4 shrink-0" aria-hidden />
+            ) : (
+              <MessageSquareText className="size-4 shrink-0" aria-hidden />
+            )}
+            {isCommand ? "فرمان" : "پیام مشتری"}
           </p>
           <code
             dir="auto"
@@ -348,6 +504,11 @@ const RuleCard = ({
           >
             {automation.keyword}
           </code>
+          {isCommand && automation.commandDescription && (
+            <p className="mt-1.5 truncate text-xs text-muted">
+              {automation.commandDescription}
+            </p>
+          )}
         </div>
 
         <ArrowLeft
@@ -440,10 +601,15 @@ const AutomationPanelContent = () => {
 
       toast({
         title: editingRule ? "تغییرات ذخیره شد" : "اتوماسیون ساخته شد",
-        description: result.webhookActive
-          ? "پاسخ کلیدواژه‌ای روی ربات تلگرام فعال است."
-          : "قانون ذخیره شد، اما دریافت پیام ربات فعال نشد؛ آدرس عمومی سامانه را بررسی کنید.",
-        variant: result.webhookActive ? "success" : "warning",
+        description: !result.webhookActive
+          ? "قانون ذخیره شد، اما دریافت پیام ربات فعال نشد؛ آدرس عمومی سامانه را بررسی کنید."
+          : !result.commandsSynced
+            ? "پاسخ فعال شد، اما منوی فرمان‌های تلگرام به‌روز نشد؛ اتصال تلگرام را بررسی کنید."
+            : draft.triggerType === "command"
+              ? "فرمان و پاسخ آماده روی ربات تلگرام فعال هستند."
+              : "پاسخ کلیدواژه‌ای روی ربات تلگرام فعال است.",
+        variant:
+          result.webhookActive && result.commandsSynced ? "success" : "warning",
       });
       return true;
     } catch (requestError) {
@@ -467,10 +633,19 @@ const AutomationPanelContent = () => {
         description:
           isActive && !result.webhookActive
             ? "قانون فعال شد، اما دریافت پیام ربات برقرار نشد؛ آدرس عمومی سامانه را بررسی کنید."
-            : isActive
-              ? "ربات به این کلیدواژه پاسخ می‌دهد."
-              : "ربات فعلاً به این کلیدواژه پاسخ نمی‌دهد.",
-        variant: isActive && !result.webhookActive ? "warning" : "success",
+            : !result.commandsSynced
+              ? "وضعیت ذخیره شد، اما منوی فرمان‌های تلگرام به‌روز نشد؛ اتصال تلگرام را بررسی کنید."
+              : isActive
+                ? automation.triggerType === "command"
+                  ? "ربات به این فرمان پاسخ می‌دهد و آن را در منوی / نمایش می‌دهد."
+                  : "ربات به این کلیدواژه پاسخ می‌دهد."
+                : automation.triggerType === "command"
+                  ? "فرمان از منوی / برداشته شد و فعلاً پاسخی نمی‌فرستد."
+                  : "ربات فعلاً به این کلیدواژه پاسخ نمی‌دهد.",
+        variant:
+          (isActive && !result.webhookActive) || !result.commandsSynced
+            ? "warning"
+            : "success",
       });
     } catch (requestError) {
       toast({
@@ -487,12 +662,14 @@ const AutomationPanelContent = () => {
     if (!deletingRule) return;
     setDeleting(true);
     try {
-      await dispatch(deleteAutomation(deletingRule.id)).unwrap();
+      const result = await dispatch(deleteAutomation(deletingRule.id)).unwrap();
       setDeletingRule(null);
       toast({
         title: "اتوماسیون حذف شد",
-        description: "ربات دیگر به این کلیدواژه پاسخ آماده نمی‌دهد.",
-        variant: "success",
+        description: result.commandsSynced
+          ? "ربات دیگر به این محرک پاسخ آماده نمی‌دهد."
+          : "اتوماسیون حذف شد، اما منوی فرمان‌های تلگرام به‌روز نشد؛ اتصال تلگرام را بررسی کنید.",
+        variant: result.commandsSynced ? "success" : "warning",
       });
     } catch (requestError) {
       toast({
@@ -514,8 +691,8 @@ const AutomationPanelContent = () => {
         <div>
           <h1 className="text-2xl font-black">اتوماسیون</h1>
           <p className="mt-2 max-w-2xl text-sm leading-7 text-muted">
-            برای پیام‌های پرتکرار کلیدواژه تعریف کنید تا ربات تلگرام همان لحظه
-            پاسخ آماده شما را بفرستد.
+            برای پیام‌های پرتکرار کلیدواژه یا فرمان تعریف کنید تا ربات تلگرام
+            همان لحظه پاسخ آماده شما را بفرستد.
           </p>
         </div>
         <Button
@@ -584,7 +761,8 @@ const AutomationPanelContent = () => {
               </span>
             </span>
             <span className="text-xs leading-6 text-muted sm:ms-auto">
-              تطبیق کلیدواژه با متن کامل پیام انجام می‌شود.
+              فرمان‌ها در منوی / ربات نمایش داده می‌شوند؛ کلیدواژه‌ها با متن
+              کامل پیام تطبیق دارند.
             </span>
           </div>
         )}
@@ -615,8 +793,8 @@ const AutomationPanelContent = () => {
             <Icon icon={MessageSquareText} tile size="lg" tone="accent" />
             <h2 className="mt-5 text-lg font-bold">اولین پاسخ آماده را بسازید</h2>
             <p className="mx-auto mt-2 max-w-lg text-sm leading-7 text-muted">
-              مثلاً کلیدواژه «help» را به یک متن راهنمای کامل وصل کنید تا هر
-              مشتری با فرستادن آن، فوراً راهنما را دریافت کند.
+              مثلاً فرمان «/help» یا کلیدواژه «راهنما» را به یک متن کامل وصل
+              کنید تا مشتری فوراً پاسخ آماده را دریافت کند.
             </p>
             <Button
               type="button"
@@ -633,7 +811,7 @@ const AutomationPanelContent = () => {
           <section aria-labelledby="keyword-automations-heading">
             <div className="mb-4 flex items-center justify-between gap-4">
               <h2 id="keyword-automations-heading" className="text-sm font-bold">
-                پاسخ‌های کلیدواژه‌ای
+                پاسخ‌های خودکار
               </h2>
               <Badge variant="muted">{fa(items.length)} اتوماسیون</Badge>
             </div>

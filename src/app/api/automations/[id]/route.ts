@@ -1,14 +1,22 @@
 import { NextResponse, type NextRequest } from "next/server";
 import {
   cleanKeyword,
+  isValidTelegramCommand,
   KEYWORD_MAX_LENGTH,
   normalizeKeyword,
   REPLY_MAX_LENGTH,
+  TELEGRAM_COMMAND_DESCRIPTION_MAX_LENGTH,
+  TELEGRAM_COMMANDS_MAX_COUNT,
+  toTelegramCommandKeyword,
+  type AutomationTriggerType,
   type KeywordAutomation,
 } from "@/lib/automations";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { activateTelegramWebhook } from "@/lib/telegram/webhook";
+import {
+  activateTelegramWebhook,
+  syncTelegramCommandMenu,
+} from "@/lib/telegram/webhook";
 
 export const runtime = "nodejs";
 
@@ -20,7 +28,9 @@ type RouteContext = { params: { id: string } };
 type AutomationRow = {
   id: string;
   telegram_connection_id: string;
+  trigger_type: AutomationTriggerType;
   keyword: string;
+  command_description: string | null;
   reply_text: string;
   is_active: boolean;
   created_at: string;
@@ -29,7 +39,9 @@ type AutomationRow = {
 
 const toAutomation = (row: AutomationRow): KeywordAutomation => ({
   id: row.id,
+  triggerType: row.trigger_type,
   keyword: row.keyword,
+  commandDescription: row.command_description,
   replyText: row.reply_text,
   isActive: row.is_active,
   createdAt: row.created_at,
@@ -70,7 +82,13 @@ export const PATCH = async (request: NextRequest, { params }: RouteContext) => {
     return jsonError("نشست شما تمام شده؛ دوباره وارد حساب شوید.", 401);
   }
 
-  let body: { keyword?: unknown; replyText?: unknown; isActive?: unknown };
+  let body: {
+    triggerType?: unknown;
+    keyword?: unknown;
+    commandDescription?: unknown;
+    replyText?: unknown;
+    isActive?: unknown;
+  };
   try {
     body = (await request.json()) as typeof body;
   } catch {
@@ -78,17 +96,42 @@ export const PATCH = async (request: NextRequest, { params }: RouteContext) => {
   }
 
   const hasKeyword = Object.prototype.hasOwnProperty.call(body, "keyword");
+  const hasTriggerType = Object.prototype.hasOwnProperty.call(body, "triggerType");
+  const hasCommandDescription = Object.prototype.hasOwnProperty.call(
+    body,
+    "commandDescription"
+  );
   const hasReply = Object.prototype.hasOwnProperty.call(body, "replyText");
   const hasActive = Object.prototype.hasOwnProperty.call(body, "isActive");
 
-  if (!hasKeyword && !hasReply && !hasActive) {
+  if (
+    !hasTriggerType &&
+    !hasKeyword &&
+    !hasCommandDescription &&
+    !hasReply &&
+    !hasActive
+  ) {
     return jsonError("تغییری برای ذخیره وجود ندارد.", 400);
+  }
+  if (
+    hasTriggerType &&
+    body.triggerType !== "keyword" &&
+    body.triggerType !== "command"
+  ) {
+    return jsonError("نوع محرک معتبر نیست.", 400);
   }
   if (hasKeyword && typeof body.keyword !== "string") {
     return jsonError("کلیدواژه معتبر نیست.", 400);
   }
   if (hasReply && typeof body.replyText !== "string") {
     return jsonError("متن پاسخ معتبر نیست.", 400);
+  }
+  if (
+    hasCommandDescription &&
+    body.commandDescription !== null &&
+    typeof body.commandDescription !== "string"
+  ) {
+    return jsonError("توضیح منوی فرمان معتبر نیست.", 400);
   }
   if (hasActive && typeof body.isActive !== "boolean") {
     return jsonError("وضعیت اتوماسیون معتبر نیست.", 400);
@@ -99,7 +142,7 @@ export const PATCH = async (request: NextRequest, { params }: RouteContext) => {
     const { data: existing, error: readError } = await admin
       .from("telegram_keyword_automations")
       .select(
-        "id, telegram_connection_id, keyword, reply_text, is_active, created_at, updated_at"
+        "id, telegram_connection_id, trigger_type, keyword, command_description, reply_text, is_active, created_at, updated_at"
       )
       .eq("id", params.id)
       .eq("user_id", user.id)
@@ -112,33 +155,82 @@ export const PATCH = async (request: NextRequest, { params }: RouteContext) => {
       return jsonError("اتوماسیون موردنظر پیدا نشد.", 404);
     }
 
-    const keyword = hasKeyword
-      ? cleanKeyword(body.keyword as string)
+    const triggerType: AutomationTriggerType = hasTriggerType
+      ? (body.triggerType as AutomationTriggerType)
+      : existing.trigger_type;
+    const keywordInput = hasKeyword
+      ? (body.keyword as string)
       : existing.keyword;
+    const keyword =
+      triggerType === "command"
+        ? toTelegramCommandKeyword(keywordInput)
+        : cleanKeyword(keywordInput);
+    const commandDescription =
+      triggerType === "command"
+        ? hasCommandDescription && typeof body.commandDescription === "string"
+          ? body.commandDescription.trim()
+          : existing.command_description?.trim() ?? ""
+        : null;
     const replyText = hasReply
       ? (body.replyText as string).trim()
       : existing.reply_text;
     const isActive = hasActive ? (body.isActive as boolean) : existing.is_active;
 
-    if (!keyword || keyword.length > KEYWORD_MAX_LENGTH) {
+    if (
+      triggerType === "keyword" &&
+      (!keyword || keyword.length > KEYWORD_MAX_LENGTH)
+    ) {
       return jsonError("کلیدواژه باید بین ۱ تا ۸۰ نویسه باشد.", 400);
+    }
+    if (triggerType === "command" && !isValidTelegramCommand(keyword)) {
+      return jsonError(
+        "فرمان باید حداکثر ۳۲ نویسه و فقط شامل حروف انگلیسی، عدد یا زیرخط باشد.",
+        400
+      );
+    }
+    if (
+      triggerType === "command" &&
+      (!commandDescription ||
+        commandDescription.length > TELEGRAM_COMMAND_DESCRIPTION_MAX_LENGTH)
+    ) {
+      return jsonError("توضیح منوی فرمان باید بین ۱ تا ۲۵۶ نویسه باشد.", 400);
     }
     if (!replyText || replyText.length > REPLY_MAX_LENGTH) {
       return jsonError("متن پاسخ باید بین ۱ تا ۴۰۹۶ نویسه باشد.", 400);
     }
 
+    if (triggerType === "command" && isActive) {
+      const { count, error: countError } = await admin
+        .from("telegram_keyword_automations")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", user.id)
+        .eq("telegram_connection_id", existing.telegram_connection_id)
+        .eq("trigger_type", "command")
+        .eq("is_active", true)
+        .neq("id", existing.id);
+
+      if (countError) {
+        return jsonError("فرمان‌های ربات بررسی نشدند؛ دوباره تلاش کنید.", 500);
+      }
+      if ((count ?? 0) >= TELEGRAM_COMMANDS_MAX_COUNT) {
+        return jsonError("هر ربات حداکثر ۱۰۰ فرمان فعال می‌تواند داشته باشد.", 409);
+      }
+    }
+
     const { data, error } = await admin
       .from("telegram_keyword_automations")
       .update({
+        trigger_type: triggerType,
         keyword,
         keyword_normalized: normalizeKeyword(keyword),
+        command_description: commandDescription,
         reply_text: replyText,
         is_active: isActive,
       })
       .eq("id", params.id)
       .eq("user_id", user.id)
       .select(
-        "id, telegram_connection_id, keyword, reply_text, is_active, created_at, updated_at"
+        "id, telegram_connection_id, trigger_type, keyword, command_description, reply_text, is_active, created_at, updated_at"
       )
       .single();
 
@@ -149,17 +241,26 @@ export const PATCH = async (request: NextRequest, { params }: RouteContext) => {
       return jsonError("تغییرات ذخیره نشد؛ دوباره تلاش کنید.", 500);
     }
 
-    const webhookActive = isActive
-      ? await activateTelegramWebhook({
-          connectionId: data.telegram_connection_id,
-          requestUrl: request.url,
-          userId: user.id,
-        })
-      : true;
+    const [webhookActive, commandsSynced] = await Promise.all([
+      isActive
+        ? activateTelegramWebhook({
+            connectionId: data.telegram_connection_id,
+            requestUrl: request.url,
+            userId: user.id,
+          })
+        : Promise.resolve(true),
+      existing.trigger_type === "command" || triggerType === "command"
+        ? syncTelegramCommandMenu({
+            connectionId: data.telegram_connection_id,
+            userId: user.id,
+          })
+        : Promise.resolve(true),
+    ]);
 
     return NextResponse.json({
       automation: toAutomation(data as AutomationRow),
       webhookActive,
+      commandsSynced,
     });
   } catch {
     return jsonError("تغییرات ذخیره نشد؛ دوباره تلاش کنید.", 500);
@@ -186,7 +287,7 @@ export const DELETE = async (request: NextRequest, { params }: RouteContext) => 
       .delete()
       .eq("id", params.id)
       .eq("user_id", user.id)
-      .select("id")
+      .select("id, telegram_connection_id, trigger_type")
       .maybeSingle();
 
     if (error) {
@@ -196,7 +297,15 @@ export const DELETE = async (request: NextRequest, { params }: RouteContext) => 
       return jsonError("اتوماسیون موردنظر پیدا نشد.", 404);
     }
 
-    return NextResponse.json({ ok: true });
+    const commandsSynced =
+      data.trigger_type === "command"
+        ? await syncTelegramCommandMenu({
+            connectionId: data.telegram_connection_id,
+            userId: user.id,
+          })
+        : true;
+
+    return NextResponse.json({ ok: true, commandsSynced });
   } catch {
     return jsonError("اتوماسیون حذف نشد؛ دوباره تلاش کنید.", 500);
   }
