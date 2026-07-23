@@ -516,7 +516,7 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
   const aiReply = await withTelegramTyping({
     chatId,
     token,
-    task: () => generateTelegramAiReply(text),
+    task: () => generateTelegramAiReply(text, connection.user_id),
   });
   const sent = await telegramPost(token, "sendMessage", {
     chat_id: chatId,
