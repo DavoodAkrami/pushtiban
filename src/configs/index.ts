@@ -21,6 +21,13 @@ export {
   OPENROUTER_FREE_FALLBACK,
 } from "./openrouter";
 
+export {
+  EMBEDDINGS_MODEL,
+  EMBEDDINGS_DIMENSIONS,
+  isEmbeddingsConfigured,
+  getEmbeddingsClient,
+} from "./embeddings";
+
 export const getConfiguredProviders = (): ProviderId[] => {
   const ids: ProviderId[] = [];
   if (isOpenAIConfigured()) ids.push("openai");

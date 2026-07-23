@@ -73,6 +73,18 @@ How to use:
 - [ ] AI assistant on/off control with Telegram fallback after flows and
       prepared messages
 - [ ] Chat playground for testing the assistant against the knowledge base
+- [x] RAG retrieval layer (pgvector in Supabase) with an in-app "search
+      knowledge" tool: embeddings via OpenAI/Metis, HNSW cosine similarity,
+      and a `/ai/rag-test` inspector page showing the chunks the AI fetched
+      (similarity scores + source) before the streamed answer
+- [x] Intent-aware RAG: an LLM call classifies the user's question by
+      category, then vector search is pre-filtered to that category before
+      ranking. Standing business facts and curated Q&A pairs (with their own
+      question embeddings) are injected into the system prompt alongside the
+      chunks
+- [x] Dashboard AI-assistance editors: add / edit / delete "things the AI
+      should always know about your business" (facts) and Q&A pairs, each with
+      a category, surfaced under the on/off toggle
 - [x] Guided signup onboarding with Telegram connection, live bot verification,
       and an animated customer-order demo
 - [ ] Conversation inbox (live conversations, handoff to human)
