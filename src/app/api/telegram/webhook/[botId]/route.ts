@@ -5,7 +5,10 @@ import {
   toTelegramCommandKeyword,
   type AutomationTriggerType,
 } from "@/lib/automations";
-import { generateTelegramAiReply } from "@/lib/ai/telegram-assistant";
+import {
+  generateTelegramAiReply,
+  customerRequestedHuman,
+} from "@/lib/ai/telegram-assistant";
 import {
   upsertConversationForCustomer,
   recordOwnerReply,
@@ -252,6 +255,7 @@ const sendAskAdminPrompt = async ({
 
 /** Telelgram /start handler — supports deep-link owner-linking payload. */
 const OWNER_LINK_PREFIX = "link_owner_";
+const ADMIN_LINK_PREFIX = "link_admin_";
 const LINK_TOKEN_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
 type ButtonRow = {
@@ -632,6 +636,57 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
         return NextResponse.json({ ok: true });
       }
     }
+
+    // ---- /start with admin-link payload -----------------------------------
+    // When an invited admin taps t.me/<bot>?start=link_admin_<token>, we
+    // upsert a bot_admins row binding their Telegram id (and username) to
+    // this connection so the webhook treats their messages as admin replies.
+    if (payload.startsWith(ADMIN_LINK_PREFIX)) {
+      const adminToken = payload.slice(ADMIN_LINK_PREFIX.length);
+      if (LINK_TOKEN_RE.test(adminToken) && typeof senderId === "number") {
+        // Never let the owner's own account become a bot_admin row.
+        const { data: existingConnection } = await admin
+          .from("telegram_connections")
+          .select("owner_telegram_id")
+          .eq("id", connection.id)
+          .maybeSingle();
+        const ownerTelegramId = (
+          existingConnection as { owner_telegram_id: number | null } | null
+        )?.owner_telegram_id;
+        if (ownerTelegramId === senderId) {
+          await telegramPost(token, "sendMessage", {
+            chat_id: chatId,
+            text: "شما مالک این ربات هستید و لازم نیست به‌عنوان ادمین اضافه شوید.",
+          });
+          return NextResponse.json({ ok: true });
+        }
+
+        // Upsert the admin row. The unique index on
+        // (telegram_connection_id, admin_telegram_id) makes this idempotent —
+        // a second tap just refreshes the username / linked-at timestamp.
+        const { error: adminUpsertError } = await admin
+          .from("bot_admins")
+          .upsert(
+            {
+              telegram_connection_id: connection.id,
+              user_id: connection.user_id,
+              admin_telegram_id: senderId,
+              admin_username: senderUsername,
+              admin_display_name: senderFirstName,
+              admin_linked_at: new Date().toISOString(),
+            },
+            { onConflict: "telegram_connection_id,admin_telegram_id" }
+          );
+        if (!adminUpsertError) {
+          await telegramPost(token, "sendMessage", {
+            chat_id: chatId,
+            text: "✅ شما به‌عنوان ادمین پشتیبانی اضافه شدید. پیام‌های پشتیبانی به شما هم می‌رسد و با دکمه «پاسخ» مستقیماً جواب بدهید.",
+          });
+        }
+        return NextResponse.json({ ok: true });
+      }
+    }
+
     // Plain /start with no payload — send a welcome and exit.
     await telegramPost(token, "sendMessage", {
       chat_id: chatId,
@@ -746,12 +801,41 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
 
   const { data: aiSettings, error: aiSettingsError } = await admin
     .from("ai_assistant_settings")
-    .select("is_enabled")
+    .select("is_enabled, human_handoff_enabled")
     .eq("user_id", connection.user_id)
     .maybeSingle();
 
   // Fail closed: if settings cannot be verified, do not send the message to AI.
   if (aiSettingsError || !aiSettings?.is_enabled) {
+    return NextResponse.json({ ok: true });
+  }
+
+  // Human handoff is opt-in: only when the owner enabled it may the AI route a
+  // customer to the owner/admins. When disabled, no message is escalated —
+  // even one the AI cannot answer.
+  const handoffEnabled =
+    (aiSettings as { human_handoff_enabled?: boolean }).human_handoff_enabled ===
+    true;
+
+  // Explicit request to reach a human. Detected before any LLM call, so we
+  // don't spend a completion on a message that is asking to be escalated. Only
+  // acts when handoff is enabled; otherwise it falls through to a normal reply.
+  if (handoffEnabled && customerRequestedHuman(text)) {
+    const conversation = await upsertConversationForCustomer({
+      connectionId: connection.id,
+      userId: connection.user_id,
+      customerTelegramId: senderId ?? chatId,
+      customerUsername: senderUsername,
+      customerDisplayName: senderFirstName,
+      messageText: text,
+      queuedReason: "customer_request",
+    });
+    await sendAskAdminPrompt({
+      chatId,
+      conversationId: conversation.id,
+      prefaceText: null,
+      token,
+    });
     return NextResponse.json({ ok: true });
   }
 
@@ -762,10 +846,18 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
   });
 
   // aiReply is { text, needsHuman }. When the AI flagged the question as
-  // needing a human, we create a support conversation (so the transcript is
-  // preserved) and offer the customer an inline "ask admin?" button instead
-  // of sending a guess.
+  // needing a human AND handoff is enabled, we create a support conversation
+  // (so the transcript is preserved) and offer the customer an inline
+  // "ask admin?" button instead of sending a guess.
   if (aiReply.needsHuman) {
+    if (!handoffEnabled) {
+      // Handoff is off — never contact an admin. Tell the customer plainly.
+      const sent = await telegramPost(token, "sendMessage", {
+        chat_id: chatId,
+        text: "متأسفم، پاسخ این سوال را نمی‌دانم.",
+      });
+      return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+    }
     const conversation = await upsertConversationForCustomer({
       connectionId: connection.id,
       userId: connection.user_id,

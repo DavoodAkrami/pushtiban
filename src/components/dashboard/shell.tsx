@@ -13,6 +13,7 @@ import {
   ChevronDown,
   ChevronsUpDown,
   GitBranch,
+  Inbox,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -90,6 +91,7 @@ const NAV_ITEMS: NavItem[] = [
       },
     ],
   },
+  { id: "inbox", href: "/dashboard/inbox", label: "صندوق پیام‌ها", icon: Inbox },
 ];
 
 const OPEN_W = 264;

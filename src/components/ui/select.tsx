@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Check, ChevronDown, Search, SearchX } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -69,6 +70,11 @@ export function Select({
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const searchRef = React.useRef<HTMLInputElement>(null);
   const listRef = React.useRef<HTMLUListElement>(null);
+  const popoverRef = React.useRef<HTMLDivElement>(null);
+  // Trigger rect in viewport coordinates — used to position the portaled
+  // popover with fixed positioning so it escapes any overflow-hidden ancestor
+  // (e.g. a modal's scroll container) and is never clipped.
+  const [triggerRect, setTriggerRect] = React.useState<DOMRect | null>(null);
 
   const selected = options.find((o) => o.value === value);
   const filtered = React.useMemo(() => {
@@ -89,7 +95,10 @@ export function Select({
   React.useEffect(() => {
     if (!open) return;
     const onPointerDown = (e: PointerEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) close();
+      const target = e.target as Node;
+      if (rootRef.current?.contains(target)) return;
+      if (popoverRef.current?.contains(target)) return;
+      close();
     };
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
@@ -101,7 +110,9 @@ export function Select({
   }, [open, searchable]);
 
   // Measure available space on open (and while scrolling/resizing) to pick
-  // a side and a height that keep the whole list on screen.
+  // a side and a height that keep the whole list on screen. We also capture
+  // the trigger's viewport rect so the portaled popover can be positioned with
+  // fixed coordinates that escape any overflow-hidden ancestor.
   React.useLayoutEffect(() => {
     if (!open) return;
     const GAP = 8; // mt-2 between trigger and menu
@@ -110,6 +121,7 @@ export function Select({
     const measure = () => {
       const rect = triggerRef.current?.getBoundingClientRect();
       if (!rect) return;
+      setTriggerRect(rect);
       const below = window.innerHeight - rect.bottom - GAP - MARGIN;
       const above = rect.top - GAP - MARGIN;
       const fitsBelow = below >= Math.min(256, above);
@@ -249,111 +261,117 @@ export function Select({
         </button>
 
         <AnimatePresence>
-          {open && (
-            <motion.div
-              initial={
-                reduce
-                  ? { opacity: 0 }
-                  : {
-                      opacity: 0,
-                      y: placement === "bottom" ? -6 : 6,
-                      scale: 0.98,
-                    }
-              }
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={
-                reduce
-                  ? { opacity: 0 }
-                  : {
-                      opacity: 0,
-                      y: placement === "bottom" ? -4 : 4,
-                      scale: 0.98,
-                    }
-              }
-              transition={{ duration: 0.22, ease: luxe }}
-              className={cn(
-                "absolute z-50 w-full overflow-hidden rounded-2xl border border-line bg-card shadow-lift",
-                placement === "bottom"
-                  ? "top-full mt-2"
-                  : "bottom-full mb-2"
-              )}
-            >
-              {searchable && (
-                <div className="relative border-b border-line">
-                  <Search
-                    aria-hidden
-                    className="pointer-events-none absolute inset-y-0 start-4 my-auto size-4 text-muted"
-                  />
-                  <input
-                    ref={searchRef}
-                    value={query}
-                    onChange={(e) => {
-                      setQuery(e.target.value);
-                      setActiveIndex(0);
-                    }}
-                    placeholder={searchPlaceholder}
-                    aria-label={searchPlaceholder}
-                    className="h-11 w-full bg-transparent ps-11 pe-4 text-sm placeholder:text-muted/70 focus:outline-none"
-                  />
-                </div>
-              )}
-              <ul
-                ref={listRef}
-                id={listboxId}
-                role="listbox"
-                aria-label={label ?? placeholder}
-                style={{ maxHeight: maxListHeight }}
-                className="overflow-y-auto p-1.5"
+          {open && triggerRect && typeof document !== "undefined" &&
+            createPortal(
+              <motion.div
+                ref={popoverRef}
+                initial={
+                  reduce
+                    ? { opacity: 0 }
+                    : {
+                        opacity: 0,
+                        y: placement === "bottom" ? -6 : 6,
+                        scale: 0.98,
+                      }
+                }
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={
+                  reduce
+                    ? { opacity: 0 }
+                    : {
+                        opacity: 0,
+                        y: placement === "bottom" ? -4 : 4,
+                        scale: 0.98,
+                      }
+                }
+                transition={{ duration: 0.22, ease: luxe }}
+                style={{
+                  position: "fixed",
+                  left: triggerRect.left,
+                  width: triggerRect.width,
+                  ...(placement === "bottom"
+                    ? { top: triggerRect.bottom + 8 }
+                    : { bottom: window.innerHeight - triggerRect.top + 8 }),
+                }}
+                className="z-[70] overflow-hidden rounded-2xl border border-line bg-card shadow-lift"
               >
-                {filtered.length === 0 && (
-                  <li className="flex flex-col items-center gap-2 px-4 py-8 text-center text-sm text-muted">
-                    <SearchX className="size-5" aria-hidden />
-                    {emptyText}
-                  </li>
+                {searchable && (
+                  <div className="relative border-b border-line">
+                    <Search
+                      aria-hidden
+                      className="pointer-events-none absolute inset-y-0 start-4 my-auto size-4 text-muted"
+                    />
+                    <input
+                      ref={searchRef}
+                      value={query}
+                      onChange={(e) => {
+                        setQuery(e.target.value);
+                        setActiveIndex(0);
+                      }}
+                      placeholder={searchPlaceholder}
+                      aria-label={searchPlaceholder}
+                      className="h-11 w-full bg-transparent ps-11 pe-4 text-sm placeholder:text-muted/70 focus:outline-none"
+                    />
+                  </div>
                 )}
-                {filtered.map((option, i) => {
-                  const isSelected = option.value === value;
-                  return (
-                    <li
-                      key={option.value}
-                      data-index={i}
-                      role="option"
-                      aria-selected={isSelected}
-                      aria-disabled={option.disabled || undefined}
-                      onPointerMove={() => setActiveIndex(i)}
-                      onClick={() => commit(option)}
-                      className={cn(
-                        "flex cursor-pointer items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm transition-colors duration-150",
-                        activeIndex === i && "bg-line/60",
-                        option.disabled &&
-                          "cursor-not-allowed opacity-40"
-                      )}
-                    >
-                      {option.icon && (
-                        <span className="shrink-0 text-muted [&>svg]:size-4">
-                          {option.icon}
-                        </span>
-                      )}
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate">{option.label}</span>
-                        {option.description && (
-                          <span className="block truncate text-xs text-muted">
-                            {option.description}
+                <ul
+                  ref={listRef}
+                  id={listboxId}
+                  role="listbox"
+                  aria-label={label ?? placeholder}
+                  style={{ maxHeight: maxListHeight }}
+                  className="overflow-y-auto p-1.5"
+                >
+                  {filtered.length === 0 && (
+                    <li className="flex flex-col items-center gap-2 px-4 py-8 text-center text-sm text-muted">
+                      <SearchX className="size-5" aria-hidden />
+                      {emptyText}
+                    </li>
+                  )}
+                  {filtered.map((option, i) => {
+                    const isSelected = option.value === value;
+                    return (
+                      <li
+                        key={option.value}
+                        data-index={i}
+                        role="option"
+                        aria-selected={isSelected}
+                        aria-disabled={option.disabled || undefined}
+                        onPointerMove={() => setActiveIndex(i)}
+                        onClick={() => commit(option)}
+                        className={cn(
+                          "flex cursor-pointer items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm transition-colors duration-150",
+                          activeIndex === i && "bg-line/60",
+                          option.disabled &&
+                            "cursor-not-allowed opacity-40"
+                        )}
+                      >
+                        {option.icon && (
+                          <span className="shrink-0 text-muted [&>svg]:size-4">
+                            {option.icon}
                           </span>
                         )}
-                      </span>
-                      {isSelected && (
-                        <Check
-                          className="size-4 shrink-0 text-accent"
-                          aria-hidden
-                        />
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            </motion.div>
-          )}
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate">{option.label}</span>
+                          {option.description && (
+                            <span className="block truncate text-xs text-muted">
+                              {option.description}
+                            </span>
+                          )}
+                        </span>
+                        {isSelected && (
+                          <Check
+                            className="size-4 shrink-0 text-accent"
+                            aria-hidden
+                          />
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </motion.div>,
+              document.body
+            )}
         </AnimatePresence>
       </div>
     </FieldWrapper>

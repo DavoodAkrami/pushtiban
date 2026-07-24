@@ -13,6 +13,15 @@ create table if not exists public.ai_assistant_settings (
 comment on table public.ai_assistant_settings is
   'Account-level AI assistant settings. Disabled by default.';
 
+-- Human handoff: when enabled, the AI may forward questions it cannot answer
+-- (and explicit customer requests to reach a human) to the owner/admins.
+-- Opt-in: disabled by default so no message is escalated without consent.
+alter table public.ai_assistant_settings
+  add column if not exists human_handoff_enabled boolean not null default false;
+
+comment on column public.ai_assistant_settings.human_handoff_enabled is
+  'When true, the AI can escalate to the owner/admins (unanswered questions and explicit customer requests). Disabled by default.';
+
 create or replace function public.set_updated_at()
 returns trigger
 language plpgsql

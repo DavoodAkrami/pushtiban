@@ -14,6 +14,8 @@ type AdminRow = {
   telegram_connection_id: string;
   admin_telegram_id: number;
   admin_display_name: string | null;
+  admin_username: string | null;
+  admin_linked_at: string | null;
   created_at: string;
 };
 
@@ -30,7 +32,7 @@ export const GET = async (request: NextRequest) => {
 
   const { data, error } = await supabase
     .from("bot_admins")
-    .select("id, telegram_connection_id, admin_telegram_id, admin_display_name, created_at")
+    .select("id, telegram_connection_id, admin_telegram_id, admin_display_name, admin_username, admin_linked_at, created_at")
     .eq("user_id", user.id)
     .eq("telegram_connection_id", botId)
     .order("created_at", { ascending: true });

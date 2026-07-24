@@ -18,7 +18,7 @@ const AiAssistancePage = async () => {
   const settingsResult = user
     ? await supabase
         .from("ai_assistant_settings")
-        .select("is_enabled")
+        .select("is_enabled, human_handoff_enabled")
         .eq("user_id", user.id)
         .maybeSingle()
     : { data: null, error: null };
@@ -59,6 +59,7 @@ const AiAssistancePage = async () => {
   return (
     <AiAssistancePanel
       initialEnabled={settingsResult.data?.is_enabled === true}
+      initialHumanHandoff={settingsResult.data?.human_handoff_enabled === true}
       loadError={Boolean(settingsResult.error)}
       providerConfigured={isTelegramAiConfigured()}
       setupRequired={Boolean(

@@ -70,6 +70,55 @@ const requestCompletion = async ({
 export const isTelegramAiConfigured = () =>
   isNvidiaNimConfigured() || isOpenAIConfigured();
 
+// ---------------------------------------------------------------------------
+// Explicit "connect me to a human" detection — zero-token, deterministic.
+// Used by the webhook to route a customer who directly asks for a human to the
+// handoff flow (subject to the owner's handoff setting), without spending an
+// LLM completion.
+// ---------------------------------------------------------------------------
+
+/** Normalize Persian/Arabic variants + zero-width joiners for phrase matching. */
+const normalizePersian = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/‌/g, " ") // ZWNJ → space so "پشتیبانی" ≈ "پشتیبان ی" boundaries relax
+    .replace(/[ي]/g, "ی")
+    .replace(/[ك]/g, "ک")
+    .replace(/\s+/g, " ")
+    .trim();
+
+// Curated request phrases. Each requires a connective or a human-support noun
+// so the brand word "پشتیبان" alone (which the bot itself uses) does not fire.
+const HUMAN_REQUEST_PHRASES = [
+  "با پشتیبان",
+  "به پشتیبان",
+  "پشتیبان انسانی",
+  "پشتیبانی انسانی",
+  "با ادمین",
+  "به ادمین",
+  "با اپراتور",
+  "به اپراتور",
+  "با کارشناس",
+  "به کارشناس",
+  "با انسان",
+  "به انسان",
+  "انسان واقعی",
+  "با مدیر",
+  "به مدیر",
+  "با یکی صحبت",
+  "با یک نفر صحبت",
+].map(normalizePersian);
+
+/**
+ * Returns true when the customer's message is an explicit request to be
+ * connected to a human / admin / operator (as opposed to a normal question).
+ */
+export const customerRequestedHuman = (text: string): boolean => {
+  const normalized = normalizePersian(text);
+  if (!normalized) return false;
+  return HUMAN_REQUEST_PHRASES.some((phrase) => normalized.includes(phrase));
+};
+
 /**
  * Result of generateTelegramAiReply. When `needsHuman` is true the caller
  * (webhook) should offer the customer a "do you want me to ask the admin?"
@@ -92,10 +141,12 @@ export type TelegramAiResult = {
  * When `userId` is omitted, falls back to a plain LLM reply with no retrieval
  * (kept for any legacy callers; the webhook now always passes a userId).
  *
- * Returns `{ text, needsHuman }`. When the RAG retrieval found no context at
- * all (no facts, no Q&A, no chunks) the system prompt instructs the model to
- * prepend the literal marker `[NEEDS_HUMAN]` to its reply; we strip it and set
- * `needsHuman: true` so the webhook can offer the "ask admin?" button.
+ * Returns `{ text, needsHuman }`. Escalation is deterministic: when the RAG
+ * retrieval found no context at all (no facts, no Q&A, no chunks) we do NOT
+ * call the LLM and return `{ text: null, needsHuman: true }` so the webhook can
+ * decide whether to escalate to a human (subject to the owner's handoff
+ * setting). This avoids paying for a completion that would only hallucinate or
+ * narrate its own failure.
  *
  * Errors during retrieval are non-fatal: we fall back to the plain
  * FALLBACK_SYSTEM_PROMPT so the customer still gets a reply.
@@ -121,13 +172,6 @@ export const generateTelegramAiReply = async (
         retrieval.qa.length > 0 ||
         retrieval.chunks.length > 0;
       systemPrompt = buildRagSystemPrompt(retrieval);
-      // When we have no RAG context at all, instruct the model to mark the
-      // reply with [NEEDS_HUMAN] so the webhook can offer the "ask admin?"
-      // button instead of sending a guess.
-      if (!hadRagContext) {
-        systemPrompt +=
-          "\n\nIMPORTANT: No knowledge-base context was retrieved for this question. If you are not confident about the answer, start your reply with the exact marker [NEEDS_HUMAN] (the system will strip it and offer to escalate to a human). Do not invent business facts.";
-      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message.slice(0, 200) : "Unknown error";
@@ -135,10 +179,9 @@ export const generateTelegramAiReply = async (
     }
   }
 
-  // Deterministic escalation: when no RAG context was found at all, do NOT
-  // call the LLM (it would either hallucinate or narrate its own failure).
-  // Short-circuit with a fixed preface + needsHuman so the webhook offers
-  // the "ask admin?" button directly.
+  // Deterministic escalation: when no RAG context was found at all, short-circuit
+  // with needsHuman so the webhook can offer the "ask admin?" button directly
+  // (no LLM call).
   if (userId && !hadRagContext) {
     return { text: null, needsHuman: true };
   }
@@ -168,14 +211,6 @@ export const generateTelegramAiReply = async (
         systemPrompt,
       });
       if (reply) {
-        // Detect the [NEEDS_HUMAN] marker the model may have prepended.
-        if (reply.startsWith("[NEEDS_HUMAN]")) {
-          const cleaned = reply.slice("[NEEDS_HUMAN]".length).trim();
-          return {
-            text: cleaned || null,
-            needsHuman: true,
-          };
-        }
         return { text: reply, needsHuman: false };
       }
     } catch (error) {

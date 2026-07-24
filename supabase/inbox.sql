@@ -44,6 +44,20 @@ create table if not exists public.bot_admins (
   created_at          timestamptz not null default now()
 );
 
+-- Admin magic-link fields (added after initial ship). The owner can now invite
+-- admins via a deep link instead of typing their numeric id; these columns
+-- capture the username + connection timestamp recorded by the webhook when the
+-- invitee taps the link.
+alter table public.bot_admins
+  add column if not exists admin_username text;
+alter table public.bot_admins
+  add column if not exists admin_linked_at timestamptz;
+
+comment on column public.bot_admins.admin_username is
+  'The @username of the linked admin''s Telegram account, captured when they tap the admin invite link (null for admins added by numeric id before this feature).';
+comment on column public.bot_admins.admin_linked_at is
+  'Timestamp the admin tapped the invite link and was linked (null until they tap it).';
+
 comment on table public.bot_admins is
   'Additional humans (besides the owner) authorized to receive and answer support requests via Telegram.';
 

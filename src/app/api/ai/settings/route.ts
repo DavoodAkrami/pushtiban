@@ -40,31 +40,40 @@ export const PUT = async (request: NextRequest) => {
     return jsonError("نشست شما تمام شده؛ دوباره وارد حساب شوید.", 401);
   }
 
-  let body: { enabled?: unknown };
+  let body: { enabled?: unknown; humanHandoff?: unknown };
   try {
     body = (await request.json()) as typeof body;
   } catch {
     return jsonError("وضعیت دستیار قابل خواندن نیست.", 400);
   }
 
-  if (typeof body.enabled !== "boolean") {
+  const hasEnabled = typeof body.enabled === "boolean";
+  const hasHandoff = typeof body.humanHandoff === "boolean";
+  if (!hasEnabled && !hasHandoff) {
     return jsonError("وضعیت دستیار معتبر نیست.", 400);
   }
 
-  if (body.enabled && !isTelegramAiConfigured()) {
+  // Turning the assistant ON requires a configured provider; the handoff
+  // toggle has no such requirement (it only routes to humans).
+  if (hasEnabled && body.enabled === true && !isTelegramAiConfigured()) {
     return jsonError(
       "برای روشن کردن دستیار، ابتدا NVIDIA NIM یا OpenAI را در سرور تنظیم کنید.",
       409
     );
   }
 
+  const update: {
+    user_id: string;
+    is_enabled?: boolean;
+    human_handoff_enabled?: boolean;
+  } = { user_id: user.id };
+  if (hasEnabled) update.is_enabled = body.enabled as boolean;
+  if (hasHandoff) update.human_handoff_enabled = body.humanHandoff as boolean;
+
   const { data, error } = await supabase
     .from("ai_assistant_settings")
-    .upsert(
-      { user_id: user.id, is_enabled: body.enabled },
-      { onConflict: "user_id" }
-    )
-    .select("is_enabled")
+    .upsert(update, { onConflict: "user_id" })
+    .select("is_enabled, human_handoff_enabled")
     .single();
 
   if (error) {
@@ -78,5 +87,8 @@ export const PUT = async (request: NextRequest) => {
     );
   }
 
-  return NextResponse.json({ enabled: data.is_enabled });
+  return NextResponse.json({
+    enabled: data.is_enabled,
+    humanHandoff: data.human_handoff_enabled,
+  });
 };

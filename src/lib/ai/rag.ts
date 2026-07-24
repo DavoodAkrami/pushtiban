@@ -82,7 +82,7 @@ const requestIntent = async (
           { role: "system", content: INTENT_SYSTEM_PROMPT },
           { role: "user", content: question },
         ],
-        max_tokens: 80,
+        max_tokens: 32,
         stream: false,
         temperature: 0,
       },
@@ -143,15 +143,7 @@ export const retrieveRagContext = async ({
 }): Promise<RagRetrieval> => {
   const admin = createAdminClient();
 
-  // 1. Intent extraction (cheap LLM call; falls back to null gracefully).
-  const intent = await extractIntent(question);
-  // Only filter when confidence is meaningful; otherwise search everything.
-  const categoryFilter =
-    intent && intent.confidence >= 0.4 && intent.category !== "general"
-      ? intent.category
-      : null;
-
-  // 2. Standing facts — always-on context, not vector-retrieved.
+  // 1. Standing facts — always-on context, not vector-retrieved.
   const facts: RagFact[] = [];
   {
     const { data: factRows } = await admin
@@ -170,10 +162,12 @@ export const retrieveRagContext = async ({
     }
   }
 
-  // 3 & 4. Embedding-based retrieval (QA + chunks) — skip if no embeddings.
+  // 2. Embedding-based retrieval (QA + chunks) requires the embeddings provider.
+  //    When it isn't configured we skip BOTH the intent LLM call (its category
+  //    filter would be unused) and the vector search — returning facts only.
   if (!isEmbeddingsConfigured()) {
     return {
-      intent,
+      intent: null,
       chunks: [],
       sources: [],
       facts,
@@ -182,7 +176,12 @@ export const retrieveRagContext = async ({
     };
   }
 
-  const queryEmbedding = await embedQuery(question);
+  // 3. Intent classification and the query embedding are independent, so run
+  //    them concurrently. Intent falls back to null gracefully on any error.
+  const [intent, queryEmbedding] = await Promise.all([
+    extractIntent(question),
+    embedQuery(question),
+  ]);
   if (!queryEmbedding) {
     return {
       intent,
@@ -193,6 +192,12 @@ export const retrieveRagContext = async ({
       embeddingsUnavailable: true,
     };
   }
+
+  // Only filter when confidence is meaningful; otherwise search everything.
+  const categoryFilter =
+    intent && intent.confidence >= 0.4 && intent.category !== "general"
+      ? intent.category
+      : null;
 
   // 3. Q&A pair matching (strict — only surface very close matches).
   const qa: RagQa[] = [];
