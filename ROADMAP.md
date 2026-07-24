@@ -70,8 +70,12 @@ How to use:
       interactive Telegram flows
 - [ ] Knowledge-base ingestion: upload docs / paste text / crawl site
 - [ ] AI assistant configuration (name, tone, model selection)
-- [ ] AI assistant on/off control with Telegram fallback after flows and
+- [x] AI assistant on/off control with Telegram fallback after flows and
       prepared messages
+- [x] AI assistance dashboard navigation expands into three children
+      (assistant settings, business facts, prepared Q&A) like the automation
+      section, with the facts and Q&A editors on their own pages under
+      /dashboard/ai-assistance/facts and /dashboard/ai-assistance/qa
 - [ ] Chat playground for testing the assistant against the knowledge base
 - [x] RAG retrieval layer (pgvector in Supabase) with an in-app "search
       knowledge" tool: embeddings via OpenAI/Metis, HNSW cosine similarity,
@@ -85,6 +89,13 @@ How to use:
 - [x] Dashboard AI-assistance editors: add / edit / delete "things the AI
       should always know about your business" (facts) and Q&A pairs, each with
       a category, surfaced under the on/off toggle
+- [x] Support inbox + human handoff: when the AI is unsure it asks the
+      customer "do you want me to ask the admin?"; on yes the message goes
+      to the owner (and any added admins) in Telegram with inline "پاسخ" /
+      "نادیده بگیر" buttons (pending-reply capture via the next plain
+      message) or to the website at /dashboard/inbox; owner links their
+      personal Telegram via a deep-link magic link; admins CRUD in the
+      AI-assistance panel
 - [x] Guided signup onboarding with Telegram connection, live bot verification,
       and an animated customer-order demo
 - [ ] Conversation inbox (live conversations, handoff to human)

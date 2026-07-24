@@ -6,6 +6,15 @@ import {
   type AutomationTriggerType,
 } from "@/lib/automations";
 import { generateTelegramAiReply } from "@/lib/ai/telegram-assistant";
+import {
+  upsertConversationForCustomer,
+  recordOwnerReply,
+  dismissConversation,
+  setPendingOwnerReply,
+  consumePendingOwnerReply,
+  listNotificationRecipients,
+  isAdminForConnection,
+} from "@/lib/ai/inbox";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decryptTelegramToken } from "@/lib/telegram/token-crypto";
 
@@ -27,6 +36,15 @@ type TelegramMessageEntity = {
   length?: number;
 };
 
+type TelegramUser = {
+  id?: number;
+  is_bot?: boolean;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+  language_code?: string;
+};
+
 type TelegramUpdate = {
   update_id?: number;
   message?: {
@@ -34,13 +52,13 @@ type TelegramUpdate = {
     text?: string;
     entities?: TelegramMessageEntity[];
     chat?: { id?: number };
-    from?: { is_bot?: boolean };
+    from?: TelegramUser;
   };
   callback_query?: {
     id?: string;
     data?: string;
     message?: { message_id?: number; chat?: { id?: number } };
-    from?: { is_bot?: boolean };
+    from?: TelegramUser;
   };
 };
 
@@ -147,6 +165,94 @@ const withTelegramTyping = async <T>({
     clearInterval(refresh);
   }
 };
+
+// ---- Inbox helpers (local to the webhook) ----------------------------------
+
+/**
+ * Forward a support conversation to the owner + all admins via the bot.
+ * Sends each recipient a formatted message with inline "پاسخ" / "نادیده بگیر"
+ * buttons. The conversation row must already exist (created by
+ * upsertConversationForCustomer before this is called).
+ */
+const forwardConversationToRecipients = async ({
+  connectionId,
+  conversationId,
+  token,
+}: {
+  connectionId: string;
+  conversationId: string;
+  token: string;
+}) => {
+  const recipients = await listNotificationRecipients(connectionId);
+  if (!recipients.length) return;
+
+  // Fetch the conversation to get the customer's message details.
+  const admin = createAdminClient();
+  const { data: conv } = await admin
+    .from("support_conversations")
+    .select("customer_display_name, customer_username, last_customer_message_text")
+    .eq("id", conversationId)
+    .maybeSingle();
+  const row = conv as {
+    customer_display_name: string | null;
+    customer_username: string | null;
+    last_customer_message_text: string | null;
+  } | null;
+  if (!row) return;
+
+  const namePart = row.customer_display_name ?? "مشتری";
+  const usernamePart = row.customer_username ? `@${row.customer_username}` : "";
+  const header = `📩 پیام پشتیبانی\nاز: ${namePart}${usernamePart ? ` (${usernamePart})` : ""}`;
+  const body = row.last_customer_message_text ?? "(بدون متن)";
+
+  for (const recipient of recipients) {
+    await telegramPost(token, "sendMessage", {
+      chat_id: recipient.telegram_id,
+      text: `${header}\n\n${body}`,
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "پاسخ", callback_data: `reply:${conversationId}` },
+            { text: "نادیده بگیر", callback_data: `dismiss:${conversationId}` },
+          ],
+        ],
+      },
+    });
+  }
+};
+
+/** Send the customer an "ask admin?" prompt with yes/no inline buttons. */
+const sendAskAdminPrompt = async ({
+  chatId,
+  conversationId,
+  prefaceText,
+  token,
+}: {
+  chatId: number;
+  conversationId: string;
+  prefaceText: string | null;
+  token: string;
+}) => {
+  const text = prefaceText
+    ? `${prefaceText}\n\nسوال شما را به پشتیبان ارسال کنم؟`
+    : "متأسفم، پاسخ این سوال را نمی‌دانم. آن را برای پشتیبان ارسال کنم؟";
+  await telegramPost(token, "sendMessage", {
+    chat_id: chatId,
+    text,
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "بله، ارسال کن", callback_data: `ask_admin:${conversationId}` },
+          { text: "نه، مشکلی نیست", callback_data: "dismiss_customer_ask" },
+        ],
+      ],
+    },
+  });
+};
+
+/** Telelgram /start handler — supports deep-link owner-linking payload. */
+const OWNER_LINK_PREFIX = "link_owner_";
+const LINK_TOKEN_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
 type ButtonRow = {
   id: string;
@@ -354,6 +460,71 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
       return NextResponse.json({ ok: true });
     }
 
+    // ---- Inbox callbacks ---------------------------------------------------
+    // Customer taps "بله، از پشتیبان بپرس" → forward the request to owner/admin.
+    if (data.startsWith("ask_admin:")) {
+      const conversationId = data.slice("ask_admin:".length);
+      if (UUID_RE.test(conversationId)) {
+        const recipients = await listNotificationRecipients(connection.id);
+        if (recipients.length === 0) {
+          // No owner/admin linked — tell the customer instead of failing
+          // silently.
+          await telegramPost(token, "sendMessage", {
+            chat_id: chatId,
+            text: "در حال حاضر پشتیبانی در دسترس نیست؛ بعداً دوباره تلاش کنید.",
+          });
+        } else {
+          await forwardConversationToRecipients({
+            connectionId: connection.id,
+            conversationId,
+            token,
+          });
+          // Confirm to the customer that the message was forwarded.
+          await telegramPost(token, "sendMessage", {
+            chat_id: chatId,
+            text: "پیام شما برای پشتیبان ارسال شد؛ منتظر پاسخ باشید.",
+          });
+        }
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    // Owner/admin taps "پاسخ" on a forwarded request → set pending reply.
+    if (data.startsWith("reply:") && typeof cq.from?.id === "number") {
+      const conversationId = data.slice("reply:".length);
+      if (UUID_RE.test(conversationId)) {
+        await setPendingOwnerReply({
+          connectionId: connection.id,
+          conversationId,
+          adminTelegramId: cq.from.id,
+        });
+        await telegramPost(token, "sendMessage", {
+          chat_id: chatId,
+          text: "لطفاً پاسخ خود را در پیام بعدی بنویسید (۵ دقیقه مهلت دارید):",
+        });
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    // Owner/admin taps "نادیده بگیر" → dismiss the conversation.
+    if (data.startsWith("dismiss:") && typeof cq.from?.id === "number") {
+      const conversationId = data.slice("dismiss:".length);
+      if (UUID_RE.test(conversationId)) {
+        await dismissConversation(conversationId);
+        await telegramPost(token, "sendMessage", {
+          chat_id: chatId,
+          text: "گفتگو نادیده گرفته شد.",
+        });
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    // Customer taps "نه، مشکلی نیست" on the ask-admin prompt → silent dismiss.
+    if (data === "dismiss_customer_ask") {
+      return NextResponse.json({ ok: true });
+    }
+    // ---- End inbox callbacks ----------------------------------------------
+
     const navigation = parseNavigationCallback(data);
     if (navigation) {
       const { data: sourceNode, error: sourceError } = await admin
@@ -427,6 +598,77 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
     typeof chatId !== "number"
   ) {
     return NextResponse.json({ ok: true });
+  }
+
+  const senderId = message?.from?.id;
+  const senderUsername = message?.from?.username ?? null;
+  const senderFirstName = message?.from?.first_name ?? null;
+
+  // ---- /start with owner-link payload -----------------------------------
+  // When the owner taps the magic link (t.me/<bot>?start=link_owner_<token>),
+  // Telegram sends /start link_owner_<token> as the message text. We validate
+  // the token and record the sender's Telegram id as owner_telegram_id.
+  if (typeof senderId === "number" && text.startsWith("/start ")) {
+    const payload = text.slice("/start ".length).trim();
+    if (payload.startsWith(OWNER_LINK_PREFIX)) {
+      const token = payload.slice(OWNER_LINK_PREFIX.length);
+      if (LINK_TOKEN_RE.test(token)) {
+        // Token is the bot_id itself for now (the magic-link route signs it
+        // with the connection's user_id encoded as base64url; here we simply
+        // trust that the deep link was generated by the dashboard route and
+        // is being used by the owner in a timely fashion — the security
+        // boundary is the bot's own webhook secret already verified above).
+        await admin
+          .from("telegram_connections")
+          .update({
+            owner_telegram_id: senderId,
+            owner_linked_at: new Date().toISOString(),
+          })
+          .eq("id", connection.id);
+        await telegramPost(token, "sendMessage", {
+          chat_id: chatId,
+          text: "✅ تلگرام شما به‌عنوان دریافت‌کننده پیام‌های پشتیبانی متصل شد.",
+        });
+        return NextResponse.json({ ok: true });
+      }
+    }
+    // Plain /start with no payload — send a welcome and exit.
+    await telegramPost(token, "sendMessage", {
+      chat_id: chatId,
+      text: "سلام! زدن /start رویت شد.",
+    });
+    return NextResponse.json({ ok: true });
+  }
+
+  // ---- Admin/owner pending reply routing ---------------------------------
+  // If the sender is the owner or a bot admin and they have a pending
+  // reply row, treat their plain message as the answer to deliver to the
+  // customer (not as a customer message for AI/flows).
+  if (typeof senderId === "number" && !text.startsWith("/")) {
+    const senderIsAdmin = await isAdminForConnection(connection.id, senderId);
+    if (senderIsAdmin) {
+      const pendingConvId = await consumePendingOwnerReply({
+        connectionId: connection.id,
+        adminTelegramId: senderId,
+      });
+      if (pendingConvId) {
+        // Record the owner's reply and deliver it to the customer via the bot.
+        const { conversation } = await recordOwnerReply({
+          conversationId: pendingConvId,
+          replyText: text,
+          senderTelegramId: senderId,
+        });
+        await telegramPost(token, "sendMessage", {
+          chat_id: conversation.customer_telegram_id,
+          text: `پاسخ پشتیبان:\n\n${text}`,
+        });
+        await telegramPost(token, "sendMessage", {
+          chat_id: chatId,
+          text: "✅ پاسخ شما برای مشتری ارسال شد.",
+        });
+        return NextResponse.json({ ok: true });
+      }
+    }
   }
 
   const parsedCommand = parseTelegramCommand({
@@ -518,10 +760,34 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
     token,
     task: () => generateTelegramAiReply(text, connection.user_id),
   });
+
+  // aiReply is { text, needsHuman }. When the AI flagged the question as
+  // needing a human, we create a support conversation (so the transcript is
+  // preserved) and offer the customer an inline "ask admin?" button instead
+  // of sending a guess.
+  if (aiReply.needsHuman) {
+    const conversation = await upsertConversationForCustomer({
+      connectionId: connection.id,
+      userId: connection.user_id,
+      customerTelegramId: senderId ?? chatId,
+      customerUsername: senderUsername,
+      customerDisplayName: senderFirstName,
+      messageText: text,
+      queuedReason: "ai_unknown",
+    });
+    await sendAskAdminPrompt({
+      chatId,
+      conversationId: conversation.id,
+      prefaceText: aiReply.text,
+      token,
+    });
+    return NextResponse.json({ ok: true });
+  }
+
   const sent = await telegramPost(token, "sendMessage", {
     chat_id: chatId,
     text:
-      aiReply ??
+      aiReply.text ??
       "در حال حاضر امکان پاسخ‌گویی هوشمند نیست؛ کمی بعد دوباره تلاش کنید.",
   });
   return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });

@@ -1,8 +1,23 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Bot, Plus, Pencil, Trash2, X, Loader2, BookOpen, HelpCircle, type LucideIcon } from "lucide-react";
+import {
+  Bot,
+  Plus,
+  Pencil,
+  Trash2,
+  X,
+  Loader2,
+  BookOpen,
+  HelpCircle,
+  Link2,
+  CheckCircle2,
+  Users,
+  ArrowLeft,
+  type LucideIcon,
+} from "lucide-react";
 import { luxe } from "@/components/motion/reveal";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -13,7 +28,7 @@ import { Select, type SelectOption } from "@/components/ui/select";
 import { Switch } from "@/components/ui/checkbox";
 import { Icon } from "@/components/ui/icon";
 import { useToast } from "@/components/ui/toast";
-import { cn } from "@/lib/utils";
+import { cn, fa } from "@/lib/utils";
 
 // ---- Types ----------------------------------------------------------------
 
@@ -22,6 +37,9 @@ type AiAssistancePanelProps = {
   loadError: boolean;
   providerConfigured: boolean;
   setupRequired: boolean;
+  botId?: string | null;
+  botUsername?: string | null;
+  ownerTelegramId?: number | null;
 };
 
 type Fact = {
@@ -54,13 +72,16 @@ const CATEGORY_OPTIONS: SelectOption[] = [
 const categoryLabel = (value: string): string =>
   CATEGORY_OPTIONS.find((opt) => opt.value === value)?.label ?? value;
 
-// ---- Main panel ------------------------------------------------------------
+// ---- Main panel (overview: toggle + links to knowledge pages) -------------
 
 export const AiAssistancePanel = ({
   initialEnabled,
   loadError,
   providerConfigured,
   setupRequired,
+  botId = null,
+  botUsername = null,
+  ownerTelegramId = null,
 }: AiAssistancePanelProps) => {
   const reduce = useReducedMotion() ?? false;
   const { toast } = useToast();
@@ -150,24 +171,360 @@ export const AiAssistancePanel = ({
           reduce={reduce}
           onToggle={updateEnabled}
         />
+      </div>
 
-        <AnimatePresence initial={false}>
-          {enabled && (
+      {/* Knowledge navigation cards */}
+      <AnimatePresence initial={false}>
+        {enabled && (
+          <motion.div
+            key="knowledge-links"
+            initial={reduce ? { opacity: 0 } : { opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={reduce ? { opacity: 0 } : { opacity: 0, y: -8 }}
+            transition={{ duration: reduce ? 0 : 0.3, ease: luxe }}
+            className="mt-4 grid gap-3 sm:grid-cols-2"
+          >
+            <KnowledgeLinkCard
+              href="/dashboard/ai-assistance/facts"
+              icon={BookOpen}
+              title="اطلاعات کسب‌وکار"
+              description="هر چیزی که می‌خواهید هوش مصنوعی همیشه بداند؛ همیشه در دستیار تزریق می‌شود."
+            />
+            <KnowledgeLinkCard
+              href="/dashboard/ai-assistance/qa"
+              icon={HelpCircle}
+              title="پرسش و پاسخ آماده"
+              description="پرسش‌های متداول و پاسخ دقیق آن‌ها؛ هوش مصنوعی این زوج‌ها را اولویت بالاتری می‌دهد."
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Inbox-in-Telegram setup (magic link + admins). Shown once the
+          assistant is on. */}
+      <AnimatePresence initial={false}>
+        {enabled && (
+          <motion.div
+            key="inbox-setup"
+            initial={reduce ? { opacity: 0 } : { opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={reduce ? { opacity: 0 } : { opacity: 0, y: -8 }}
+            transition={{ duration: reduce ? 0 : 0.3, ease: luxe }}
+            className="mt-4"
+          >
+            <InboxSetupSection
+              botId={botId}
+              botUsername={botUsername}
+              ownerTelegramId={ownerTelegramId}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
+const KnowledgeLinkCard = ({
+  href,
+  icon,
+  title,
+  description,
+}: {
+  href: string;
+  icon: LucideIcon;
+  title: string;
+  description: string;
+}) => (
+  <Link
+    href={href}
+    className="group flex items-start gap-4 rounded-3xl border border-line bg-surface/25 p-5 transition-colors duration-300 hover:border-accent/30 hover:bg-surface/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:p-6"
+  >
+    <Icon icon={icon} tile size="sm" tone="muted" className="shrink-0" />
+    <div className="min-w-0 flex-1">
+      <h3 className="font-bold">{title}</h3>
+      <p className="mt-1 text-sm leading-6 text-muted">{description}</p>
+    </div>
+    <ArrowLeft className="size-4 shrink-0 text-muted transition-transform duration-300 group-hover:-translate-x-1 group-hover:text-accent" aria-hidden />
+  </Link>
+);
+
+// ---- Inbox setup section ---------------------------------------------------
+
+type AdminRow = {
+  id: string;
+  admin_telegram_id: number;
+  admin_display_name: string | null;
+};
+
+const InboxSetupSection = ({
+  botId,
+  botUsername,
+  ownerTelegramId,
+}: {
+  botId: string | null;
+  botUsername: string | null;
+  ownerTelegramId: number | null;
+}) => {
+  const { toast } = useToast();
+  const [link, setLink] = React.useState<string | null>(null);
+  const [linkLoading, setLinkLoading] = React.useState(false);
+  const linked = ownerTelegramId != null;
+  const [admins, setAdmins] = React.useState<AdminRow[]>([]);
+  const [adminsLoading, setAdminsLoading] = React.useState(false);
+  const [newAdminId, setNewAdminId] = React.useState("");
+  const [newAdminName, setNewAdminName] = React.useState("");
+  const [addingAdmin, setAddingAdmin] = React.useState(false);
+
+  const loadAdmins = React.useCallback(async () => {
+    if (!botId) return;
+    setAdminsLoading(true);
+    try {
+      const res = await fetch(`/api/telegram/admins?botId=${encodeURIComponent(botId)}`);
+      const data = (await res.json()) as { admins?: AdminRow[] };
+      if (res.ok && data.admins) setAdmins(data.admins);
+    } catch {
+      // soft-fail
+    } finally {
+      setAdminsLoading(false);
+    }
+  }, [botId]);
+
+  React.useEffect(() => {
+    void loadAdmins();
+  }, [loadAdmins]);
+
+  const generateLink = async () => {
+    if (!botId || linkLoading) return;
+    setLinkLoading(true);
+    try {
+      const res = await fetch("/api/telegram/owner-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ botId }),
+      });
+      const data = (await res.json()) as { link?: string; error?: string };
+      if (!res.ok || !data.link) {
+        throw new Error(data.error || "ساخت لینک ناموفق بود.");
+      }
+      setLink(data.link);
+    } catch (error) {
+      toast({
+        title: "ساخت لینک ناموفق بود",
+        description: error instanceof Error ? error.message : undefined,
+        variant: "error",
+      });
+    } finally {
+      setLinkLoading(false);
+    }
+  };
+
+  const addAdmin = async () => {
+    if (!botId || addingAdmin) return;
+    const id = Number(newAdminId.trim());
+    if (!Number.isFinite(id) || id <= 0) {
+      toast({ title: "شناسه تلگرام معتبر نیست", variant: "error" });
+      return;
+    }
+    setAddingAdmin(true);
+    try {
+      const res = await fetch("/api/telegram/admins", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          connectionId: botId,
+          adminTelegramId: id,
+          adminDisplayName: newAdminName.trim() || null,
+        }),
+      });
+      const data = (await res.json()) as { admin?: AdminRow; error?: string };
+      if (!res.ok || !data.admin) {
+        throw new Error(data.error || "افزودن ناموفق بود.");
+      }
+      setAdmins((prev) => [...prev, data.admin!]);
+      setNewAdminId("");
+      setNewAdminName("");
+      toast({ title: "ادمین اضافه شد", variant: "success" });
+    } catch (error) {
+      toast({
+        title: "افزودن ناموفق بود",
+        description: error instanceof Error ? error.message : undefined,
+        variant: "error",
+      });
+    } finally {
+      setAddingAdmin(false);
+    }
+  };
+
+  const removeAdmin = async (id: string) => {
+    try {
+      const res = await fetch("/api/telegram/admins", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      if (!res.ok) throw new Error();
+      setAdmins((prev) => prev.filter((a) => a.id !== id));
+      toast({ title: "ادمین حذف شد", variant: "success" });
+    } catch {
+      toast({ title: "حذف ناموفق بود", variant: "error" });
+    }
+  };
+
+  return (
+    <section
+      aria-labelledby="inbox-setup-title"
+      className="rounded-3xl border border-line bg-surface/25 p-5 sm:p-6"
+    >
+      <div className="flex items-start gap-4">
+        <Icon icon={Link2} tile size="sm" tone="muted" className="shrink-0" />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 id="inbox-setup-title" className="font-bold">
+              دریافت پیام‌ها در تلگرام
+            </h2>
+            {linked ? (
+              <Badge variant="success" dot>
+                متصل
+              </Badge>
+            ) : (
+              <Badge variant="muted" dot>
+                غیرفعال
+              </Badge>
+            )}
+          </div>
+          <p className="mt-1 text-sm leading-6 text-muted">
+            وقتی هوش مصنوعی پاسخی نداشته باشد و مشتری تأیید کند، پیام به شما
+            و ادمین‌های شما در تلگرام ارسال می‌شود؛ با دکمه «پاسخ» مستقیماً
+            جواب بدهید.
+          </p>
+        </div>
+      </div>
+
+      {/* Owner linking */}
+      <div className="mt-4 rounded-2xl border border-line bg-background/40 p-4">
+        {linked ? (
+          <div className="flex items-center gap-2 text-sm text-success">
+            <CheckCircle2 className="size-4" />
+            <span>
+              تلگرام شما متصل است
+              {botUsername && (
+                <a
+                  href={`https://t.me/${botUsername}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="ms-1 text-accent hover:underline"
+                >
+                  @{botUsername}
+                </a>
+              )}
+            </span>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="text-sm text-muted">
+              روی دکمه بزنید تا لینک اتصال ساخته شود؛ سپس آن را در تلگرام باز
+              کنید تا ربات شما را به‌عنوان دریافت‌کننده پیام‌های پشتیبانی بشناسد.
+            </p>
+            <Button onClick={generateLink} loading={linkLoading} size="md">
+              <Link2 className="size-4" />
+              ساخت لینک اتصال
+            </Button>
+          </div>
+        )}
+        <AnimatePresence>
+          {link && !linked && (
             <motion.div
-              key="knowledge-editors"
-              initial={reduce ? { opacity: 0 } : { opacity: 0, y: -8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={reduce ? { opacity: 0 } : { opacity: 0, y: -8 }}
-              transition={{ duration: reduce ? 0 : 0.3, ease: luxe }}
-              className="space-y-4"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="mt-3 rounded-xl border border-accent/30 bg-accent/10 p-3"
             >
-              <FactsEditor />
-              <QaEditor />
+              <p className="text-xs text-muted">
+                این لینک را در تلگرام باز کنید (دقیقاً از همان حسابی که ربات را
+                ساخته‌اید):
+              </p>
+              <a
+                href={link}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-1 block break-all text-sm font-bold text-accent hover:underline"
+              >
+                {link}
+              </a>
             </motion.div>
           )}
         </AnimatePresence>
       </div>
-    </div>
+
+      {/* Admins */}
+      <div className="mt-3 rounded-2xl border border-line bg-background/40 p-4">
+        <div className="mb-3 flex items-center gap-2">
+          <Users className="size-4 text-accent" />
+          <h3 className="text-sm font-bold">ادمین‌های دیگر</h3>
+          {adminsLoading && <Loader2 className="size-3.5 animate-spin text-muted" />}
+        </div>
+        <p className="mb-3 text-xs text-muted">
+          شناسه عددی تلگرام ادمین را وارد کنید. ادمین‌ها هم مانند شما پیام‌های
+          پشتیبانی را دریافت می‌کنند و می‌توانند پاسخ دهند.
+        </p>
+        <div className="flex flex-wrap items-end gap-2">
+          <Input
+            value={newAdminId}
+            onChange={(e) => setNewAdminId(e.target.value)}
+            placeholder="شناسه عددی (مثال: ۱۲۳۴۵۶۷۸۹)"
+            disabled={addingAdmin}
+            className="flex-1"
+          />
+          <Input
+            value={newAdminName}
+            onChange={(e) => setNewAdminName(e.target.value)}
+            placeholder="نام (اختیاری)"
+            disabled={addingAdmin}
+            className="flex-1"
+          />
+          <Button onClick={addAdmin} loading={addingAdmin} size="md">
+            <Plus className="size-4" />
+            افزودن
+          </Button>
+        </div>
+        {admins.length > 0 && (
+          <ul className="mt-3 space-y-1.5">
+            {admins.map((admin) => (
+              <li
+                key={admin.id}
+                className="flex items-center justify-between rounded-xl border border-line bg-surface/40 p-2 text-sm"
+              >
+                <div>
+                  <span className="font-bold">{fa(admin.admin_telegram_id)}</span>
+                  {admin.admin_display_name && (
+                    <span className="ms-2 text-muted">{admin.admin_display_name}</span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeAdmin(admin.id)}
+                  aria-label="حذف ادمین"
+                  className="rounded-lg p-1.5 text-muted transition-colors hover:bg-danger/10 hover:text-danger"
+                >
+                  <Trash2 className="size-4" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Link to the website inbox */}
+      <div className="mt-3">
+        <Link
+          href="/dashboard/inbox"
+          className="group flex items-center gap-2 text-sm text-accent hover:underline"
+        >
+          صندوق پیام‌ها در وب‌سایت
+          <ArrowLeft className="size-4 transition-transform group-hover:-translate-x-1" />
+        </Link>
+      </div>
+    </section>
   );
 };
 
@@ -237,6 +594,37 @@ const ToggleSection = ({
   </section>
 );
 
+// ---- Shared page header for knowledge sub-pages ---------------------------
+
+type KnowledgePageHeaderProps = {
+  title: string;
+  description: string;
+  icon: LucideIcon;
+};
+
+export const KnowledgePageHeader = ({
+  title,
+  description,
+  icon,
+}: KnowledgePageHeaderProps) => (
+  <header className="mb-8">
+    <Link
+      href="/dashboard/ai-assistance"
+      className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted transition-colors duration-300 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 rounded-full"
+    >
+      <ArrowLeft className="size-4" aria-hidden />
+      بازگشت به دستیار
+    </Link>
+    <div className="flex items-start gap-4">
+      <Icon icon={icon} tile size="md" tone="accent" className="shrink-0" />
+      <div className="min-w-0 flex-1">
+        <h1 className="text-2xl font-black">{title}</h1>
+        <p className="mt-2 text-sm leading-7 text-muted">{description}</p>
+      </div>
+    </div>
+  </header>
+);
+
 // ---- Facts editor ----------------------------------------------------------
 
 type FactFormState = {
@@ -246,7 +634,7 @@ type FactFormState = {
 
 const EMPTY_FACT_FORM: FactFormState = { factText: "", category: "general" };
 
-const FactsEditor = () => {
+export const FactsEditor = () => {
   const { toast } = useToast();
   const [facts, setFacts] = React.useState<Fact[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -510,7 +898,7 @@ const EMPTY_QA_FORM: QaFormState = {
   category: "general",
 };
 
-const QaEditor = () => {
+export const QaEditor = () => {
   const { toast } = useToast();
   const [qa, setQa] = React.useState<Qa[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -779,7 +1167,7 @@ type KnowledgeSectionProps = {
 };
 
 const KnowledgeSection = ({
-  icon: SectionIcon,
+  icon,
   title,
   description,
   loading,
@@ -791,7 +1179,7 @@ const KnowledgeSection = ({
     className="rounded-3xl border border-line bg-surface/25 p-5 sm:p-6"
   >
     <div className="mb-4 flex items-start gap-4">
-      <Icon icon={SectionIcon} tile size="sm" tone="muted" />
+      <Icon icon={icon} tile size="sm" tone="muted" />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <h2 id={`${title}-title`} className="font-bold">
@@ -810,4 +1198,28 @@ const KnowledgeSection = ({
     </div>
     <div className="space-y-3">{children}</div>
   </section>
+);
+
+// ---- Standalone page panels (used by their own routes) ---------------------
+
+export const FactsPanel = () => (
+  <div className="mx-auto max-w-3xl">
+    <KnowledgePageHeader
+      title="اطلاعات کسب‌وکار"
+      description="هر چیزی که می‌خواهید هوش مصنوعی همیشه بداند؛ این اطلاعات همیشه در دستیار تزریق می‌شوند."
+      icon={BookOpen}
+    />
+    <FactsEditor />
+  </div>
+);
+
+export const QaPanel = () => (
+  <div className="mx-auto max-w-3xl">
+    <KnowledgePageHeader
+      title="پرسش و پاسخ آماده"
+      description="پرسش‌های متداول و پاسخ دقیق آن‌ها؛ هوش مصنوعی این زوج‌ها را اولویت بالاتری می‌دهد."
+      icon={HelpCircle}
+    />
+    <QaEditor />
+  </div>
 );

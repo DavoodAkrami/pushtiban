@@ -27,6 +27,10 @@ import {
   Sun,
   Workflow,
   X,
+  BookOpen,
+  HelpCircle,
+  ToggleRight,
+  type LucideIcon,
 } from "lucide-react";
 import { LogoutConfirmationModal } from "@/components/dashboard/logout-confirmation-modal";
 import { SettingsModal } from "@/components/dashboard/settings-modal";
@@ -39,9 +43,20 @@ import { createClient } from "@/lib/supabase/client";
 import type { SessionProfile } from "@/store/slices/session-slice";
 import { useSessionProfile } from "@/store/use-session";
 
-const NAV_ITEMS = [
-  { href: "/dashboard/overview", label: "نمای کلی", icon: LayoutDashboard },
+type NavChild = {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+};
+
+type NavItem =
+  | { id: string; href: string; label: string; icon: LucideIcon }
+  | { id: string; label: string; icon: LucideIcon; children: NavChild[] };
+
+const NAV_ITEMS: NavItem[] = [
+  { id: "overview", href: "/dashboard/overview", label: "نمای کلی", icon: LayoutDashboard },
   {
+    id: "automation",
     label: "اتوماسیون",
     icon: Workflow,
     children: [
@@ -54,9 +69,26 @@ const NAV_ITEMS = [
     ],
   },
   {
-    href: "/dashboard/ai-assistance",
+    id: "ai-assistance",
     label: "دستیار هوش مصنوعی",
     icon: Sparkles,
+    children: [
+      {
+        href: "/dashboard/ai-assistance",
+        label: "تنظیمات دستیار",
+        icon: ToggleRight,
+      },
+      {
+        href: "/dashboard/ai-assistance/facts",
+        label: "اطلاعات کسب‌وکار",
+        icon: BookOpen,
+      },
+      {
+        href: "/dashboard/ai-assistance/qa",
+        label: "پرسش و پاسخ",
+        icon: HelpCircle,
+      },
+    ],
   },
 ];
 
@@ -183,18 +215,159 @@ const DashboardNavigation = ({
   pathname: string;
 }) => {
   const reduce = useReducedMotion();
-  const automationActive =
-    pathname === "/dashboard/flow" ||
-    pathname.startsWith("/dashboard/flow/") ||
-    pathname === "/dashboard/automation" ||
-    pathname.startsWith("/dashboard/automation/");
-  const [automationOpen, setAutomationOpen] = React.useState(
-    automationActive ? "automation" : ""
+
+  // Derive which accordion sections should be open from the pathname, so a
+  // deep link (or a back/forward navigation) keeps the matching section open.
+  const activeSectionIds = React.useMemo(() => {
+    const ids: string[] = [];
+    for (const item of NAV_ITEMS) {
+      if (!("children" in item)) continue;
+      const matches = (href: string) =>
+        pathname === href || pathname.startsWith(`${href}/`);
+      if (item.children.some((child) => matches(child.href))) {
+        ids.push(item.id);
+      }
+    }
+    return new Set(ids);
+  }, [pathname]);
+
+  // Local open state — initialised from active sections, kept in sync when the
+  // pathname changes. Each parent accordion item is its own Radix item keyed by
+  // its id, surfaced through a single Radix "single collapsible" root.
+  const [openSections, setOpenSections] = React.useState<Set<string>>(() =>
+    new Set(activeSectionIds)
   );
 
   React.useEffect(() => {
-    if (automationActive) setAutomationOpen("automation");
-  }, [automationActive]);
+    setOpenSections((prev) => {
+      const next = new Set(prev);
+      activeSectionIds.forEach((id) => next.add(id));
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSectionIds]);
+
+  // Render a parent accordion item (has children).
+  const renderAccordion = (item: Extract<NavItem, { children: NavChild[] }>) => {
+    const sectionActive = activeSectionIds.has(item.id);
+    const open = openSections.has(item.id);
+
+    if (!expanded) {
+      const shortcutButton = (
+        <button
+          type="button"
+          aria-label={`باز کردن زیرمنوی ${item.label}`}
+          onClick={() => {
+            setOpenSections((prev) => {
+              const next = new Set(prev);
+              next.add(item.id);
+              return next;
+            });
+            onNavigate?.();
+            onRequestExpand?.();
+          }}
+          className={cn(
+            "flex h-11 w-full items-center justify-center rounded-2xl px-0 text-sm transition-colors duration-300 hover:bg-card/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+            sectionActive
+              ? "bg-card/70 font-medium text-foreground"
+              : "text-muted"
+          )}
+        >
+          <item.icon className="size-[1.15rem] shrink-0" aria-hidden />
+        </button>
+      );
+
+      return (
+        <li key={item.id}>
+          <Tooltip
+            content={`باز کردن ${item.label}`}
+            side="end"
+            wrapperClassName="w-full"
+          >
+            {shortcutButton}
+          </Tooltip>
+        </li>
+      );
+    }
+
+    return (
+      <li key={item.id}>
+        <AccordionPrimitive.Root
+          type="multiple"
+          value={Array.from(openSections)}
+          onValueChange={(next) => setOpenSections(new Set(next))}
+        >
+          <AccordionPrimitive.Item value={item.id}>
+            <AccordionPrimitive.Header>
+              <AccordionPrimitive.Trigger
+                className={cn(
+                  "flex h-11 w-full items-center gap-3 rounded-2xl px-3 text-sm transition-colors duration-300 hover:bg-card/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+                  sectionActive
+                    ? "bg-card/70 font-medium text-foreground"
+                    : "text-muted"
+                )}
+              >
+                <item.icon className="size-[1.15rem] shrink-0" aria-hidden />
+                <span className="truncate">{item.label}</span>
+                <motion.span
+                  animate={{ rotate: open ? 180 : 0 }}
+                  transition={{ duration: reduce ? 0 : 0.2, ease: luxe }}
+                  className="ms-auto shrink-0"
+                >
+                  <ChevronDown className="size-4" aria-hidden />
+                </motion.span>
+              </AccordionPrimitive.Trigger>
+            </AccordionPrimitive.Header>
+            <AccordionPrimitive.Content asChild>
+              <motion.div
+                initial={
+                  reduce ? { opacity: 1 } : { height: 0, opacity: 0 }
+                }
+                animate={{ height: "auto", opacity: 1 }}
+                exit={reduce ? { opacity: 0 } : { height: 0, opacity: 0 }}
+                transition={{ duration: reduce ? 0 : 0.24, ease: luxe }}
+                className="overflow-hidden"
+              >
+                <ul className="space-y-1 pb-1 pt-1">
+                  {item.children.map((child) => {
+                    // "/dashboard/ai-assistance" is a child as well as the
+                    // parent id, so we match it exactly (no trailing-slash
+                    // fallback) to avoid double-highlighting deeper children.
+                    const childActive =
+                      pathname === child.href ||
+                      (child.href !== "/dashboard/ai-assistance" &&
+                        pathname.startsWith(`${child.href}/`));
+
+                    return (
+                      <li key={child.href}>
+                        <Link
+                          href={child.href}
+                          onClick={() => onNavigate?.()}
+                          aria-current={childActive ? "page" : undefined}
+                          className={cn(
+                            "flex h-10 items-center gap-3 rounded-2xl pe-3 ps-10 text-sm transition-colors duration-300 hover:bg-card/55 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+                            childActive
+                              ? "font-medium text-accent"
+                              : "text-muted"
+                          )}
+                        >
+                          <child.icon
+                            className="size-4 shrink-0"
+                            aria-hidden
+                          />
+                          <span className="truncate">{child.label}</span>
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </motion.div>
+            </AccordionPrimitive.Content>
+          </AccordionPrimitive.Item>
+        </AccordionPrimitive.Root>
+      </li>
+    );
+  };
 
   return (
     <nav
@@ -206,123 +379,8 @@ const DashboardNavigation = ({
     >
       <ul className="space-y-1">
         {NAV_ITEMS.map((item) => {
-          if (item.children) {
-            if (!expanded) {
-              const automationShortcut = (
-                <button
-                  type="button"
-                  aria-label="باز کردن زیرمنوی اتوماسیون"
-                  onClick={() => {
-                    setAutomationOpen("automation");
-                    onRequestExpand?.();
-                  }}
-                  className={cn(
-                    "flex h-11 w-full items-center justify-center rounded-2xl px-0 text-sm transition-colors duration-300 hover:bg-card/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
-                    automationActive
-                      ? "bg-card/70 font-medium text-foreground"
-                      : "text-muted"
-                  )}
-                >
-                  <item.icon
-                    className="size-[1.15rem] shrink-0"
-                    aria-hidden
-                  />
-                </button>
-              );
-
-              return (
-                <li key={item.label}>
-                  <Tooltip
-                    content="باز کردن اتوماسیون"
-                    side="end"
-                    wrapperClassName="w-full"
-                  >
-                    {automationShortcut}
-                  </Tooltip>
-                </li>
-              );
-            }
-
-            const open = automationOpen === "automation";
-
-            return (
-              <li key={item.label}>
-                <AccordionPrimitive.Root
-                  type="single"
-                  collapsible
-                  value={automationOpen}
-                  onValueChange={setAutomationOpen}
-                >
-                  <AccordionPrimitive.Item value="automation">
-                    <AccordionPrimitive.Header>
-                      <AccordionPrimitive.Trigger
-                        className={cn(
-                          "flex h-11 w-full items-center gap-3 rounded-2xl px-3 text-sm transition-colors duration-300 hover:bg-card/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
-                          automationActive
-                            ? "bg-card/70 font-medium text-foreground"
-                            : "text-muted"
-                        )}
-                      >
-                        <item.icon
-                          className="size-[1.15rem] shrink-0"
-                          aria-hidden
-                        />
-                        <span className="truncate">{item.label}</span>
-                        <motion.span
-                          animate={{ rotate: open ? 180 : 0 }}
-                          transition={{ duration: reduce ? 0 : 0.2, ease: luxe }}
-                          className="ms-auto shrink-0"
-                        >
-                          <ChevronDown className="size-4" aria-hidden />
-                        </motion.span>
-                      </AccordionPrimitive.Trigger>
-                    </AccordionPrimitive.Header>
-                    <AccordionPrimitive.Content asChild>
-                      <motion.div
-                        initial={
-                          reduce ? { opacity: 1 } : { height: 0, opacity: 0 }
-                        }
-                        animate={{ height: "auto", opacity: 1 }}
-                        transition={{ duration: reduce ? 0 : 0.24, ease: luxe }}
-                        className="overflow-hidden"
-                      >
-                        <ul className="space-y-1 pb-1 pt-1">
-                          {item.children.map((child) => {
-                            const childActive =
-                              pathname === child.href ||
-                              pathname.startsWith(`${child.href}/`);
-
-                            return (
-                              <li key={child.href}>
-                                <Link
-                                  href={child.href}
-                                  onClick={() => onNavigate?.()}
-                                  aria-current={childActive ? "page" : undefined}
-                                  className={cn(
-                                    "flex h-10 items-center gap-3 rounded-2xl pe-3 ps-10 text-sm transition-colors duration-300 hover:bg-card/55 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
-                                    childActive
-                                      ? "font-medium text-accent"
-                                      : "text-muted"
-                                  )}
-                                >
-                                  <child.icon
-                                    className="size-4 shrink-0"
-                                    aria-hidden
-                                  />
-                                  <span className="truncate">
-                                    {child.label}
-                                  </span>
-                                </Link>
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      </motion.div>
-                    </AccordionPrimitive.Content>
-                  </AccordionPrimitive.Item>
-                </AccordionPrimitive.Root>
-              </li>
-            );
+          if ("children" in item) {
+            return renderAccordion(item);
           }
 
           const active =
@@ -346,7 +404,7 @@ const DashboardNavigation = ({
           );
 
           return (
-            <li key={item.href}>
+            <li key={item.id}>
               {expanded ? (
                 link
               ) : (

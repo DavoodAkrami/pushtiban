@@ -71,6 +71,17 @@ export const isTelegramAiConfigured = () =>
   isNvidiaNimConfigured() || isOpenAIConfigured();
 
 /**
+ * Result of generateTelegramAiReply. When `needsHuman` is true the caller
+ * (webhook) should offer the customer a "do you want me to ask the admin?"
+ * inline button instead of just sending `text`. When false, `text` is the
+ * final reply to send.
+ */
+export type TelegramAiResult = {
+  text: string | null;
+  needsHuman: boolean;
+};
+
+/**
  * Generate an AI reply for a Telegram user message.
  *
  * When `userId` is provided (the business owner whose bot received the
@@ -81,16 +92,22 @@ export const isTelegramAiConfigured = () =>
  * When `userId` is omitted, falls back to a plain LLM reply with no retrieval
  * (kept for any legacy callers; the webhook now always passes a userId).
  *
+ * Returns `{ text, needsHuman }`. When the RAG retrieval found no context at
+ * all (no facts, no Q&A, no chunks) the system prompt instructs the model to
+ * prepend the literal marker `[NEEDS_HUMAN]` to its reply; we strip it and set
+ * `needsHuman: true` so the webhook can offer the "ask admin?" button.
+ *
  * Errors during retrieval are non-fatal: we fall back to the plain
  * FALLBACK_SYSTEM_PROMPT so the customer still gets a reply.
  */
 export const generateTelegramAiReply = async (
   question: string,
   userId?: string
-) => {
+): Promise<TelegramAiResult> => {
   // Try to build a RAG-augmented system prompt scoped to this owner's
   // knowledge base. Any failure → fall back to the plain prompt below.
   let systemPrompt = FALLBACK_SYSTEM_PROMPT;
+  let hadRagContext = false;
   if (userId) {
     try {
       const retrieval = await retrieveRagContext({
@@ -99,12 +116,31 @@ export const generateTelegramAiReply = async (
         matchCount: 4,
         minSimilarity: 0.2,
       });
+      hadRagContext =
+        retrieval.facts.length > 0 ||
+        retrieval.qa.length > 0 ||
+        retrieval.chunks.length > 0;
       systemPrompt = buildRagSystemPrompt(retrieval);
+      // When we have no RAG context at all, instruct the model to mark the
+      // reply with [NEEDS_HUMAN] so the webhook can offer the "ask admin?"
+      // button instead of sending a guess.
+      if (!hadRagContext) {
+        systemPrompt +=
+          "\n\nIMPORTANT: No knowledge-base context was retrieved for this question. If you are not confident about the answer, start your reply with the exact marker [NEEDS_HUMAN] (the system will strip it and offer to escalate to a human). Do not invent business facts.";
+      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message.slice(0, 200) : "Unknown error";
       console.error("Telegram RAG retrieval failed; using fallback:", message);
     }
+  }
+
+  // Deterministic escalation: when no RAG context was found at all, do NOT
+  // call the LLM (it would either hallucinate or narrate its own failure).
+  // Short-circuit with a fixed preface + needsHuman so the webhook offers
+  // the "ask admin?" button directly.
+  if (userId && !hadRagContext) {
+    return { text: null, needsHuman: true };
   }
 
   const providers: Provider[] = [
@@ -131,7 +167,17 @@ export const generateTelegramAiReply = async (
         question,
         systemPrompt,
       });
-      if (reply) return reply;
+      if (reply) {
+        // Detect the [NEEDS_HUMAN] marker the model may have prepended.
+        if (reply.startsWith("[NEEDS_HUMAN]")) {
+          const cleaned = reply.slice("[NEEDS_HUMAN]".length).trim();
+          return {
+            text: cleaned || null,
+            needsHuman: true,
+          };
+        }
+        return { text: reply, needsHuman: false };
+      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message.slice(0, 200) : "Unknown error";
@@ -139,5 +185,6 @@ export const generateTelegramAiReply = async (
     }
   }
 
-  return null;
+  // No provider succeeded — signal that a human should step in.
+  return { text: null, needsHuman: true };
 };
