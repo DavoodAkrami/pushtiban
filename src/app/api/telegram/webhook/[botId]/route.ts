@@ -865,7 +865,9 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
       customerUsername: senderUsername,
       customerDisplayName: senderFirstName,
       messageText: text,
-      queuedReason: "ai_unknown",
+      queuedReason: customerRequestedHuman(text)
+        ? "customer_request"
+        : "ai_unknown",
     });
     await sendAskAdminPrompt({
       chatId,

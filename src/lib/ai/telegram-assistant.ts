@@ -1,6 +1,7 @@
 import "server-only";
 
 import type OpenAI from "openai";
+import type { ChatCompletionMessageFunctionToolCall } from "openai/resources/chat/completions";
 import {
   getNvidiaNimClient,
   getOpenAIClient,
@@ -62,6 +63,79 @@ const requestCompletion = async ({
     );
     const content = completion.choices[0]?.message?.content?.trim();
     return content ? truncateTelegramMessage(content) : null;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+/**
+ * Completion with the `escalate_to_admin` tool. When the model calls the
+ * tool, we return `{ text: <preface or null>, needsHuman: true }` so the
+ * webhook can route the customer to a human. When the model replies normally
+ * (no tool call), we return the text with `needsHuman: false`.
+ *
+ * Falls back to `null` (caller handles) when the response shape is unexpected.
+ */
+const requestCompletionWithEscalation = async ({
+  client,
+  model,
+  question,
+  systemPrompt,
+}: {
+  client: OpenAI;
+  model: string;
+  question: string;
+  systemPrompt: string;
+}): Promise<TelegramAiResult | null> => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), COMPLETION_TIMEOUT_MS);
+
+  try {
+    const completion = await client.chat.completions.create(
+      {
+        model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: question },
+        ],
+        tools: [ESCALATE_TOOL],
+        tool_choice: "auto",
+        max_tokens: 700,
+        stream: false,
+      },
+      { signal: controller.signal }
+    );
+
+    const choice = completion.choices[0];
+    if (!choice) return null;
+
+    // Did the model call the escalation tool?
+    const toolCalls = choice.message.tool_calls;
+    if (toolCalls && toolCalls.length > 0) {
+      const functionCalls = toolCalls.filter(
+        (call): call is ChatCompletionMessageFunctionToolCall =>
+          call.type === "function"
+      );
+      const escalateCall = functionCalls.find(
+        (call) => call.function?.name === "escalate_to_admin"
+      );
+      if (escalateCall) {
+        let preface: string | null = null;
+        try {
+          const args = JSON.parse(escalateCall.function?.arguments ?? "{}");
+          if (typeof args.preface === "string" && args.preface.trim()) {
+            preface = truncateTelegramMessage(args.preface.trim());
+          }
+        } catch {
+          // Ignore malformed JSON — preface is optional.
+        }
+        return { text: preface, needsHuman: true };
+      }
+    }
+
+    const content = choice.message.content?.trim();
+    if (content) return { text: truncateTelegramMessage(content), needsHuman: false };
+    return null;
   } finally {
     clearTimeout(timeout);
   }
@@ -138,19 +212,48 @@ export type TelegramAiResult = {
  * facts → curated Q&A → filtered vector chunks → augmented system prompt. This
  * is the production path used by the Telegram webhook.
  *
- * When `userId` is omitted, falls back to a plain LLM reply with no retrieval
- * (kept for any legacy callers; the webhook now always passes a userId).
+ * When `userId` is omitted, falls back to a plain LLM reply with no retrieval.
  *
- * Returns `{ text, needsHuman }`. Escalation is deterministic: when the RAG
- * retrieval found no context at all (no facts, no Q&A, no chunks) we do NOT
- * call the LLM and return `{ text: null, needsHuman: true }` so the webhook can
- * decide whether to escalate to a human (subject to the owner's handoff
- * setting). This avoids paying for a completion that would only hallucinate or
- * narrate its own failure.
+ * Returns `{ text, needsHuman }`. The AI is given an `escalate_to_admin` tool:
+ * it calls the tool when it genuinely cannot answer using the knowledge base,
+ * OR when the customer explicitly asks to involve an admin/owner/human. When
+ * `needsHuman` is true the webhook should offer the customer a "ask admin?"
+ * inline button instead of sending `text`. When `false`, `text` is the final
+ * reply to send.
  *
  * Errors during retrieval are non-fatal: we fall back to the plain
  * FALLBACK_SYSTEM_PROMPT so the customer still gets a reply.
  */
+const ESCALATE_TOOL = {
+  type: "function" as const,
+  function: {
+    name: "escalate_to_admin",
+    description:
+      "Route the customer to a human admin/owner for support. Call this ONLY when you cannot confidently answer the customer's question using the provided business knowledge, or when the customer explicitly asks to speak with an admin, owner, operator, or human.",
+    parameters: {
+      type: "object",
+      properties: {
+        preface: {
+          type: "string",
+          description:
+            "An optional short Persian message to show the customer before the 'send to admin?' prompt (e.g. an apology or summary of the question). Keep it under 2 sentences.",
+        },
+      },
+      required: [],
+    },
+  },
+};
+
+const buildEscalationSystemPrompt = (basePrompt: string): string => {
+  const instructions = [
+    "You have a tool called `escalate_to_admin`. Use it ONLY in these situations:",
+    "1. The customer explicitly asks to talk to, message, or be connected with an admin, owner, operator, support agent, or human (e.g. 'پیام به ادمین', 'پشتیبان انسانی', 'connect me to a human').",
+    "2. You cannot confidently answer the question even with the provided business knowledge — say a brief apology in the `preface` and call the tool instead of guessing or narrating your own failure.",
+    "Do NOT call the tool for questions you CAN answer, for greetings, or for general conversation. When the tool is not needed, reply normally with a helpful answer.",
+  ].join(" ");
+  return `${basePrompt}\n\n${instructions}`;
+};
+
 export const generateTelegramAiReply = async (
   question: string,
   userId?: string
@@ -158,7 +261,6 @@ export const generateTelegramAiReply = async (
   // Try to build a RAG-augmented system prompt scoped to this owner's
   // knowledge base. Any failure → fall back to the plain prompt below.
   let systemPrompt = FALLBACK_SYSTEM_PROMPT;
-  let hadRagContext = false;
   if (userId) {
     try {
       const retrieval = await retrieveRagContext({
@@ -167,10 +269,6 @@ export const generateTelegramAiReply = async (
         matchCount: 4,
         minSimilarity: 0.2,
       });
-      hadRagContext =
-        retrieval.facts.length > 0 ||
-        retrieval.qa.length > 0 ||
-        retrieval.chunks.length > 0;
       systemPrompt = buildRagSystemPrompt(retrieval);
     } catch (error) {
       const message =
@@ -179,12 +277,7 @@ export const generateTelegramAiReply = async (
     }
   }
 
-  // Deterministic escalation: when no RAG context was found at all, short-circuit
-  // with needsHuman so the webhook can offer the "ask admin?" button directly
-  // (no LLM call).
-  if (userId && !hadRagContext) {
-    return { text: null, needsHuman: true };
-  }
+  systemPrompt = buildEscalationSystemPrompt(systemPrompt);
 
   const providers: Provider[] = [
     {
@@ -203,21 +296,36 @@ export const generateTelegramAiReply = async (
   for (const provider of providers) {
     if (!provider.client) continue;
 
+    let result: TelegramAiResult | null = null;
     try {
-      const reply = await requestCompletion({
+      result = await requestCompletionWithEscalation({
         client: provider.client,
         model: provider.model,
         question,
         systemPrompt,
       });
-      if (reply) {
-        return { text: reply, needsHuman: false };
-      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message.slice(0, 200) : "Unknown error";
-      console.error(`Telegram AI provider ${provider.id} failed:`, message);
+      console.error(
+        `Telegram AI provider ${provider.id} failed with tools:`,
+        message
+      );
+      // Some models reject the `tools` parameter entirely. Retry the same
+      // provider without tools so the customer still gets a text reply.
+      try {
+        const text = await requestCompletion({
+          client: provider.client,
+          model: provider.model,
+          question,
+          systemPrompt,
+        });
+        if (text) return { text, needsHuman: false };
+      } catch {
+        // fall through to the next provider
+      }
     }
+    if (result) return result;
   }
 
   // No provider succeeded — signal that a human should step in.
