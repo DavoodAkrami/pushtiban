@@ -230,7 +230,18 @@ export function Select({
           aria-describedby={
             error || success || hint ? `${id}-message` : undefined
           }
-          onClick={() => (open ? close() : setOpen(true))}
+          onClick={() => {
+            if (open) {
+              close();
+              return;
+            }
+            // Capture the trigger rect synchronously so the portaled popover
+            // can position itself in the same render cycle as the open flip —
+            // avoiding a flash where `open` is true but `triggerRect` is null.
+            const rect = triggerRef.current?.getBoundingClientRect();
+            if (rect) setTriggerRect(rect);
+            setOpen(true);
+          }}
           className={cn(
             fieldStateClasses(state),
             "flex h-12 items-center justify-between gap-3 px-4 text-start",
@@ -260,119 +271,135 @@ export function Select({
           />
         </button>
 
-        <AnimatePresence>
-          {open && triggerRect && typeof document !== "undefined" &&
-            createPortal(
-              <motion.div
-                ref={popoverRef}
-                initial={
-                  reduce
-                    ? { opacity: 0 }
-                    : {
-                        opacity: 0,
-                        y: placement === "bottom" ? -6 : 6,
-                        scale: 0.98,
-                      }
-                }
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={
-                  reduce
-                    ? { opacity: 0 }
-                    : {
-                        opacity: 0,
-                        y: placement === "bottom" ? -4 : 4,
-                        scale: 0.98,
-                      }
-                }
-                transition={{ duration: 0.22, ease: luxe }}
-                style={{
-                  position: "fixed",
-                  left: triggerRect.left,
-                  width: triggerRect.width,
-                  ...(placement === "bottom"
-                    ? { top: triggerRect.bottom + 8 }
-                    : { bottom: window.innerHeight - triggerRect.top + 8 }),
-                }}
-                className="z-[70] overflow-hidden rounded-2xl border border-line bg-card shadow-lift"
-              >
-                {searchable && (
-                  <div className="relative border-b border-line">
-                    <Search
-                      aria-hidden
-                      className="pointer-events-none absolute inset-y-0 start-4 my-auto size-4 text-muted"
-                    />
-                    <input
-                      ref={searchRef}
-                      value={query}
-                      onChange={(e) => {
-                        setQuery(e.target.value);
-                        setActiveIndex(0);
-                      }}
-                      placeholder={searchPlaceholder}
-                      aria-label={searchPlaceholder}
-                      className="h-11 w-full bg-transparent ps-11 pe-4 text-sm placeholder:text-muted/70 focus:outline-none"
-                    />
-                  </div>
-                )}
-                <ul
-                  ref={listRef}
-                  id={listboxId}
-                  role="listbox"
-                  aria-label={label ?? placeholder}
-                  style={{ maxHeight: maxListHeight }}
-                  className="overflow-y-auto p-1.5"
+        {typeof document !== "undefined" &&
+          createPortal(
+            <AnimatePresence>
+              {open && triggerRect && (
+                <motion.div
+                  key="select-popover"
+                  ref={popoverRef}
+                  initial={
+                    reduce
+                      ? { opacity: 0 }
+                      : {
+                          opacity: 0,
+                          y: placement === "bottom" ? -6 : 6,
+                          scale: 0.98,
+                        }
+                  }
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={
+                    reduce
+                      ? { opacity: 0 }
+                      : {
+                          opacity: 0,
+                          y: placement === "bottom" ? -4 : 4,
+                          scale: 0.98,
+                        }
+                  }
+                  transition={{ duration: 0.22, ease: luxe }}
+                  style={{
+                    position: "fixed",
+                    left: triggerRect.left,
+                    width: triggerRect.width,
+                    // The popover is portaled to <body>, so when it opens
+                    // inside a Radix Dialog the modal's dismissable layer has
+                    // set `pointer-events: none` on <body> — every option
+                    // would inherit it and become untargetable (clicks fall
+                    // through to the dialog panel underneath). Opting back in
+                    // here re-enables hit-testing for the whole dropdown.
+                    pointerEvents: "auto",
+                    ...(placement === "bottom"
+                      ? { top: triggerRect.bottom + 8 }
+                      : { bottom: window.innerHeight - triggerRect.top + 8 }),
+                  }}
+                  className="z-[100] overflow-hidden rounded-2xl border border-line bg-card shadow-lift"
+                  // The dropdown lives outside the dialog's DOM subtree, so a
+                  // pointerdown inside it reads as "outside" to the dialog's
+                  // dismissable layer and would close the modal. Keeping the
+                  // event out of the document-level listeners prevents that.
+                  onPointerDown={(e) => e.stopPropagation()}
                 >
-                  {filtered.length === 0 && (
-                    <li className="flex flex-col items-center gap-2 px-4 py-8 text-center text-sm text-muted">
-                      <SearchX className="size-5" aria-hidden />
-                      {emptyText}
-                    </li>
+                  {searchable && (
+                    <div className="relative border-b border-line">
+                      <Search
+                        aria-hidden
+                        className="pointer-events-none absolute inset-y-0 start-4 my-auto size-4 text-muted"
+                      />
+                      <input
+                        ref={searchRef}
+                        value={query}
+                        onChange={(e) => {
+                          setQuery(e.target.value);
+                          setActiveIndex(0);
+                        }}
+                        placeholder={searchPlaceholder}
+                        aria-label={searchPlaceholder}
+                        className="h-11 w-full bg-transparent ps-11 pe-4 text-sm placeholder:text-muted/70 focus:outline-none"
+                      />
+                    </div>
                   )}
-                  {filtered.map((option, i) => {
-                    const isSelected = option.value === value;
-                    return (
-                      <li
-                        key={option.value}
-                        data-index={i}
-                        role="option"
-                        aria-selected={isSelected}
-                        aria-disabled={option.disabled || undefined}
-                        onPointerMove={() => setActiveIndex(i)}
-                        onClick={() => commit(option)}
-                        className={cn(
-                          "flex cursor-pointer items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm transition-colors duration-150",
-                          activeIndex === i && "bg-line/60",
-                          option.disabled &&
-                            "cursor-not-allowed opacity-40"
-                        )}
-                      >
-                        {option.icon && (
-                          <span className="shrink-0 text-muted [&>svg]:size-4">
-                            {option.icon}
-                          </span>
-                        )}
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate">{option.label}</span>
-                          {option.description && (
-                            <span className="block truncate text-xs text-muted">
-                              {option.description}
+                  <ul
+                    ref={listRef}
+                    id={listboxId}
+                    role="listbox"
+                    aria-label={label ?? placeholder}
+                    style={{ maxHeight: maxListHeight }}
+                    className="overflow-y-auto p-1.5"
+                  >
+                    {filtered.length === 0 && (
+                      <li className="flex flex-col items-center gap-2 px-4 py-8 text-center text-sm text-muted">
+                        <SearchX className="size-5" aria-hidden />
+                        {emptyText}
+                      </li>
+                    )}
+                    {filtered.map((option, i) => {
+                      const isSelected = option.value === value;
+                      return (
+                        <li
+                          key={option.value}
+                          data-index={i}
+                          role="option"
+                          aria-selected={isSelected}
+                          aria-disabled={option.disabled || undefined}
+                          onPointerMove={() => setActiveIndex(i)}
+                          onClick={() => commit(option)}
+                          className={cn(
+                            "flex cursor-pointer items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm transition-colors duration-150",
+                            activeIndex === i && "bg-line/60",
+                            option.disabled && "cursor-not-allowed opacity-40"
+                          )}
+                        >
+                          {option.icon && (
+                            <span className="shrink-0 text-muted [&>svg]:size-4">
+                              {option.icon}
                             </span>
                           )}
-                        </span>
-                        {isSelected && (
-                          <Check
-                            className="size-4 shrink-0 text-accent"
-                            aria-hidden
-                          />
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </motion.div>,
-              document.body
-            )}
-        </AnimatePresence>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate">
+                              {option.label}
+                            </span>
+                            {option.description && (
+                              <span className="block truncate text-xs text-muted">
+                                {option.description}
+                              </span>
+                            )}
+                          </span>
+                          {isSelected && (
+                            <Check
+                              className="size-4 shrink-0 text-accent"
+                              aria-hidden
+                            />
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </motion.div>
+              )}
+            </AnimatePresence>,
+            document.body
+          )}
       </div>
     </FieldWrapper>
   );
