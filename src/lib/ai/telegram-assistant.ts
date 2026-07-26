@@ -12,6 +12,7 @@ import {
   retrieveRagContext,
   buildRagSystemPrompt,
 } from "@/lib/ai/rag";
+import { checkAiLimits, getGlobalAiSettings, logAiUsage } from "@/lib/ai/usage";
 
 const TELEGRAM_MESSAGE_MAX_LENGTH = 4096;
 const COMPLETION_TIMEOUT_MS = 25_000;
@@ -39,11 +40,13 @@ const requestCompletion = async ({
   model,
   question,
   systemPrompt,
+  usage,
 }: {
   client: OpenAI;
   model: string;
   question: string;
   systemPrompt: string;
+  usage?: { userId: string; provider: string };
 }) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), COMPLETION_TIMEOUT_MS);
@@ -61,6 +64,15 @@ const requestCompletion = async ({
       },
       { signal: controller.signal }
     );
+    if (usage) {
+      void logAiUsage({
+        userId: usage.userId,
+        kind: "chat",
+        provider: usage.provider,
+        model,
+        usage: completion.usage,
+      });
+    }
     const content = completion.choices[0]?.message?.content?.trim();
     return content ? truncateTelegramMessage(content) : null;
   } finally {
@@ -81,11 +93,13 @@ const requestCompletionWithEscalation = async ({
   model,
   question,
   systemPrompt,
+  usage,
 }: {
   client: OpenAI;
   model: string;
   question: string;
   systemPrompt: string;
+  usage?: { userId: string; provider: string };
 }): Promise<TelegramAiResult | null> => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), COMPLETION_TIMEOUT_MS);
@@ -105,6 +119,16 @@ const requestCompletionWithEscalation = async ({
       },
       { signal: controller.signal }
     );
+
+    if (usage) {
+      void logAiUsage({
+        userId: usage.userId,
+        kind: "chat",
+        provider: usage.provider,
+        model,
+        usage: completion.usage,
+      });
+    }
 
     const choice = completion.choices[0];
     if (!choice) return null;
@@ -258,6 +282,19 @@ export const generateTelegramAiReply = async (
   question: string,
   userId?: string
 ): Promise<TelegramAiResult> => {
+  // Platform-wide kill switch and per-business monthly caps, both managed
+  // from /dashboard/admin. When either gate rejects the call, no LLM request
+  // is made — the webhook sends its generic "AI unavailable" fallback.
+  const settings = await getGlobalAiSettings();
+  if (!settings.aiEnabled) return { text: null, needsHuman: false };
+  if (userId) {
+    const limits = await checkAiLimits(userId);
+    if (!limits.allowed) {
+      console.warn(`AI reply blocked for ${userId}: ${limits.reason}`);
+      return { text: null, needsHuman: false };
+    }
+  }
+
   // Try to build a RAG-augmented system prompt scoped to this owner's
   // knowledge base. Any failure → fall back to the plain prompt below.
   let systemPrompt = FALLBACK_SYSTEM_PROMPT;
@@ -266,8 +303,6 @@ export const generateTelegramAiReply = async (
       const retrieval = await retrieveRagContext({
         question,
         userId,
-        matchCount: 4,
-        minSimilarity: 0.2,
       });
       systemPrompt = buildRagSystemPrompt(retrieval);
     } catch (error) {
@@ -296,6 +331,7 @@ export const generateTelegramAiReply = async (
   for (const provider of providers) {
     if (!provider.client) continue;
 
+    const usage = userId ? { userId, provider: provider.id } : undefined;
     let result: TelegramAiResult | null = null;
     try {
       result = await requestCompletionWithEscalation({
@@ -303,6 +339,7 @@ export const generateTelegramAiReply = async (
         model: provider.model,
         question,
         systemPrompt,
+        usage,
       });
     } catch (error) {
       const message =
@@ -319,6 +356,7 @@ export const generateTelegramAiReply = async (
           model: provider.model,
           question,
           systemPrompt,
+          usage,
         });
         if (text) return { text, needsHuman: false };
       } catch {

@@ -27,6 +27,15 @@ const DashboardLayout = async ({
 
   if (profile && !profile.onboarding_completed_at) redirect("/onboarding");
 
+  // Separate query so a missing is_admin column (admin.sql not run yet)
+  // degrades to "not an admin" instead of breaking the whole layout.
+  const { data: adminFlag } = await supabase
+    .from("profiles")
+    .select("is_admin")
+    .eq("id", user.id)
+    .maybeSingle();
+  const isAdmin = adminFlag?.is_admin === true;
+
   const metadataBusinessName =
     typeof user.user_metadata?.business_name === "string"
       ? user.user_metadata.business_name.trim()
@@ -44,6 +53,7 @@ const DashboardLayout = async ({
         businessName={businessName}
         fullName={fullName}
         email={user.email ?? ""}
+        isAdmin={isAdmin}
       >
         {children}
       </DashboardShell>

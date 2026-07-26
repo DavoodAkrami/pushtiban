@@ -11,13 +11,12 @@ import {
   UserRound,
   Database,
   FileText,
-  Plus,
+  ListChecks,
   Search,
 } from "lucide-react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Select, type SelectOption } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { cn, fa } from "@/lib/utils";
@@ -44,6 +43,7 @@ type Message = {
 type RagIntentView = {
   category: string;
   confidence: number;
+  searchQuery?: string | null;
 };
 
 type RagFactView = {
@@ -99,14 +99,13 @@ const PROVIDER_ICONS: Record<
 
 const OPENROUTER_AUTO_ID = "openrouter/free";
 
-// ---- Ingestion panel -------------------------------------------------------
+// ---- Stored Q&A list (loaded from the knowledge base) ---------------------
 
-type IngestState = {
-  title: string;
-  text: string;
-  loading: boolean;
-  message: string | null;
-  ok: boolean;
+type KnowledgeQaRow = {
+  id: string;
+  category: string;
+  question: string;
+  answer: string;
 };
 
 const RagTestPage = () => {
@@ -131,14 +130,31 @@ const RagTestPage = () => {
   const [error, setError] = React.useState<string | null>(null);
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
 
-  // Ingestion form state
-  const [ingest, setIngest] = React.useState<IngestState>({
-    title: "",
-    text: "",
-    loading: false,
-    message: null,
-    ok: false,
-  });
+  // Stored Q&A list — loaded from the user's knowledge base so you can see the
+  // exact data the RAG system matches against. Read-only here; manage Q&A in the
+  // dashboard AI panel. This page is for probing retrieval, not editing content.
+  const [qaList, setQaList] = React.useState<KnowledgeQaRow[]>([]);
+  const [qaLoading, setQaLoading] = React.useState(true);
+
+  const loadQa = React.useCallback(async () => {
+    setQaLoading(true);
+    try {
+      const res = await fetch("/api/ai/knowledge/qa");
+      const data = (await res.json()) as {
+        qa?: KnowledgeQaRow[];
+        error?: string;
+      };
+      if (res.ok && data.qa) setQaList(data.qa);
+    } catch {
+      // soft-fail; the panel will show the empty state
+    } finally {
+      setQaLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void loadQa();
+  }, [loadQa]);
 
   const loadSources = React.useCallback(async () => {
     setSourcesLoading(true);
@@ -241,55 +257,6 @@ const RagTestPage = () => {
     ],
     [sources]
   );
-
-  const handleIngest = async () => {
-    if (!ingest.title.trim() || !ingest.text.trim() || ingest.loading) return;
-    setIngest((prev) => ({
-      ...prev,
-      loading: true,
-      message: null,
-      ok: false,
-    }));
-    try {
-      const res = await fetch("/api/ai/rag/ingest", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: ingest.title.trim(),
-          text: ingest.text,
-          sourceType: "text",
-        }),
-      });
-      const data = (await res.json()) as {
-        sourceId?: string;
-        chunks?: number;
-        error?: string;
-        setupRequired?: boolean;
-      };
-      if (!res.ok) {
-        throw new Error(
-          data.error ?? "ذخیره سند ناموفق بود."
-        );
-      }
-      setIngest((prev) => ({
-        ...prev,
-        title: "",
-        text: "",
-        loading: false,
-        ok: true,
-        message: `سند ذخیره شد (${fa(data.chunks ?? 0)} بخش).`,
-      }));
-      void loadSources();
-    } catch (err) {
-      setIngest((prev) => ({
-        ...prev,
-        loading: false,
-        ok: false,
-        message:
-          err instanceof Error ? err.message : "ذخیره سند ناموفق بود.",
-      }));
-    }
-  };
 
   const handleSend = async () => {
     if (!input.trim() || !selectedModel || loading) return;
@@ -451,54 +418,61 @@ const RagTestPage = () => {
           </div>
         )}
 
-        {/* Ingestion panel */}
+        {/* Stored Q&A list — shows the exact data the RAG system matches against.
+            Read-only here; this page is for probing retrieval, not editing Q&A. */}
         <section className="mb-6 rounded-3xl border border-line bg-surface/30 p-4">
-          <div className="mb-3 flex items-center gap-2">
-            <Plus className="size-4 text-accent" />
-            <h2 className="text-sm font-bold">افزودن سند به پایگاه دانش</h2>
-          </div>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-[200px_1fr_auto]">
-            <Input
-              value={ingest.title}
-              onChange={(e) =>
-                setIngest((prev) => ({ ...prev, title: e.target.value }))
-              }
-              placeholder="عنوان سند"
-              disabled={ingest.loading}
-            />
-            <Textarea
-              value={ingest.text}
-              onChange={(e) =>
-                setIngest((prev) => ({ ...prev, text: e.target.value }))
-              }
-              placeholder="متن سند را اینجا بچسبانید…"
-              rows={3}
-              disabled={ingest.loading}
-            />
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ListChecks className="size-4 text-accent" />
+              <h2 className="text-sm font-bold">
+                پرسش‌های پایگاه دانش ({fa(qaLoading ? 0 : qaList.length)})
+              </h2>
+            </div>
             <Button
-              onClick={() => void handleIngest()}
-              loading={ingest.loading}
-              disabled={!ingest.title.trim() || !ingest.text.trim()}
-              className="self-end"
+              variant="ghost"
+              size="sm"
+              onClick={() => void loadQa()}
+              aria-label="تازه‌سازی پرسش‌ها"
             >
-              ذخیره و امبدینگ
+              <Search className="size-3.5" />
+              تازه‌سازی
             </Button>
           </div>
-          <AnimatePresence>
-            {ingest.message && (
-              <motion.p
-                initial={{ opacity: 0, y: reduce ? 0 : -4 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className={cn(
-                  "mt-3 text-xs",
-                  ingest.ok ? "text-success" : "text-danger"
-                )}
-              >
-                {ingest.message}
-              </motion.p>
-            )}
-          </AnimatePresence>
+
+          {qaLoading ? (
+            <div className="flex items-center justify-center py-6 text-muted">
+              <Loader2 className="size-5 animate-spin" />
+            </div>
+          ) : qaList.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted">
+              هنوز پرسش و پاسخی ثبت نشده. از داشبورد پرسشی اضافه کنید.
+            </p>
+          ) : (
+            <div className="max-h-72 space-y-2 overflow-y-auto pe-1">
+              {qaList.map((row) => (
+                <div
+                  key={row.id}
+                  className="rounded-2xl border border-line bg-surface/50 p-3 text-xs"
+                >
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <Badge variant="muted" className="text-[10px]">
+                      {row.category}
+                    </Badge>
+                  </div>
+                  <p className="font-bold">پرسش: {row.question}</p>
+                  <p className="mt-1 whitespace-pre-wrap text-muted">
+                    پاسخ: {row.answer}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <p className="mt-3 text-[11px] leading-5 text-muted">
+            این‌ها همان پرسش‌های آماده‌ای هستند که RAG برای یافتن پاسخ، سوال کاربر را
+            با آن‌ها تطبیق می‌دهد. با سوال پرسیدن در پایین صفحه، نتیجه تطبیق و
+            امتیاز شباهت را در بخش «داده‌های بازیابی‌شده» ببینید.
+          </p>
         </section>
 
         {/* Source selector */}
@@ -618,7 +592,8 @@ const RagTestPage = () => {
                   <Database className="mb-3 size-12 opacity-50" />
                   <p className="text-lg font-medium">هنوز پرسشی نیست</p>
                   <p className="mt-1 text-sm">
-                    سندی را وارد کنید، مدل را انتخاب کنید و سوال بپرسید
+                    مدل را انتخاب کنید و سوال را بپرسید تا داده‌های بازیابی‌شده و
+                    امتیاز شباهت را ببینید
                   </p>
                 </div>
               )}
@@ -652,11 +627,14 @@ const RagTestPage = () => {
                         : "border border-line bg-surface"
                     )}
                   >
-                    {/* Retrieved-chunks inspector */}
+                    {/* Retrieved-chunks inspector — also shown when nothing
+                        matched, so the intent + rewritten search query are
+                        visible for debugging empty retrievals. */}
                     {msg.role === "assistant" &&
-                      (msg.chunks?.length ||
-                        msg.facts?.length ||
-                        msg.qa?.length ||
+                      (msg.chunks !== undefined ||
+                        msg.facts !== undefined ||
+                        msg.qa !== undefined ||
+                        msg.intent !== undefined ||
                         msg.embeddingsUnavailable) && (
                         <RagChunksPanel
                           intent={msg.intent ?? null}
@@ -745,7 +723,28 @@ const RagChunksPanel = ({
     );
   }
 
-  if (!chunks.length && !facts.length && !qa.length) return null;
+  if (!chunks.length && !facts.length && !qa.length) {
+    // Nothing matched — still show the intent and the rewritten search query
+    // so the user can see WHAT was searched and debug why it found nothing.
+    return (
+      <div className="mb-3 rounded-2xl border border-line bg-background/40 p-3 text-xs text-muted">
+        <span className="flex flex-wrap items-center gap-2">
+          <Database className="size-3.5 text-accent" />
+          داده‌ای بازیابی نشد
+          {intent && intent.category !== "general" && (
+            <Badge variant="accent" className="text-[10px]">
+              {intent.category} · {fa(intent.confidence.toFixed(2))}
+            </Badge>
+          )}
+          {intent?.searchQuery && (
+            <Badge variant="default" className="text-[10px]" dir="rtl">
+              جستجو: {intent.searchQuery}
+            </Badge>
+          )}
+        </span>
+      </div>
+    );
+  }
 
   const totalItems = chunks.length + facts.length + qa.length;
 
@@ -762,6 +761,11 @@ const RagChunksPanel = ({
           {intent && intent.category !== "general" && (
             <Badge variant="accent" className="text-[10px]">
               {intent.category} · {fa(intent.confidence.toFixed(2))}
+            </Badge>
+          )}
+          {intent?.searchQuery && (
+            <Badge variant="default" className="text-[10px]" dir="rtl">
+              جستجو: {intent.searchQuery}
             </Badge>
           )}
         </span>

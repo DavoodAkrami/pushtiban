@@ -10,8 +10,8 @@
 --   2. public.ai_knowledge_qa — explicit Q&A pairs the owner curated.
 --   3. category column on knowledge_chunks — so chunks can be scoped
 --      ("shipping", "pricing", "products", "general", ...).
---   4. match_knowledge_chunks_filtered — vector search that first filters by
---      category before ranking by similarity.
+--   4. match_knowledge_chunks_filtered — vector search that soft-boosts the
+--      detected category during ranking (never hard-excludes other categories).
 --   5. RLS on both new tables — each user only sees their own facts/qa.
 -- =============================================================================
 
@@ -90,10 +90,12 @@ create trigger ai_knowledge_qa_set_updated_at
   for each row execute function public.set_updated_at();
 
 -- 5) match_knowledge_chunks_filtered -----------------------------------------
--- Like match_knowledge_chunks but with a category pre-filter. The AI first
--- detects the user's intent (shipping vs. pricing vs. products...), then this
--- RPC filters chunks to that category before ranking by cosine similarity.
--- If the category filter is null, behaves like the unfiltered RPC.
+-- Like match_knowledge_chunks but category-aware. The AI first detects the
+-- user's intent (shipping vs. pricing vs. products...), then this RPC gives
+-- chunks in that category a small ranking boost — it never hard-excludes
+-- other categories, so a miscategorized chunk can still be retrieved when it
+-- is the closest semantic match. If filter_category is null, ranking is by
+-- pure cosine similarity.
 create or replace function public.match_knowledge_chunks_filtered(
   query_embedding vector(1536),
   match_user_id  uuid,
@@ -115,20 +117,34 @@ stable
 security definer
 set search_path = public, extensions
 as $$
-  select
-    kc.id,
-    kc.source_id,
-    kc.chunk_index,
-    kc.content,
-    kc.category,
-    1 - (kc.embedding <=> query_embedding) as similarity
-  from public.knowledge_chunks kc
-  where
-    kc.user_id = match_user_id
-    and (filter_category is null or kc.category = filter_category)
-    and (filter_source_id is null or kc.source_id = filter_source_id)
-    and 1 - (kc.embedding <=> query_embedding) >= min_similarity
-  order by kc.embedding <=> query_embedding
+  -- Over-fetch by pure vector distance (uses the HNSW index), then re-rank
+  -- with the category boost and cut to match_count.
+  with candidates as (
+    select
+      kc.id,
+      kc.source_id,
+      kc.chunk_index,
+      kc.content,
+      kc.category,
+      (1 - (kc.embedding <=> query_embedding))::real as similarity
+    from public.knowledge_chunks kc
+    where
+      kc.user_id = match_user_id
+      and (filter_source_id is null or kc.source_id = filter_source_id)
+      and kc.embedding is not null
+    order by kc.embedding <=> query_embedding
+    limit greatest(match_count * 4, 16)
+  )
+  select c.id, c.source_id, c.chunk_index, c.content, c.category, c.similarity
+  from candidates c
+  where c.similarity >= min_similarity
+  order by
+    c.similarity
+      + (case
+           when filter_category is not null and c.category = filter_category
+           then 0.05
+           else 0
+         end) desc
   limit match_count;
 $$;
 
@@ -136,15 +152,16 @@ grant execute on function public.match_knowledge_chunks_filtered(vector, uuid, i
   to authenticated, anon, service_role;
 
 -- 6) match_knowledge_qa ------------------------------------------------------
--- Match owner Q&A pairs by question embedding. Returns the best match above
--- a similarity threshold — Q&A is intentionally stricter (default 0.6) because
--- a Q&A pair should only surface if the user's question is really close.
+-- Match owner Q&A pairs by question embedding. Returns the best matches above
+-- a similarity threshold (default 0.45 — high enough to reject unrelated
+-- questions, low enough to catch Persian paraphrases). The detected category
+-- gives a small ranking boost but never hard-excludes other categories.
 create or replace function public.match_knowledge_qa(
   query_embedding vector(1536),
   match_user_id  uuid,
   filter_category text default null,
   match_count    integer default 2,
-  min_similarity real default 0.6
+  min_similarity real default 0.45
 )
 returns table (
   id          uuid,
@@ -158,19 +175,32 @@ stable
 security definer
 set search_path = public, extensions
 as $$
-  select
-    qa.id,
-    qa.question,
-    qa.answer,
-    qa.category,
-    1 - (qa.question_embedding <=> query_embedding) as similarity
-  from public.ai_knowledge_qa qa
-  where
-    qa.user_id = match_user_id
-    and (filter_category is null or qa.category = filter_category)
-    and qa.question_embedding is not null
-    and 1 - (qa.question_embedding <=> query_embedding) >= min_similarity
-  order by qa.question_embedding <=> query_embedding
+  -- Over-fetch by pure vector distance (uses the HNSW index), then re-rank
+  -- with the category boost and cut to match_count.
+  with candidates as (
+    select
+      qa.id,
+      qa.question,
+      qa.answer,
+      qa.category,
+      (1 - (qa.question_embedding <=> query_embedding))::real as similarity
+    from public.ai_knowledge_qa qa
+    where
+      qa.user_id = match_user_id
+      and qa.question_embedding is not null
+    order by qa.question_embedding <=> query_embedding
+    limit greatest(match_count * 4, 16)
+  )
+  select c.id, c.question, c.answer, c.category, c.similarity
+  from candidates c
+  where c.similarity >= min_similarity
+  order by
+    c.similarity
+      + (case
+           when filter_category is not null and c.category = filter_category
+           then 0.05
+           else 0
+         end) desc
   limit match_count;
 $$;
 

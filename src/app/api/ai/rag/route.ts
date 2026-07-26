@@ -8,6 +8,7 @@ import {
   type ProviderId,
 } from "@/configs";
 import { retrieveRagContext, buildRagSystemPrompt } from "@/lib/ai/rag";
+import { logAiUsage, type UsageTokens } from "@/lib/ai/usage";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -25,6 +26,8 @@ type RagRequestBody = {
   question: string;
   matchCount?: number;
   minSimilarity?: number;
+  /** Optional: restrict chunk retrieval to a single knowledge source. */
+  sourceId?: string | null;
 };
 
 /**
@@ -103,6 +106,10 @@ export const POST = async (request: NextRequest) => {
     const clampedMinSimilarity = Number.isFinite(requestedMinSimilarity)
       ? Math.min(Math.max(0, requestedMinSimilarity), 1)
       : 0.2;
+    const sourceId =
+      typeof body.sourceId === "string" && body.sourceId.trim()
+        ? body.sourceId.trim()
+        : null;
 
     // Authenticate the request; RAG retrieval is scoped to the signed-in user.
     const supabase = createClient();
@@ -119,6 +126,7 @@ export const POST = async (request: NextRequest) => {
       userId: user.id,
       matchCount: clampedMatchCount,
       minSimilarity: clampedMinSimilarity,
+      sourceId,
     }).catch((error) => {
       const code = (error as { code?: string }).code;
       const setupRequired = SETUP_ERROR_CODES.has(code ?? "");
@@ -168,18 +176,31 @@ export const POST = async (request: NextRequest) => {
           model,
           messages: openaiMessages,
           stream: true,
+          stream_options: { include_usage: true },
           max_tokens,
         });
         return toSseStream(async (enqueue) => {
           await prefix(enqueue);
+          let usage: UsageTokens | null = null;
+          let done = false;
           for await (const chunk of completion) {
+            if (chunk.usage) usage = chunk.usage;
             const content = chunk.choices?.[0]?.delta?.content ?? "";
             if (content) enqueue({ content });
-            if (chunk.choices?.[0]?.finish_reason) {
+            if (!done && chunk.choices?.[0]?.finish_reason) {
               enqueue({ done: true, model: chunk.model ?? model });
-              break;
+              done = true;
+              // Keep iterating — the usage-only chunk arrives after the
+              // finish_reason when include_usage is on.
             }
           }
+          void logAiUsage({
+            userId: user.id,
+            kind: "chat",
+            provider: "openai",
+            model,
+            usage,
+          });
         });
       }
       case "nvidia-nim": {
@@ -196,7 +217,9 @@ export const POST = async (request: NextRequest) => {
         });
         return toSseStream(async (enqueue) => {
           await prefix(enqueue);
+          let usage: UsageTokens | null = null;
           for await (const chunk of completion) {
+            if (chunk.usage) usage = chunk.usage;
             const content = chunk.choices?.[0]?.delta?.content ?? "";
             if (content) enqueue({ content });
             if (chunk.choices?.[0]?.finish_reason) {
@@ -204,6 +227,13 @@ export const POST = async (request: NextRequest) => {
               break;
             }
           }
+          void logAiUsage({
+            userId: user.id,
+            kind: "chat",
+            provider: "nvidia-nim",
+            model,
+            usage,
+          });
         });
       }
       case "openrouter": {
@@ -228,6 +258,15 @@ export const POST = async (request: NextRequest) => {
               break;
             }
           }
+          // OpenRouter's stream does not surface token usage; log the call
+          // anyway (0 tokens) so per-business message counts stay accurate.
+          void logAiUsage({
+            userId: user.id,
+            kind: "chat",
+            provider: "openrouter",
+            model: resolvedModel,
+            usage: null,
+          });
         });
       }
       default:

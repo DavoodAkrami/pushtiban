@@ -37,6 +37,36 @@ const toQa = (row: QaRow) => ({
   updatedAt: row.updated_at,
 });
 
+/**
+ * Re-embed any of the user's Q&A rows whose question_embedding is NULL (e.g.
+ * rows saved while the embeddings provider was down). Best-effort — failures
+ * are silent; the rows will be retried on the next call.
+ */
+const backfillMissingEmbeddings = async (
+  supabase: ReturnType<typeof createClient>,
+  userId: string
+) => {
+  if (!isEmbeddingsConfigured()) return;
+
+  const { data } = await supabase
+    .from("ai_knowledge_qa")
+    .select("id, question")
+    .eq("user_id", userId)
+    .is("question_embedding", null)
+    .limit(20);
+  if (!data?.length) return;
+
+  for (const row of data as Array<{ id: string; question: string }>) {
+    const embedding = await embedQuery(row.question).catch(() => null);
+    if (!embedding) return; // provider is down — stop, retry next call
+    await supabase
+      .from("ai_knowledge_qa")
+      .update({ question_embedding: embedding })
+      .eq("id", row.id)
+      .eq("user_id", userId);
+  }
+};
+
 /** GET /api/ai/knowledge/qa — list the signed-in user's Q&A pairs. */
 export const GET = async () => {
   const supabase = createClient();
@@ -44,6 +74,10 @@ export const GET = async () => {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return jsonError("نشست شما تمام شده؛ دوباره وارد شوید.", 401);
+
+  // Heal rows that were saved without an embedding (they never match in
+  // retrieval until embedded).
+  await backfillMissingEmbeddings(supabase, user.id).catch(() => undefined);
 
   const { data, error } = await supabase
     .from("ai_knowledge_qa")
@@ -97,9 +131,18 @@ export const POST = async (request: NextRequest) => {
   }
 
   // Embed the question so the Q&A can be matched against user queries.
-  const embedding = isEmbeddingsConfigured()
-    ? await embedQuery(question).catch(() => null)
-    : null;
+  // When the provider is configured but the call fails, reject the save —
+  // a row without an embedding never matches and would silently be dead.
+  let embedding: number[] | null = null;
+  if (isEmbeddingsConfigured()) {
+    embedding = await embedQuery(question).catch(() => null);
+    if (!embedding) {
+      return jsonError(
+        "ساخت بردار جستجو ناموفق بود؛ چند لحظه دیگر دوباره تلاش کنید.",
+        502
+      );
+    }
+  }
 
   const insertPayload: Record<string, unknown> = {
     user_id: user.id,
@@ -162,9 +205,18 @@ export const PUT = async (request: NextRequest) => {
     return jsonError("پاسخ باید بین ۱ تا ۲۰۰۰ نویسه باشد.", 400);
   }
 
-  const embedding = isEmbeddingsConfigured()
-    ? await embedQuery(question).catch(() => null)
-    : null;
+  // Re-embed the (possibly changed) question; reject on failure so the row
+  // never ends up with a stale or missing embedding.
+  let embedding: number[] | null = null;
+  if (isEmbeddingsConfigured()) {
+    embedding = await embedQuery(question).catch(() => null);
+    if (!embedding) {
+      return jsonError(
+        "ساخت بردار جستجو ناموفق بود؛ چند لحظه دیگر دوباره تلاش کنید.",
+        502
+      );
+    }
+  }
 
   const updatePayload: Record<string, unknown> = { question, answer, category };
   if (embedding) updatePayload.question_embedding = embedding;

@@ -7,6 +7,7 @@ import {
   isEmbeddingsConfigured,
 } from "@/configs";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getGlobalAiSettings, logAiUsage } from "@/lib/ai/usage";
 
 export type RagChunk = {
   id: string;
@@ -41,6 +42,13 @@ export type RagIntent = {
   category: string;
   /** Confidence 0..1 — below 0.4 we treat as "general" (no filter). */
   confidence: number;
+  /**
+   * Condensed search query — the user's message with greetings/filler
+   * stripped (e.g. "سلام میخواستم بدونم هزینه ارسال چقدره" → "هزینه ارسال").
+   * Embedded instead of the raw message for sharper similarity scores.
+   * Null when the model did not return one — caller embeds the raw message.
+   */
+  searchQuery: string | null;
 };
 
 export type RagRetrieval = {
@@ -55,14 +63,17 @@ export type RagRetrieval = {
 
 // ---------------------------------------------------------------------------
 // Intent extraction — a cheap LLM call that classifies the user's question
-// into one of a fixed set of categories. Returns null if no provider is
-// available (caller falls back to unfiltered retrieval).
+// into one of a fixed set of categories AND condenses it into a short search
+// query (greetings/filler stripped) used for embedding. Returns null if no
+// provider is available (caller falls back to unfiltered retrieval on the
+// raw message).
 // ---------------------------------------------------------------------------
 
 const INTENT_SYSTEM_PROMPT = [
-  "You classify a customer-support question into exactly one category.",
-  'Respond with a JSON object: {"category": "<one of: shipping, pricing, products, returns, account, general>", "confidence": <0..1>}.',
+  "You process a customer-support message for retrieval.",
+  'Respond with a JSON object: {"category": "<one of: shipping, pricing, products, returns, account, general>", "confidence": <0..1>, "searchQuery": "<the core question, same language as the user, greetings and filler removed>"}.',
   "Use \"general\" if the question is small-talk, ambiguous, or doesn't fit any category.",
+  'searchQuery keeps only the informational core (e.g. "سلام میخواستم بدونم هزینه ارسال چقدره" → "هزینه ارسال چقدر است"). If the message is pure small-talk, return it unchanged.',
   "Return JSON only — no prose, no code fences.",
 ].join(" ");
 
@@ -70,7 +81,8 @@ const INTENT_TIMEOUT_MS = 8_000;
 
 const requestIntent = async (
   client: NonNullable<ReturnType<typeof getOpenAIClient>>,
-  question: string
+  question: string,
+  usageUserId?: string
 ): Promise<RagIntent | null> => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), INTENT_TIMEOUT_MS);
@@ -88,11 +100,28 @@ const requestIntent = async (
       },
       { signal: controller.signal }
     );
+    if (usageUserId) {
+      void logAiUsage({
+        userId: usageUserId,
+        kind: "intent",
+        provider: "openai",
+        model: "gpt-4o-mini",
+        usage: completion.usage,
+      });
+    }
     const raw = completion.choices?.[0]?.message?.content?.trim() ?? "";
-    const parsed = JSON.parse(raw) as { category?: string; confidence?: number };
+    const parsed = JSON.parse(raw) as {
+      category?: string;
+      confidence?: number;
+      searchQuery?: string;
+    };
     const category = typeof parsed.category === "string" ? parsed.category : "general";
     const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0.5;
-    return { category, confidence };
+    const searchQuery =
+      typeof parsed.searchQuery === "string" && parsed.searchQuery.trim()
+        ? parsed.searchQuery.trim()
+        : null;
+    return { category, confidence, searchQuery };
   } catch {
     return null;
   } finally {
@@ -104,13 +133,16 @@ const requestIntent = async (
  * Ask the LLM to classify the user's question into a category so we can
  * pre-filter the vector search. Falls back to null (no filter) on any error.
  */
-export const extractIntent = async (question: string): Promise<RagIntent | null> => {
+export const extractIntent = async (
+  question: string,
+  usageUserId?: string
+): Promise<RagIntent | null> => {
   // Prefer OpenAI (cheap, fast), fall back to NVIDIA NIM.
   const openai = getOpenAIClient();
-  if (openai) return requestIntent(openai, question);
+  if (openai) return requestIntent(openai, question, usageUserId);
 
   const nvidia = getNvidiaNimClient();
-  if (nvidia) return requestIntent(nvidia, question);
+  if (nvidia) return requestIntent(nvidia, question, usageUserId);
 
   return null;
 };
@@ -133,15 +165,26 @@ export const extractIntent = async (question: string): Promise<RagIntent | null>
 export const retrieveRagContext = async ({
   question,
   userId,
-  matchCount = 4,
-  minSimilarity = 0.2,
+  matchCount,
+  minSimilarity,
+  sourceId = null,
 }: {
   question: string;
   userId: string;
+  /** Defaults to the admin-set global value when omitted. */
   matchCount?: number;
+  /** Defaults to the admin-set global value when omitted. */
   minSimilarity?: number;
+  /** Optional hard filter: only retrieve chunks from this knowledge source. */
+  sourceId?: string | null;
 }): Promise<RagRetrieval> => {
   const admin = createAdminClient();
+
+  // Platform-wide retrieval knobs set by the site admin. Explicit caller
+  // arguments (the /ai/rag-test sliders) win over the globals.
+  const settings = await getGlobalAiSettings();
+  const effectiveMatchCount = matchCount ?? settings.chunkMatchCount;
+  const effectiveMinSimilarity = minSimilarity ?? settings.chunkMinSimilarity;
 
   // 1. Standing facts — always-on context, not vector-retrieved.
   const facts: RagFact[] = [];
@@ -176,12 +219,13 @@ export const retrieveRagContext = async ({
     };
   }
 
-  // 3. Intent classification and the query embedding are independent, so run
-  //    them concurrently. Intent falls back to null gracefully on any error.
-  const [intent, queryEmbedding] = await Promise.all([
-    extractIntent(question),
-    embedQuery(question),
-  ]);
+  // 3. Intent classification runs first because it also produces the
+  //    condensed search query we embed (falls back to the raw message when
+  //    the intent call fails, returns nothing, or is disabled globally).
+  const intent = settings.intentEnabled
+    ? await extractIntent(question, userId)
+    : null;
+  const queryEmbedding = await embedQuery(intent?.searchQuery ?? question);
   if (!queryEmbedding) {
     return {
       intent,
@@ -193,21 +237,24 @@ export const retrieveRagContext = async ({
     };
   }
 
-  // Only filter when confidence is meaningful; otherwise search everything.
+  // The category is a soft ranking boost inside the RPCs (never a hard
+  // filter); only pass it when confidence is meaningful.
   const categoryFilter =
     intent && intent.confidence >= 0.4 && intent.category !== "general"
       ? intent.category
       : null;
 
-  // 3. Q&A pair matching (strict — only surface very close matches).
+  // 3. Q&A pair matching — the default threshold 0.45 catches Persian
+  //    paraphrases while rejecting unrelated questions; both knobs are
+  //    admin-tunable in ai_global_settings.
   const qa: RagQa[] = [];
   {
     const { data: qaRows } = await admin.rpc("match_knowledge_qa", {
       query_embedding: queryEmbedding,
       match_user_id: userId,
       filter_category: categoryFilter,
-      match_count: 2,
-      min_similarity: 0.6,
+      match_count: settings.qaMatchCount,
+      min_similarity: settings.qaMinSimilarity,
     });
     if (qaRows) {
       for (const row of qaRows as Array<{
@@ -236,10 +283,10 @@ export const retrieveRagContext = async ({
       {
         query_embedding: queryEmbedding,
         match_user_id: userId,
-        match_count: matchCount,
+        match_count: effectiveMatchCount,
         filter_category: categoryFilter,
-        filter_source_id: null,
-        min_similarity: minSimilarity,
+        filter_source_id: sourceId,
+        min_similarity: effectiveMinSimilarity,
       }
     );
     if (error) {

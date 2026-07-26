@@ -86,6 +86,11 @@ How to use:
       ranking. Standing business facts and curated Q&A pairs (with their own
       question embeddings) are injected into the system prompt alongside the
       chunks
+- [x] RAG retrieval quality: category acts as a soft ranking boost (never a
+      hard filter), Q&A similarity threshold lowered to 0.45 for Persian
+      paraphrases, the intent call also condenses the message into a clean
+      search query that gets embedded, Q&A saves fail loudly when embedding
+      fails, and NULL embeddings are backfilled on list
 - [x] Dashboard AI-assistance editors: add / edit / delete "things the AI
       should always know about your business" (facts) and Q&A pairs, each with
       a category, surfaced under the on/off toggle
@@ -98,6 +103,13 @@ How to use:
       AI-assistance panel
 - [x] Guided signup onboarding with Telegram connection, live bot verification,
       and an animated customer-order demo
+- [x] Site-admin console at /dashboard/admin (profiles.is_admin gated):
+      businesses list with per-business AI status, monthly + all-time token
+      and message usage, editable monthly token/message limits and a
+      per-business AI block switch; global AI settings (platform kill
+      switch, intent toggle, similarity thresholds, match counts) applied
+      by the RAG pipeline; token usage logged per AI call (chat + intent)
+      and enforced before every Telegram reply
 - [ ] Conversation inbox (live conversations, handoff to human)
 - [ ] Analytics dashboard (response rate, satisfaction, volumes)
 

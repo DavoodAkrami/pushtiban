@@ -8,6 +8,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
+  BarChart3,
   Bot,
   Check,
   ChevronDown,
@@ -24,7 +25,10 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Settings2,
+  ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
+  Store,
   Sun,
   Workflow,
   X,
@@ -54,45 +58,92 @@ type NavItem =
   | { id: string; href: string; label: string; icon: LucideIcon }
   | { id: string; label: string; icon: LucideIcon; children: NavChild[] };
 
-const NAV_ITEMS: NavItem[] = [
-  { id: "overview", href: "/dashboard/overview", label: "نمای کلی", icon: LayoutDashboard },
+type NavGroup = {
+  id: string;
+  /** Small section heading shown above the group when the sidebar is expanded. */
+  label?: string;
+  items: NavItem[];
+};
+
+// Hrefs that are both an accordion child and the parent of deeper routes —
+// matched exactly so deeper siblings don't double-highlight them.
+const EXACT_MATCH_HREFS = new Set([
+  "/dashboard/ai-assistance",
+  "/dashboard/admin",
+]);
+
+const NAV_GROUPS: NavGroup[] = [
   {
-    id: "automation",
-    label: "اتوماسیون",
-    icon: Workflow,
-    children: [
-      { href: "/dashboard/flow", label: "فلوها", icon: GitBranch },
-      {
-        href: "/dashboard/automation",
-        label: "پیام‌های آماده",
-        icon: MessageSquareText,
-      },
+    id: "workspace",
+    items: [
+      { id: "overview", href: "/dashboard/overview", label: "نمای کلی", icon: LayoutDashboard },
+      { id: "inbox", href: "/dashboard/inbox", label: "صندوق پیام‌ها", icon: Inbox },
     ],
   },
   {
-    id: "ai-assistance",
-    label: "دستیار هوش مصنوعی",
-    icon: Sparkles,
-    children: [
+    id: "tools",
+    label: "ابزارها",
+    items: [
       {
-        href: "/dashboard/ai-assistance",
-        label: "تنظیمات دستیار",
-        icon: ToggleRight,
+        id: "automation",
+        label: "اتوماسیون",
+        icon: Workflow,
+        children: [
+          { href: "/dashboard/flow", label: "فلوها", icon: GitBranch },
+          {
+            href: "/dashboard/automation",
+            label: "پیام‌های آماده",
+            icon: MessageSquareText,
+          },
+        ],
       },
       {
-        href: "/dashboard/ai-assistance/facts",
-        label: "اطلاعات کسب‌وکار",
-        icon: BookOpen,
-      },
-      {
-        href: "/dashboard/ai-assistance/qa",
-        label: "پرسش و پاسخ",
-        icon: HelpCircle,
+        id: "ai-assistance",
+        label: "دستیار هوش مصنوعی",
+        icon: Sparkles,
+        children: [
+          {
+            href: "/dashboard/ai-assistance",
+            label: "تنظیمات دستیار",
+            icon: ToggleRight,
+          },
+          {
+            href: "/dashboard/ai-assistance/facts",
+            label: "اطلاعات کسب‌وکار",
+            icon: BookOpen,
+          },
+          {
+            href: "/dashboard/ai-assistance/qa",
+            label: "پرسش و پاسخ",
+            icon: HelpCircle,
+          },
+        ],
       },
     ],
   },
-  { id: "inbox", href: "/dashboard/inbox", label: "صندوق پیام‌ها", icon: Inbox },
 ];
+
+// Appended to NAV_GROUPS only for site admins (profiles.is_admin).
+const ADMIN_NAV_GROUP: NavGroup = {
+  id: "administration",
+  label: "مدیریت",
+  items: [
+    {
+      id: "site-admin",
+      label: "مدیریت سایت",
+      icon: ShieldCheck,
+      children: [
+        { href: "/dashboard/admin", label: "مصرف و آمار", icon: BarChart3 },
+        { href: "/dashboard/admin/businesses", label: "کسب‌وکارها", icon: Store },
+        {
+          href: "/dashboard/admin/settings",
+          label: "تنظیمات هوش مصنوعی",
+          icon: SlidersHorizontal,
+        },
+      ],
+    },
+  ],
+};
 
 const OPEN_W = 264;
 const CLOSED_W = 76;
@@ -207,31 +258,40 @@ const UserChip = ({
 
 const DashboardNavigation = ({
   expanded,
+  isAdmin,
   onNavigate,
   onRequestExpand,
   pathname,
 }: {
   expanded: boolean;
+  isAdmin: boolean;
   onNavigate?: () => void;
   onRequestExpand?: () => void;
   pathname: string;
 }) => {
   const reduce = useReducedMotion();
 
+  const navGroups = React.useMemo(
+    () => (isAdmin ? [...NAV_GROUPS, ADMIN_NAV_GROUP] : NAV_GROUPS),
+    [isAdmin]
+  );
+
   // Derive which accordion sections should be open from the pathname, so a
   // deep link (or a back/forward navigation) keeps the matching section open.
   const activeSectionIds = React.useMemo(() => {
     const ids: string[] = [];
-    for (const item of NAV_ITEMS) {
-      if (!("children" in item)) continue;
-      const matches = (href: string) =>
-        pathname === href || pathname.startsWith(`${href}/`);
-      if (item.children.some((child) => matches(child.href))) {
-        ids.push(item.id);
+    for (const group of navGroups) {
+      for (const item of group.items) {
+        if (!("children" in item)) continue;
+        const matches = (href: string) =>
+          pathname === href || pathname.startsWith(`${href}/`);
+        if (item.children.some((child) => matches(child.href))) {
+          ids.push(item.id);
+        }
       }
     }
     return new Set(ids);
-  }, [pathname]);
+  }, [navGroups, pathname]);
 
   // Local open state — initialised from active sections, kept in sync when the
   // pathname changes. Each parent accordion item is its own Radix item keyed by
@@ -332,12 +392,13 @@ const DashboardNavigation = ({
               >
                 <ul className="space-y-1 pb-1 pt-1">
                   {item.children.map((child) => {
-                    // "/dashboard/ai-assistance" is a child as well as the
-                    // parent id, so we match it exactly (no trailing-slash
-                    // fallback) to avoid double-highlighting deeper children.
+                    // Some hrefs (ai-assistance, admin) are both a child link
+                    // and the parent of deeper routes, so we match them
+                    // exactly (no trailing-slash fallback) to avoid
+                    // double-highlighting deeper children.
                     const childActive =
                       pathname === child.href ||
-                      (child.href !== "/dashboard/ai-assistance" &&
+                      (!EXACT_MATCH_HREFS.has(child.href) &&
                         pathname.startsWith(`${child.href}/`));
 
                     return (
@@ -371,6 +432,45 @@ const DashboardNavigation = ({
     );
   };
 
+  // Render a flat link item (no children).
+  const renderLink = (item: Extract<NavItem, { href: string }>) => {
+    const active =
+      pathname === item.href || pathname.startsWith(`${item.href}/`);
+    const link = (
+      <Link
+        href={item.href}
+        onClick={() => onNavigate?.()}
+        aria-current={active ? "page" : undefined}
+        className={cn(
+          "flex h-11 w-full items-center gap-3 rounded-2xl px-3 text-sm transition-colors duration-300 hover:bg-card/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+          !expanded && "justify-center px-0",
+          active
+            ? "bg-card/70 font-medium text-foreground"
+            : "text-muted"
+        )}
+      >
+        <item.icon className="size-[1.15rem] shrink-0" aria-hidden />
+        {expanded && <span className="truncate">{item.label}</span>}
+      </Link>
+    );
+
+    return (
+      <li key={item.id}>
+        {expanded ? (
+          link
+        ) : (
+          <Tooltip
+            content={item.label}
+            side="end"
+            wrapperClassName="w-full"
+          >
+            {link}
+          </Tooltip>
+        )}
+      </li>
+    );
+  };
+
   return (
     <nav
       aria-label="بخش‌های داشبورد"
@@ -379,49 +479,28 @@ const DashboardNavigation = ({
         expanded ? "overflow-y-auto" : "overflow-visible"
       )}
     >
-      <ul className="space-y-1">
-        {NAV_ITEMS.map((item) => {
-          if ("children" in item) {
-            return renderAccordion(item);
-          }
-
-          const active =
-            pathname === item.href || pathname.startsWith(`${item.href}/`);
-          const link = (
-            <Link
-              href={item.href}
-              onClick={() => onNavigate?.()}
-              aria-current={active ? "page" : undefined}
-              className={cn(
-                "flex h-11 w-full items-center gap-3 rounded-2xl px-3 text-sm transition-colors duration-300 hover:bg-card/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
-                !expanded && "justify-center px-0",
-                active
-                  ? "bg-card/70 font-medium text-foreground"
-                  : "text-muted"
-              )}
-            >
-              <item.icon className="size-[1.15rem] shrink-0" aria-hidden />
-              {expanded && <span className="truncate">{item.label}</span>}
-            </Link>
-          );
-
-          return (
-            <li key={item.id}>
-              {expanded ? (
-                link
-              ) : (
-                <Tooltip
-                  content={item.label}
-                  side="end"
-                  wrapperClassName="w-full"
-                >
-                  {link}
-                </Tooltip>
-              )}
-            </li>
-          );
-        })}
-      </ul>
+      {navGroups.map((group, groupIndex) => (
+        <section key={group.id} aria-label={group.label ?? "میان‌برها"}>
+          {/* Group separator: a labeled heading when expanded, a hairline
+              when collapsed, nothing before the first group. */}
+          {groupIndex > 0 &&
+            (expanded && group.label ? (
+              <p
+                aria-hidden
+                className="mb-1 mt-5 truncate px-3 text-[11px] font-medium text-muted/80"
+              >
+                {group.label}
+              </p>
+            ) : (
+              <div aria-hidden className="mx-3 my-3 border-t border-line" />
+            ))}
+          <ul className="space-y-1">
+            {group.items.map((item) =>
+              "children" in item ? renderAccordion(item) : renderLink(item)
+            )}
+          </ul>
+        </section>
+      ))}
     </nav>
   );
 };
@@ -634,6 +713,7 @@ const MobileHeader = ({
 const MobileNavigationDrawer = ({
   accountTriggerRef,
   businessName,
+  isAdmin,
   menuOpen,
   onMenuToggle,
   onNavigate,
@@ -647,6 +727,7 @@ const MobileNavigationDrawer = ({
 }: {
   accountTriggerRef: React.RefObject<HTMLButtonElement>;
   businessName: string;
+  isAdmin: boolean;
   menuOpen: boolean;
   onMenuToggle: () => void;
   onNavigate: () => void;
@@ -723,6 +804,7 @@ const MobileNavigationDrawer = ({
 
               <DashboardNavigation
                 expanded
+                isAdmin={isAdmin}
                 pathname={pathname}
                 onNavigate={onNavigate}
               />
@@ -752,11 +834,13 @@ export const DashboardShell = ({
   businessName,
   email,
   fullName,
+  isAdmin = false,
 }: {
   children: React.ReactNode;
   businessName: string;
   email: string;
   fullName: string;
+  isAdmin?: boolean;
 }) => {
   // UI state stays local; session data comes from the Redux profile slice.
   const [sidebarOpen, setSidebarOpen] = React.useState(true);
@@ -990,6 +1074,7 @@ export const DashboardShell = ({
         >
           <DashboardNavigation
             expanded={sidebarOpen}
+            isAdmin={isAdmin}
             pathname={pathname}
             onNavigate={() => setDesktopProfileMenuOpen(false)}
             onRequestExpand={() => setSidebarOpen(true)}
@@ -1029,6 +1114,7 @@ export const DashboardShell = ({
             pathname={pathname}
             profile={profile}
             businessName={currentBusinessName}
+            isAdmin={isAdmin}
             menuOpen={mobileProfileMenuOpen}
             onFocusDesktopNavigation={() => desktopToggleRef.current?.focus()}
             onMenuToggle={() =>
