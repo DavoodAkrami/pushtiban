@@ -110,6 +110,19 @@ How to use:
       switch, intent toggle, similarity thresholds, match counts) applied
       by the RAG pipeline; token usage logged per AI call (chat + intent)
       and enforced before every Telegram reply
+- [x] Admin usage charts: input/output token and message usage over a week,
+      month, or year — platform-wide and per business — plus all-time input /
+      output totals, a per-business usage chart, and a global model picker
+      that pins which AI model answers customers
+- [x] Every new signup starts with 20 AI messages per month; the dashboard
+      sidebar shows how many are left (۱۷/۲۰) and a site admin can raise or
+      clear the cap per business
+- [x] Onboarding asks for the business category (industry) and stores it on
+      the profile
+- [x] Dashboard overview with real numbers: messages used vs. the monthly
+      allowance, a token usage chart (week / month / year), open
+      conversations, knowledge and Q&A counts, active flows, and a setup
+      checklist that links to whatever is still missing
 - [ ] Conversation inbox (live conversations, handoff to human)
 - [ ] Analytics dashboard (response rate, satisfaction, volumes)
 

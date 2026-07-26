@@ -29,7 +29,9 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { GlassCard } from "@/components/ui/glass-card";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { luxe } from "@/components/motion/reveal";
+import { BUSINESS_CATEGORIES } from "@/lib/business-categories";
 import { cn, fa } from "@/lib/utils";
 
 export type BotIdentity = {
@@ -74,6 +76,12 @@ const PRODUCTS = [
 ];
 
 const PRICE_FORMATTER = new Intl.NumberFormat("fa-IR");
+
+const CATEGORY_OPTIONS = BUSINESS_CATEGORIES.map((category) => ({
+  value: category.slug,
+  label: category.label,
+  description: category.description,
+}));
 
 const Slide = ({
   children,
@@ -349,7 +357,11 @@ export const OnboardingClient = ({
   initialProfile,
 }: {
   initialBot: BotIdentity | null;
-  initialProfile: { fullName: string; businessName: string };
+  initialProfile: {
+    fullName: string;
+    businessName: string;
+    businessCategory: string;
+  };
 }) => {
   const router = useRouter();
   const reduce = useReducedMotion();
@@ -368,6 +380,9 @@ export const OnboardingClient = ({
   const [fullName, setFullName] = React.useState(initialProfile.fullName);
   const [businessName, setBusinessName] = React.useState(
     initialProfile.businessName
+  );
+  const [businessCategory, setBusinessCategory] = React.useState(
+    initialProfile.businessCategory
   );
   const [profileErrors, setProfileErrors] = React.useState<
     Record<string, string>
@@ -467,6 +482,9 @@ export const OnboardingClient = ({
     if (cleanBusinessName.length < 2) {
       errors.businessName = "نام کسب‌وکارتان را وارد کنید.";
     }
+    if (!businessCategory) {
+      errors.businessCategory = "دسته کسب‌وکارتان را انتخاب کنید.";
+    }
     setProfileErrors(errors);
     if (Object.keys(errors).length > 0) return;
 
@@ -480,6 +498,7 @@ export const OnboardingClient = ({
         body: JSON.stringify({
           fullName: cleanFullName,
           businessName: cleanBusinessName,
+          businessCategory,
           telegramSkipped: flow === "skip" && !bot,
         }),
       });
@@ -864,7 +883,7 @@ export const OnboardingClient = ({
                     شما و کسب‌وکارتان را بشناسیم
                   </h1>
                   <p className="mt-3 text-sm leading-8 text-muted">
-                    این دو نام در داشبورد و پاسخ‌های پشتیبان استفاده می‌شوند و بعداً قابل ویرایش‌اند.
+                    این اطلاعات در داشبورد و پاسخ‌های پشتیبان استفاده می‌شوند و بعداً قابل ویرایش‌اند.
                   </p>
 
                   {profileError && <Alert variant="error" title={profileError} className="mt-5" />}
@@ -898,6 +917,25 @@ export const OnboardingClient = ({
                         required
                       />
                     </div>
+
+                    <Select
+                      label="کسب‌وکارتان در چه زمینه‌ای است؟"
+                      placeholder="یک دسته انتخاب کنید"
+                      searchable
+                      searchPlaceholder="جستجوی دسته…"
+                      options={CATEGORY_OPTIONS}
+                      value={businessCategory}
+                      onChange={(value) => {
+                        setBusinessCategory(value);
+                        setProfileErrors((errors) => ({
+                          ...errors,
+                          businessCategory: "",
+                        }));
+                      }}
+                      error={profileErrors.businessCategory}
+                      hint="با دانستن حوزه کارتان، پیشنهادها و پاسخ‌های پشتیبان را دقیق‌تر می‌کنیم."
+                      required
+                    />
 
                     {flow === "skip" && (
                       <Alert

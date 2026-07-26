@@ -7,6 +7,7 @@ import {
   getOpenAIClient,
   isNvidiaNimConfigured,
   isOpenAIConfigured,
+  providerForChatModel,
 } from "@/configs";
 import {
   retrieveRagContext,
@@ -314,19 +315,37 @@ export const generateTelegramAiReply = async (
 
   systemPrompt = buildEscalationSystemPrompt(systemPrompt);
 
+  // The site admin can pin one chat model in /dashboard/admin/settings. It
+  // overrides the env var for whichever provider owns that model id, and that
+  // provider is tried first; the other stays in the list as a fallback.
+  const pinnedModel = settings.chatModel.trim();
+  const pinnedProvider = providerForChatModel(pinnedModel);
+
   const providers: Provider[] = [
     {
       id: "openai",
       client: getOpenAIClient(),
-      model: process.env.TELEGRAM_AI_OPENAI_MODEL?.trim() || DEFAULT_OPENAI_MODEL,
+      model:
+        pinnedProvider === "openai"
+          ? pinnedModel
+          : process.env.TELEGRAM_AI_OPENAI_MODEL?.trim() ||
+            DEFAULT_OPENAI_MODEL,
     },
     {
       id: "nvidia-nim",
       client: getNvidiaNimClient(),
       model:
-        process.env.TELEGRAM_AI_NVIDIA_MODEL?.trim() || DEFAULT_NVIDIA_MODEL,
+        pinnedProvider === "nvidia-nim"
+          ? pinnedModel
+          : process.env.TELEGRAM_AI_NVIDIA_MODEL?.trim() ||
+            DEFAULT_NVIDIA_MODEL,
     },
   ];
+  if (pinnedProvider) {
+    providers.sort((a, b) =>
+      a.id === pinnedProvider ? -1 : b.id === pinnedProvider ? 1 : 0
+    );
+  }
 
   for (const provider of providers) {
     if (!provider.client) continue;

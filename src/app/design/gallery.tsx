@@ -59,6 +59,7 @@ import {
 import { Icon } from "@/components/ui/icon";
 import { Spinner } from "@/components/ui/spinner";
 import { GlassCard } from "@/components/ui/glass-card";
+import { Chart } from "@/components/ui/chart";
 import { fa } from "@/lib/utils";
 
 /* ---------------------------------- data --------------------------------- */
@@ -128,6 +129,21 @@ function Section({
     </section>
   );
 }
+
+const CHART_DATA = [
+  { label: "۵ مرداد", input: 12_400, output: 4_100 },
+  { label: "۶ مرداد", input: 18_900, output: 6_300 },
+  { label: "۷ مرداد", input: 9_700, output: 3_200 },
+  { label: "۸ مرداد", input: 24_100, output: 8_800 },
+  { label: "۹ مرداد", input: 21_500, output: 7_400 },
+  { label: "۱۰ مرداد", input: 30_200, output: 11_600 },
+  { label: "۱۱ مرداد", input: 27_800, output: 9_900 },
+];
+
+const CHART_SERIES = [
+  { key: "input", label: "توکن ورودی" },
+  { key: "output", label: "توکن خروجی" },
+];
 
 function Row({
   label,
@@ -804,6 +820,75 @@ function GalleryInner() {
           </div>
           <div className="sm:col-span-2">
             <SkeletonBlock />
+          </div>
+        </div>
+      </Section>
+
+      <Section
+        title="نمودار"
+        lead="نمودار مصرف بر پایه Recharts با رنگ‌های سیستم، ارقام فارسی و پشتیبانی از حالت کم‌تحرک — سطح زمانی یا ستونی، ساده یا انباشته."
+      >
+        <div className="grid max-w-4xl gap-5 lg:grid-cols-2">
+          <div className="rounded-3xl border border-line bg-surface/40 p-5">
+            <p className="mb-4 text-xs font-bold uppercase tracking-wide text-muted">
+              سطحی و انباشته
+            </p>
+            <Chart
+              data={CHART_DATA}
+              series={CHART_SERIES}
+              xKey="label"
+              stacked
+              height={230}
+              ariaLabel="نمونه نمودار سطحی مصرف توکن ورودی و خروجی در هفت روز گذشته"
+            />
+          </div>
+          <div className="rounded-3xl border border-line bg-surface/40 p-5">
+            <p className="mb-4 text-xs font-bold uppercase tracking-wide text-muted">
+              ستونی
+            </p>
+            <Chart
+              data={CHART_DATA}
+              series={CHART_SERIES}
+              xKey="label"
+              variant="bar"
+              stacked
+              height={230}
+              ariaLabel="نمونه نمودار ستونی مصرف توکن ورودی و خروجی در هفت روز گذشته"
+            />
+          </div>
+          <div className="rounded-3xl border border-line bg-surface/40 p-5">
+            <p className="mb-4 text-xs font-bold uppercase tracking-wide text-muted">
+              تک‌سری
+            </p>
+            <Chart
+              data={CHART_DATA}
+              series={[{ key: "output", label: "پیام‌ها" }]}
+              xKey="label"
+              height={230}
+              ariaLabel="نمونه نمودار تک‌سری"
+            />
+          </div>
+          <div className="rounded-3xl border border-line bg-surface/40 p-5">
+            <p className="mb-4 text-xs font-bold uppercase tracking-wide text-muted">
+              خالی و در حال بارگذاری
+            </p>
+            <Chart
+              data={[]}
+              series={CHART_SERIES}
+              xKey="label"
+              height={100}
+              ariaLabel="نمونه نمودار بدون داده"
+            />
+            <div className="mt-3">
+              <Chart
+                loading
+                data={CHART_DATA}
+                series={CHART_SERIES}
+                xKey="label"
+                height={100}
+                ariaLabel="نمونه نمودار در حال بارگذاری"
+              />
+            </div>
           </div>
         </div>
       </Section>

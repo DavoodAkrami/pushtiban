@@ -17,6 +17,8 @@ const OnboardingPage = async () => {
 
   if (!user) redirect("/auth");
 
+  // business_category ships with supabase/onboarding.sql; a missing column
+  // must not block the whole screen, so it is read separately.
   const { data: profile } = await supabase
     .from("profiles")
     .select("full_name, business_name, onboarding_completed_at")
@@ -24,6 +26,12 @@ const OnboardingPage = async () => {
     .maybeSingle();
 
   if (profile?.onboarding_completed_at) redirect("/dashboard/overview");
+
+  const { data: categoryRow } = await supabase
+    .from("profiles")
+    .select("business_category")
+    .eq("id", user.id)
+    .maybeSingle();
 
   let initialBot: BotIdentity | null = null;
   try {
@@ -59,6 +67,10 @@ const OnboardingPage = async () => {
           (typeof user.user_metadata?.business_name === "string"
             ? user.user_metadata.business_name
             : ""),
+        businessCategory:
+          typeof categoryRow?.business_category === "string"
+            ? categoryRow.business_category
+            : "",
       }}
     />
   );

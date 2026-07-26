@@ -13,6 +13,7 @@ import {
   Check,
   ChevronDown,
   ChevronsUpDown,
+  Gauge,
   GitBranch,
   Inbox,
   LayoutDashboard,
@@ -43,10 +44,11 @@ import { luxe } from "@/components/motion/reveal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
-import { cn } from "@/lib/utils";
+import { cn, fa } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import type { SessionProfile } from "@/store/slices/session-slice";
 import { useSessionProfile } from "@/store/use-session";
+import { useBusinessUsage } from "@/store/use-usage";
 
 type NavChild = {
   href: string;
@@ -505,6 +507,100 @@ const DashboardNavigation = ({
   );
 };
 
+/**
+ * Remaining AI messages this month, read from the shared usage slice. Renders
+ * nothing for accounts without a message cap (unlimited) — there is no quota to
+ * report. Collapsed sidebar shows just the remaining count with a tooltip.
+ */
+const MessageQuota = ({ expanded }: { expanded: boolean }) => {
+  const reduce = useReducedMotion();
+  const { usage } = useBusinessUsage();
+
+  if (usage === undefined) {
+    return (
+      <div className="mt-4 shrink-0">
+        <Skeleton className="h-12 w-full rounded-2xl" />
+      </div>
+    );
+  }
+
+  const limit = usage?.monthlyMessageLimit ?? null;
+  if (!usage || limit === null) return null;
+
+  const left = usage.messagesLeft ?? Math.max(0, limit - usage.monthMessages);
+  const usedRatio = limit > 0 ? Math.min(1, usage.monthMessages / limit) : 1;
+  const leftRatio = 1 - usedRatio;
+
+  const tone = usage.aiBlocked || left === 0
+    ? { bar: "bg-danger", text: "text-danger" }
+    : leftRatio <= 0.25
+      ? { bar: "bg-warning", text: "text-warning" }
+      : { bar: "bg-accent", text: "text-foreground" };
+
+  const summary = usage.aiBlocked
+    ? "دستیار این حساب توسط مدیر سایت مسدود شده است."
+    : `${fa(left)} از ${fa(limit)} پیام این ماه باقی مانده است.`;
+
+  if (!expanded) {
+    return (
+      <div className="mt-4 shrink-0">
+        <Tooltip content={summary} side="end" wrapperClassName="w-full">
+          <div
+            role="img"
+            aria-label={summary}
+            className="flex h-11 w-full flex-col items-center justify-center gap-1 rounded-2xl bg-card/40"
+          >
+            <Gauge className={cn("size-4", tone.text)} aria-hidden />
+            <span className={cn("text-[10px] font-bold tabular-nums", tone.text)}>
+              {fa(left)}
+            </span>
+          </div>
+        </Tooltip>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4 shrink-0 rounded-2xl bg-card/40 p-3">
+      <div className="flex items-center gap-2">
+        <Gauge className={cn("size-4 shrink-0", tone.text)} aria-hidden />
+        <span className="text-xs text-muted">پیام‌های این ماه</span>
+        <span
+          className={cn(
+            "ms-auto text-xs font-bold tabular-nums",
+            tone.text
+          )}
+        >
+          {fa(left)}/{fa(limit)}
+        </span>
+      </div>
+      <div
+        role="progressbar"
+        aria-label="پیام‌های مصرف‌شده این ماه"
+        aria-valuemin={0}
+        aria-valuemax={limit}
+        aria-valuenow={usage.monthMessages}
+        aria-valuetext={summary}
+        className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-line/60"
+      >
+        <motion.div
+          initial={false}
+          animate={{ width: `${Math.max(2, Math.round(usedRatio * 100))}%` }}
+          transition={reduce ? { duration: 0 } : { duration: 0.5, ease: luxe }}
+          className={cn("h-full rounded-full", tone.bar)}
+        />
+      </div>
+      <p className="mt-2 text-[11px] leading-5 text-muted">
+        {usage.aiBlocked
+          ? "دستیار مسدود است؛ با مدیر سایت تماس بگیرید."
+          : left === 0
+            ? "سقف این ماه پر شده؛ برای افزایش با ما تماس بگیرید."
+            : "سهمیه ابتدای هر ماه بازنشانی می‌شود."}
+      </p>
+    </div>
+  );
+};
+
 const AccountSection = ({
   actionsId,
   businessName,
@@ -809,6 +905,8 @@ const MobileNavigationDrawer = ({
                 onNavigate={onNavigate}
               />
 
+              <MessageQuota expanded />
+
               <AccountSection
                 actionsId="dashboard-mobile-account-actions"
                 expanded
@@ -1079,6 +1177,8 @@ export const DashboardShell = ({
             onNavigate={() => setDesktopProfileMenuOpen(false)}
             onRequestExpand={() => setSidebarOpen(true)}
           />
+
+          <MessageQuota expanded={sidebarOpen} />
 
           <AccountSection
             actionsId="dashboard-desktop-account-actions"

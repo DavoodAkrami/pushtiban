@@ -13,6 +13,7 @@ adding features or components. (Codebase is English; product copy is Persian.)
 | Primitives | Radix UI (`@radix-ui/react-dialog`, `-accordion`)   |
 | Variants   | `class-variance-authority` (CVA)                    |
 | Icons      | Lucide (`lucide-react`), via the `Icon` component   |
+| Charts     | Recharts, via the `Chart` component only            |
 | Theming    | `next-themes`, class strategy, **dark is default**  |
 | Font       | Vazirmatn variable, self-hosted (`next/font/local`) |
 | State      | **Redux Toolkit** (`@reduxjs/toolkit` + `react-redux`) |
@@ -104,6 +105,7 @@ open that page to see every component, variant, and state live.
 | `Tooltip` | `tooltip.tsx` | 4 sides, hover + focus |
 | `Skeleton`, `SkeletonText`, `SkeletonCard`, `SkeletonBlock` | `skeleton.tsx` | loading placeholders |
 | `Badge`, `Checkbox`, `Switch`, `Spinner`, `Icon` | — | atoms |
+| `Chart` | `chart.tsx` | Recharts area/bar, token colors, stacked, Persian values |
 | `GlassCard` | `glass-card.tsx` | hover lift + cursor sheen |
 | `Section`, `SectionHeading` | `section.tsx` | landing-page layout |
 | `Reveal`, `Stagger`, `WordReveal`, `Parallax` | `../motion/` | scroll/entrance motion |

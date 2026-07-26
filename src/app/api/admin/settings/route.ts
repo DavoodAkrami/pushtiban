@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { listChatModelChoices, providerForChatModel } from "@/configs";
 import { requireSiteAdmin } from "@/lib/auth/site-admin";
 import {
   DEFAULT_GLOBAL_AI_SETTINGS,
@@ -28,6 +29,7 @@ type SettingsRow = {
   chunk_match_count: number;
   qa_match_count: number;
   intent_enabled: boolean;
+  chat_model: string | null;
 };
 
 const toResponse = (row: SettingsRow) => ({
@@ -38,11 +40,13 @@ const toResponse = (row: SettingsRow) => ({
     chunkMatchCount: row.chunk_match_count,
     qaMatchCount: row.qa_match_count,
     intentEnabled: row.intent_enabled,
+    chatModel: row.chat_model?.trim() ?? "",
   },
+  models: listChatModelChoices(),
 });
 
 const SELECT_COLUMNS =
-  "ai_enabled, qa_min_similarity, chunk_min_similarity, chunk_match_count, qa_match_count, intent_enabled";
+  "ai_enabled, qa_min_similarity, chunk_min_similarity, chunk_match_count, qa_match_count, intent_enabled, chat_model";
 
 /** GET — current global AI settings (defaults when the table is missing). */
 export const GET = async () => {
@@ -61,6 +65,7 @@ export const GET = async () => {
     if (setupRequired) {
       return NextResponse.json({
         settings: DEFAULT_GLOBAL_AI_SETTINGS,
+        models: listChatModelChoices(),
         setupRequired: true,
       });
     }
@@ -68,7 +73,10 @@ export const GET = async () => {
   }
 
   if (!data) {
-    return NextResponse.json({ settings: DEFAULT_GLOBAL_AI_SETTINGS });
+    return NextResponse.json({
+      settings: DEFAULT_GLOBAL_AI_SETTINGS,
+      models: listChatModelChoices(),
+    });
   }
   return NextResponse.json(toResponse(data as SettingsRow));
 };
@@ -80,6 +88,7 @@ type SettingsBody = {
   chunkMatchCount?: unknown;
   qaMatchCount?: unknown;
   intentEnabled?: unknown;
+  chatModel?: unknown;
 };
 
 const parseRatio = (value: unknown): number | undefined =>
@@ -108,7 +117,18 @@ export const PUT = async (request: Request) => {
     return jsonError("درخواست قابل خواندن نیست.", 400);
   }
 
-  const update: Record<string, number | boolean> = {};
+  const update: Record<string, number | boolean | string> = {};
+  if ("chatModel" in body) {
+    if (typeof body.chatModel !== "string") {
+      return jsonError("مدل انتخاب‌شده معتبر نیست.", 400);
+    }
+    const chatModel = body.chatModel.trim();
+    // Empty = hand the choice back to the env var / built-in default.
+    if (chatModel && !providerForChatModel(chatModel)) {
+      return jsonError("این مدل در فهرست مدل‌های پشتیبانی‌شده نیست.", 400);
+    }
+    update.chat_model = chatModel;
+  }
   if ("aiEnabled" in body) {
     if (typeof body.aiEnabled !== "boolean") return jsonError("مقدار کلید هوش مصنوعی معتبر نیست.", 400);
     update.ai_enabled = body.aiEnabled;

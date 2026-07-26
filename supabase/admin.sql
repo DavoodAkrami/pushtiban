@@ -10,9 +10,11 @@
 --      (kill switch, retrieval similarity thresholds, match counts)
 --   4. ai_usage_log — one row per AI call (chat / intent) with token counts
 --   5. ai_business_limits — per-business monthly token / message caps and an
---      admin-side block switch
+--      admin-side block switch, seeded with 20 messages/month on signup
 --   6. ai_usage_totals(uuid, timestamptz) / ai_usage_summary(timestamptz)
 --      — aggregation RPCs used for limit checks and the admin dashboard
+--   7. ai_usage_series(text, timestamptz, uuid) — bucketed time series
+--      (per day or per month) behind the admin and overview usage charts
 --
 -- AFTER RUNNING: promote yourself to site admin with (replace the email):
 --   update public.profiles set is_admin = true where email = 'you@example.com';
@@ -64,8 +66,15 @@ create table if not exists public.ai_global_settings (
   -- When false, the intent-classification LLM call is skipped (cheaper,
   -- but no category boost and no query condensing).
   intent_enabled        boolean not null default true,
+  -- OpenAI chat model for customer replies. Empty string = use the
+  -- TELEGRAM_AI_OPENAI_MODEL env var / built-in default.
+  chat_model            text    not null default '',
   updated_at            timestamptz not null default now()
 );
+
+-- Added after the table shipped; harmless on fresh installs.
+alter table public.ai_global_settings
+  add column if not exists chat_model text not null default '';
 
 comment on table public.ai_global_settings is
   'Singleton row of platform-wide AI settings, managed from /dashboard/admin.';
@@ -122,6 +131,7 @@ create policy "AI usage log: admin read"
 -- 5) Per-business limits -------------------------------------------------------
 -- NULL limit = unlimited. ai_blocked lets the admin cut a business off
 -- regardless of the owner's own assistant toggle.
+-- Every new signup starts with a 20-message monthly allowance (trigger below).
 
 create table if not exists public.ai_business_limits (
   user_id               uuid primary key references auth.users (id) on delete cascade,
@@ -147,50 +157,146 @@ create policy "AI business limits: admin read"
   on public.ai_business_limits for select
   using (public.is_site_admin());
 
+-- Every new signup starts with a 20-message monthly allowance. The owner sees
+-- what is left in the dashboard sidebar; a site admin can raise or clear it
+-- from /dashboard/admin/businesses (empty field = unlimited).
+create or replace function public.ensure_default_ai_limits()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.ai_business_limits (user_id, monthly_message_limit)
+  values (new.id, 20)
+  on conflict (user_id) do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created_ai_limits on auth.users;
+create trigger on_auth_user_created_ai_limits
+  after insert on auth.users
+  for each row execute function public.ensure_default_ai_limits();
+
+-- Backfill accounts that signed up before the trigger existed. Site admins are
+-- skipped on purpose so running this file never caps the operator's own bot.
+insert into public.ai_business_limits (user_id, monthly_message_limit)
+select u.id, 20
+from auth.users u
+where not exists (
+        select 1 from public.ai_business_limits l where l.user_id = u.id
+      )
+  and not exists (
+        select 1 from public.profiles p where p.id = u.id and p.is_admin
+      )
+on conflict (user_id) do nothing;
+
 -- 6) Usage aggregation RPCs ----------------------------------------------------
+-- Token counts are reported separately as input (prompt) and output
+-- (completion) so the admin console can show both. Dropped first because the
+-- return type changed after these functions first shipped.
 
 -- Totals for one business, optionally since a timestamp (NULL = all time).
 -- Used server-side for the limit check before answering a customer.
-create or replace function public.ai_usage_totals(
+drop function if exists public.ai_usage_totals(uuid, timestamptz);
+create function public.ai_usage_totals(
   for_user uuid,
   since    timestamptz default null
 )
-returns table (total_tokens bigint, chat_count bigint)
+returns table (
+  prompt_tokens     bigint,
+  completion_tokens bigint,
+  total_tokens      bigint,
+  chat_count        bigint
+)
 language sql
 stable
 security definer
 set search_path = public
 as $$
   select
-    coalesce(sum(total_tokens), 0)::bigint,
-    coalesce(count(*) filter (where kind = 'chat'), 0)::bigint
-  from public.ai_usage_log
-  where user_id = for_user
-    and (since is null or created_at >= since);
+    coalesce(sum(l.prompt_tokens), 0)::bigint,
+    coalesce(sum(l.completion_tokens), 0)::bigint,
+    coalesce(sum(l.total_tokens), 0)::bigint,
+    coalesce(count(*) filter (where l.kind = 'chat'), 0)::bigint
+  from public.ai_usage_log l
+  where l.user_id = for_user
+    and (since is null or l.created_at >= since);
 $$;
 
 -- Per-business totals across the platform (NULL = all time). Feeds the
 -- admin dashboard table.
-create or replace function public.ai_usage_summary(
+drop function if exists public.ai_usage_summary(timestamptz);
+create function public.ai_usage_summary(
   since timestamptz default null
 )
-returns table (user_id uuid, total_tokens bigint, chat_count bigint)
+returns table (
+  user_id           uuid,
+  prompt_tokens     bigint,
+  completion_tokens bigint,
+  total_tokens      bigint,
+  chat_count        bigint
+)
 language sql
 stable
 security definer
 set search_path = public
 as $$
   select
-    user_id,
-    coalesce(sum(total_tokens), 0)::bigint,
-    coalesce(count(*) filter (where kind = 'chat'), 0)::bigint
-  from public.ai_usage_log
-  where since is null or created_at >= since
-  group by user_id;
+    l.user_id,
+    coalesce(sum(l.prompt_tokens), 0)::bigint,
+    coalesce(sum(l.completion_tokens), 0)::bigint,
+    coalesce(sum(l.total_tokens), 0)::bigint,
+    coalesce(count(*) filter (where l.kind = 'chat'), 0)::bigint
+  from public.ai_usage_log l
+  where since is null or l.created_at >= since
+  group by l.user_id;
+$$;
+
+-- 7) Usage time series ---------------------------------------------------------
+-- One row per non-empty bucket, ordered oldest first. `bucket` is 'day' or
+-- 'month' (anything else falls back to 'day'); `for_user` NULL means the whole
+-- platform. Callers fill the empty buckets — the chart needs a continuous axis
+-- and Postgres should not generate rows that carry no data.
+drop function if exists public.ai_usage_series(text, timestamptz, uuid);
+create function public.ai_usage_series(
+  bucket   text,
+  since    timestamptz,
+  for_user uuid default null
+)
+returns table (
+  bucket_start      timestamptz,
+  prompt_tokens     bigint,
+  completion_tokens bigint,
+  total_tokens      bigint,
+  chat_count        bigint
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    date_trunc(
+      case when bucket = 'month' then 'month' else 'day' end,
+      l.created_at at time zone 'UTC'
+    ) at time zone 'UTC' as bucket_start,
+    coalesce(sum(l.prompt_tokens), 0)::bigint,
+    coalesce(sum(l.completion_tokens), 0)::bigint,
+    coalesce(sum(l.total_tokens), 0)::bigint,
+    coalesce(count(*) filter (where l.kind = 'chat'), 0)::bigint
+  from public.ai_usage_log l
+  where l.created_at >= since
+    and (for_user is null or l.user_id = for_user)
+  group by 1
+  order by 1;
 $$;
 
 -- Server-only: the app calls these with the service role.
 revoke execute on function public.ai_usage_totals(uuid, timestamptz) from public;
 revoke execute on function public.ai_usage_summary(timestamptz) from public;
+revoke execute on function public.ai_usage_series(text, timestamptz, uuid) from public;
 grant execute on function public.ai_usage_totals(uuid, timestamptz) to service_role;
 grant execute on function public.ai_usage_summary(timestamptz) to service_role;
+grant execute on function public.ai_usage_series(text, timestamptz, uuid) to service_role;

@@ -10,7 +10,11 @@
 
 alter table public.profiles
   add column if not exists onboarding_completed_at timestamptz,
-  add column if not exists telegram_skipped_at timestamptz;
+  add column if not exists telegram_skipped_at timestamptz,
+  add column if not exists business_category text not null default '';
+
+comment on column public.profiles.business_category is
+  'Business category picked during onboarding (slug from src/lib/business-categories.ts). Empty for accounts onboarded before the question existed.';
 
 create table if not exists public.telegram_connections (
   id               uuid primary key default gen_random_uuid(),

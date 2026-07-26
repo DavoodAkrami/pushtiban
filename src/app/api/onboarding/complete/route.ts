@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { isBusinessCategory } from "@/lib/business-categories";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -35,17 +36,23 @@ export const POST = async (request: NextRequest) => {
 
   let fullName = "";
   let businessName = "";
+  let businessCategory = "";
   let telegramSkipped = false;
 
   try {
     const body = (await request.json()) as {
       fullName?: unknown;
       businessName?: unknown;
+      businessCategory?: unknown;
       telegramSkipped?: unknown;
     };
     fullName = typeof body.fullName === "string" ? body.fullName.trim() : "";
     businessName =
       typeof body.businessName === "string" ? body.businessName.trim() : "";
+    businessCategory =
+      typeof body.businessCategory === "string"
+        ? body.businessCategory.trim()
+        : "";
     telegramSkipped = body.telegramSkipped === true;
   } catch {
     return jsonError("نام و نام کسب‌وکار را دوباره وارد کنید.", 400);
@@ -57,6 +64,9 @@ export const POST = async (request: NextRequest) => {
   if (businessName.length < 2 || businessName.length > 100) {
     return jsonError("نام کسب‌وکار باید بین ۲ تا ۱۰۰ کاراکتر باشد.", 400);
   }
+  if (!isBusinessCategory(businessCategory)) {
+    return jsonError("دسته کسب‌وکار را از فهرست انتخاب کنید.", 400);
+  }
 
   try {
     const admin = createAdminClient();
@@ -65,6 +75,7 @@ export const POST = async (request: NextRequest) => {
         ...user.user_metadata,
         full_name: fullName,
         business_name: businessName,
+        business_category: businessCategory,
       },
     });
 
@@ -87,6 +98,21 @@ export const POST = async (request: NextRequest) => {
       return jsonError(
         "ذخیره اطلاعات کسب‌وکار انجام نشد؛ تنظیمات پایگاه‌داده را بررسی کنید.",
         500
+      );
+    }
+
+    // Written separately so an environment that has not run the latest
+    // supabase/onboarding.sql (no business_category column) still completes
+    // onboarding — the category is also kept in user metadata above.
+    const { error: categoryError } = await admin
+      .from("profiles")
+      .update({ business_category: businessCategory })
+      .eq("id", user.id);
+
+    if (categoryError) {
+      console.warn(
+        "profiles.business_category not saved; run supabase/onboarding.sql:",
+        categoryError.message
       );
     }
   } catch {

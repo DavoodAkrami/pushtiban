@@ -3,9 +3,12 @@
 import * as React from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
   Ban,
   BarChart3,
   Coins,
+  Cpu,
   MessageSquareText,
   Pencil,
   RefreshCw,
@@ -15,8 +18,20 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { luxe } from "@/components/motion/reveal";
+import {
+  faNumber,
+  faTokens,
+  RANGE_HINTS,
+  TOKEN_CHART_SERIES,
+  toTokenChartData,
+  UsageFigure,
+  UsageRangeTabs,
+  useUsageSeries,
+  type UsageRange,
+} from "@/components/dashboard/usage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Chart } from "@/components/ui/chart";
 import { Switch } from "@/components/ui/checkbox";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
@@ -28,6 +43,7 @@ import {
   ModalHeader,
   ModalTitle,
 } from "@/components/ui/modal";
+import { Select, type SelectOption } from "@/components/ui/select";
 import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
@@ -45,8 +61,12 @@ type Business = {
   isAdmin: boolean;
   createdAt: string;
   aiEnabled: boolean;
+  monthPromptTokens: number;
+  monthCompletionTokens: number;
   monthTokens: number;
   monthMessages: number;
+  totalPromptTokens: number;
+  totalCompletionTokens: number;
   totalTokens: number;
   totalMessages: number;
   monthlyTokenLimit: number | null;
@@ -55,8 +75,12 @@ type Business = {
 };
 
 type PlatformTotals = {
+  monthPromptTokens: number;
+  monthCompletionTokens: number;
   monthTokens: number;
   monthMessages: number;
+  totalPromptTokens: number;
+  totalCompletionTokens: number;
   totalTokens: number;
   totalMessages: number;
 };
@@ -68,13 +92,18 @@ type GlobalSettings = {
   chunkMatchCount: number;
   qaMatchCount: number;
   intentEnabled: boolean;
+  chatModel: string;
 };
 
-/** Compact Persian token display: ۱٬۲۳۴ / ۱۲٫۳ هزار / ۴٫۵ میلیون. */
-const faTokens = (value: number): string => {
-  if (value >= 1_000_000) return `${fa((value / 1_000_000).toFixed(1))} میلیون`;
-  if (value >= 10_000) return `${fa((value / 1_000).toFixed(1))} هزار`;
-  return fa(value.toLocaleString("en-US").replace(/,/g, "٬"));
+type ModelChoice = {
+  model: string;
+  provider: "openai" | "nvidia-nim";
+  configured: boolean;
+};
+
+const PROVIDER_LABELS: Record<ModelChoice["provider"], string> = {
+  openai: "OpenAI / متیس",
+  "nvidia-nim": "NVIDIA NIM",
 };
 
 // ---------------------------------------------------------------------------
@@ -268,6 +297,71 @@ const StatCard = ({
   </div>
 );
 
+/**
+ * Token chart with its own range switcher. Used both for the whole platform
+ * and, inside the business modal, for a single account.
+ */
+const UsageChartCard = ({
+  target,
+  title,
+  description,
+  height = 280,
+}: {
+  target: { scope: "platform" } | { scope: "business"; userId: string };
+  title: string;
+  description: string;
+  height?: number;
+}) => {
+  const [range, setRange] = React.useState<UsageRange>("week");
+  const { points, totals, loading } = useUsageSeries(target, range);
+
+  return (
+    <section
+      aria-label={title}
+      className="rounded-3xl border border-line bg-surface/40 p-5 sm:p-6"
+    >
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <h2 className="text-sm font-bold">{title}</h2>
+          <p className="mt-1 text-xs leading-6 text-muted">
+            {description} — {RANGE_HINTS[range]}
+          </p>
+        </div>
+        <UsageRangeTabs value={range} onChange={setRange} disabled={loading} />
+      </div>
+
+      <dl className="mt-5 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
+        <UsageFigure
+          label="توکن ورودی"
+          value={faTokens(totals.promptTokens)}
+          tone="accent"
+        />
+        <UsageFigure
+          label="توکن خروجی"
+          value={faTokens(totals.completionTokens)}
+          tone="success"
+        />
+        <UsageFigure label="مجموع توکن" value={faTokens(totals.totalTokens)} />
+        <UsageFigure label="پیام‌ها" value={faNumber(totals.messages)} />
+      </dl>
+
+      <div className="mt-6">
+        <Chart
+          data={toTokenChartData(points)}
+          series={TOKEN_CHART_SERIES}
+          xKey="label"
+          stacked
+          height={height}
+          loading={loading}
+          formatValue={faTokens}
+          emptyText="در این بازه مصرفی ثبت نشده است."
+          ariaLabel={`${title} — توکن ورودی و خروجی در ${RANGE_HINTS[range]}`}
+        />
+      </div>
+    </section>
+  );
+};
+
 export const AdminUsagePanel = () => {
   const { businesses, totals, setupRequired, loading, refreshing, load } =
     useAdminBusinesses();
@@ -302,14 +396,21 @@ export const AdminUsagePanel = () => {
 
       <div className="space-y-8">
         <section
-          aria-label="مصرف کل پلتفرم"
+          aria-label="مصرف این ماه در کل پلتفرم"
           className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
         >
           <StatCard
-            label="توکن این ماه"
-            value={faTokens(totals?.monthTokens ?? 0)}
-            hint="مجموع همه کسب‌وکارها"
-            icon={Coins}
+            label="توکن ورودی این ماه"
+            value={faTokens(totals?.monthPromptTokens ?? 0)}
+            hint="پرسش‌ها و دانش ارسال‌شده به مدل"
+            icon={ArrowUpFromLine}
+            loading={loading}
+          />
+          <StatCard
+            label="توکن خروجی این ماه"
+            value={faTokens(totals?.monthCompletionTokens ?? 0)}
+            hint="پاسخ‌های تولیدشده توسط مدل"
+            icon={ArrowDownToLine}
             loading={loading}
           />
           <StatCard
@@ -320,19 +421,51 @@ export const AdminUsagePanel = () => {
             loading={loading}
           />
           <StatCard
-            label="توکن کل"
-            value={faTokens(totals?.totalTokens ?? 0)}
-            hint="از ابتدای راه‌اندازی"
-            icon={Coins}
-            loading={loading}
-          />
-          <StatCard
             label="کسب‌وکارها"
             value={fa(businesses.length)}
             hint="حساب‌های ثبت‌نام‌شده"
             icon={Store}
             loading={loading}
           />
+        </section>
+
+        <UsageChartCard
+          target={{ scope: "platform" }}
+          title="روند مصرف توکن"
+          description="مجموع همه کسب‌وکارها"
+        />
+
+        <section
+          aria-labelledby="admin-alltime-heading"
+          className="rounded-3xl border border-line bg-surface/40 p-5 sm:p-6"
+        >
+          <h2
+            id="admin-alltime-heading"
+            className="flex items-center gap-2.5 text-sm font-bold"
+          >
+            <Coins className="size-4 text-muted" aria-hidden />
+            از ابتدای راه‌اندازی
+          </h2>
+          <dl className="mt-5 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
+            <UsageFigure
+              label="توکن ورودی"
+              value={faTokens(totals?.totalPromptTokens ?? 0)}
+              tone="accent"
+            />
+            <UsageFigure
+              label="توکن خروجی"
+              value={faTokens(totals?.totalCompletionTokens ?? 0)}
+              tone="success"
+            />
+            <UsageFigure
+              label="مجموع توکن"
+              value={faTokens(totals?.totalTokens ?? 0)}
+            />
+            <UsageFigure
+              label="پیام‌ها"
+              value={faNumber(totals?.totalMessages ?? 0)}
+            />
+          </dl>
         </section>
 
         <section aria-labelledby="admin-top-usage-heading">
@@ -527,8 +660,8 @@ const LimitsModal = ({
             label="سقف پیام در ماه"
             hint={
               business && business.monthMessages > 0
-                ? `پیام‌های این ماه: ${fa(business.monthMessages)}`
-                : "خالی = نامحدود"
+                ? `پیام‌های این ماه: ${fa(business.monthMessages)} — هر ثبت‌نام با ۲۰ پیام شروع می‌شود`
+                : "خالی = نامحدود؛ هر ثبت‌نام با ۲۰ پیام در ماه شروع می‌شود"
             }
             inputMode="numeric"
             value={messageLimit}
@@ -572,12 +705,78 @@ const LimitsModal = ({
 // Businesses panel — /dashboard/admin/businesses
 // ---------------------------------------------------------------------------
 
+/** Per-business usage: input/output tokens over a switchable range. */
+const BusinessUsageModal = ({
+  business,
+  onOpenChange,
+}: {
+  business: Business | null;
+  onOpenChange: (open: boolean) => void;
+}) => (
+  <Modal open={business !== null} onOpenChange={onOpenChange}>
+    <ModalContent size="lg">
+      <ModalHeader>
+        <ModalTitle>مصرف کسب‌وکار</ModalTitle>
+        <ModalDescription>
+          {business?.businessName || business?.email || ""} — توکن ورودی و
+          خروجی این حساب در بازه انتخابی.
+        </ModalDescription>
+      </ModalHeader>
+
+      {business && (
+        <div className="space-y-4">
+          <UsageChartCard
+            target={{ scope: "business", userId: business.id }}
+            title="روند مصرف توکن"
+            description="فقط این کسب‌وکار"
+            height={230}
+          />
+          <section
+            aria-label="مصرف کل این کسب‌وکار"
+            className="rounded-3xl border border-line bg-background/40 p-5"
+          >
+            <h3 className="text-sm font-bold">از ابتدای راه‌اندازی</h3>
+            <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
+              <UsageFigure
+                label="توکن ورودی"
+                value={faTokens(business.totalPromptTokens)}
+                tone="accent"
+              />
+              <UsageFigure
+                label="توکن خروجی"
+                value={faTokens(business.totalCompletionTokens)}
+                tone="success"
+              />
+              <UsageFigure
+                label="مجموع توکن"
+                value={faTokens(business.totalTokens)}
+              />
+              <UsageFigure
+                label="پیام‌ها"
+                value={faNumber(business.totalMessages)}
+              />
+            </dl>
+          </section>
+        </div>
+      )}
+
+      <ModalFooter>
+        <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+          بستن
+        </Button>
+      </ModalFooter>
+    </ModalContent>
+  </Modal>
+);
+
 const BusinessRow = ({
   business,
   onEditLimits,
+  onViewUsage,
 }: {
   business: Business;
   onEditLimits: () => void;
+  onViewUsage: () => void;
 }) => {
   const reduce = useReducedMotion();
   const hasLimit =
@@ -622,22 +821,47 @@ const BusinessRow = ({
           </p>
         </div>
 
-        <Tooltip content="ویرایش محدودیت‌ها" side="top">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            onClick={onEditLimits}
-            aria-label={`ویرایش محدودیت‌های ${business.businessName || business.email}`}
-          >
-            <Pencil className="size-4" aria-hidden />
-          </Button>
-        </Tooltip>
+        <div className="flex shrink-0 items-center gap-1">
+          <Tooltip content="نمودار مصرف" side="top">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              onClick={onViewUsage}
+              aria-label={`نمودار مصرف ${business.businessName || business.email}`}
+            >
+              <BarChart3 className="size-4" aria-hidden />
+            </Button>
+          </Tooltip>
+          <Tooltip content="ویرایش محدودیت‌ها" side="top">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              onClick={onEditLimits}
+              aria-label={`ویرایش محدودیت‌های ${business.businessName || business.email}`}
+            >
+              <Pencil className="size-4" aria-hidden />
+            </Button>
+          </Tooltip>
+        </div>
       </div>
 
-      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-4">
+      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-3 lg:grid-cols-5">
         <div>
-          <dt className="text-muted">توکن این ماه</dt>
+          <dt className="text-muted">توکن ورودی این ماه</dt>
+          <dd className="mt-0.5 font-medium tabular-nums">
+            {faTokens(business.monthPromptTokens)}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted">توکن خروجی این ماه</dt>
+          <dd className="mt-0.5 font-medium tabular-nums">
+            {faTokens(business.monthCompletionTokens)}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted">مجموع توکن این ماه</dt>
           <dd className="mt-0.5 font-medium tabular-nums">
             {faTokens(business.monthTokens)}
             {business.monthlyTokenLimit !== null && (
@@ -656,12 +880,6 @@ const BusinessRow = ({
                 {" "}از {fa(business.monthlyMessageLimit)}
               </span>
             )}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-muted">توکن کل</dt>
-          <dd className="mt-0.5 font-medium tabular-nums">
-            {faTokens(business.totalTokens)}
           </dd>
         </div>
         <div>
@@ -692,6 +910,9 @@ export const AdminBusinessesPanel = () => {
   } = useAdminBusinesses();
   const [query, setQuery] = React.useState("");
   const [editingBusiness, setEditingBusiness] = React.useState<Business | null>(
+    null
+  );
+  const [usageBusiness, setUsageBusiness] = React.useState<Business | null>(
     null
   );
 
@@ -769,6 +990,7 @@ export const AdminBusinessesPanel = () => {
                 key={business.id}
                 business={business}
                 onEditLimits={() => setEditingBusiness(business)}
+                onViewUsage={() => setUsageBusiness(business)}
               />
             ))}
           </AnimatePresence>
@@ -782,6 +1004,13 @@ export const AdminBusinessesPanel = () => {
         }}
         onSaved={applyLimits}
       />
+
+      <BusinessUsageModal
+        business={usageBusiness}
+        onOpenChange={(open) => {
+          if (!open) setUsageBusiness(null);
+        }}
+      />
     </>
   );
 };
@@ -790,9 +1019,16 @@ export const AdminBusinessesPanel = () => {
 // Global AI settings panel — /dashboard/admin/settings
 // ---------------------------------------------------------------------------
 
+const DEFAULT_MODEL_OPTION: SelectOption = {
+  value: "",
+  label: "پیش‌فرض سرور",
+  description: "همان مدلی که در متغیرهای محیطی تعریف شده است",
+};
+
 export const AdminSettingsPanel = () => {
   const { toast } = useToast();
   const [settings, setSettings] = React.useState<GlobalSettings | null>(null);
+  const [models, setModels] = React.useState<ModelChoice[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [setupRequired, setSetupRequired] = React.useState(false);
   const [draft, setDraft] = React.useState<GlobalSettings | null>(null);
@@ -808,11 +1044,13 @@ export const AdminSettingsPanel = () => {
         const res = await fetch("/api/admin/settings");
         const data = (await res.json()) as {
           settings?: GlobalSettings;
+          models?: ModelChoice[];
           setupRequired?: boolean;
           error?: string;
         };
         if (!res.ok) throw new Error(data.error || "دریافت تنظیمات ناموفق بود.");
         if (data.settings) setSettings(data.settings);
+        setModels(data.models ?? []);
         setSetupRequired(data.setupRequired === true);
       } catch (error) {
         toast({
@@ -873,6 +1111,7 @@ export const AdminSettingsPanel = () => {
         body: JSON.stringify({
           aiEnabled: draft.aiEnabled,
           intentEnabled: draft.intentEnabled,
+          chatModel: draft.chatModel,
           qaMinSimilarity,
           chunkMinSimilarity,
           chunkMatchCount,
@@ -950,6 +1189,48 @@ export const AdminSettingsPanel = () => {
                   setDraft({ ...draft, intentEnabled: e.target.checked })
                 }
                 aria-label="روشن یا خاموش کردن تشخیص موضوع"
+              />
+            </div>
+          </section>
+
+          <section
+            aria-labelledby="admin-model-heading"
+            className="rounded-3xl border border-line bg-surface/40 p-6"
+          >
+            <h2
+              id="admin-model-heading"
+              className="flex items-center gap-2.5 text-sm font-bold"
+            >
+              <Cpu className="size-4 text-muted" aria-hidden />
+              مدل پاسخ‌دهی به مشتری
+            </h2>
+            <p className="mt-1 text-xs leading-6 text-muted">
+              مدلی که برای همه کسب‌وکارها پاسخ مشتری را می‌نویسد. با انتخاب
+              «پیش‌فرض سرور» همان مدل تعریف‌شده در متغیرهای محیطی استفاده
+              می‌شود. مدل‌های بدون کلید API در این محیط غیرفعال‌اند.
+            </p>
+            <div className="mt-5 max-w-md">
+              <Select
+                label="مدل هوش مصنوعی"
+                searchable
+                value={draft.chatModel}
+                onChange={(value) => setDraft({ ...draft, chatModel: value })}
+                hint={
+                  draft.chatModel
+                    ? "این مدل روی همه پاسخ‌های تلگرام اعمال می‌شود."
+                    : "بدون انتخاب، ترتیب پیش‌فرض ارائه‌دهنده‌ها حفظ می‌شود."
+                }
+                options={[
+                  DEFAULT_MODEL_OPTION,
+                  ...models.map((choice) => ({
+                    value: choice.model,
+                    label: choice.model,
+                    description: choice.configured
+                      ? PROVIDER_LABELS[choice.provider]
+                      : `${PROVIDER_LABELS[choice.provider]} — کلید API تنظیم نشده`,
+                    disabled: !choice.configured,
+                  })),
+                ]}
               />
             </div>
           </section>

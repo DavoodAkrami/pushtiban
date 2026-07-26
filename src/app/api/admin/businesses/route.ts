@@ -25,8 +25,12 @@ export type AdminBusinessRow = {
   isAdmin: boolean;
   createdAt: string;
   aiEnabled: boolean;
+  monthPromptTokens: number;
+  monthCompletionTokens: number;
   monthTokens: number;
   monthMessages: number;
+  totalPromptTokens: number;
+  totalCompletionTokens: number;
   totalTokens: number;
   totalMessages: number;
   monthlyTokenLimit: number | null;
@@ -91,7 +95,13 @@ export const GET = async () => {
     });
   }
 
-  type UsageRow = { user_id: string; total_tokens: number; chat_count: number };
+  type UsageRow = {
+    user_id: string;
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    chat_count: number;
+  };
   const monthByUser = new Map<string, UsageRow>();
   for (const row of (monthRes.data ?? []) as UsageRow[]) {
     monthByUser.set(row.user_id, row);
@@ -113,8 +123,12 @@ export const GET = async () => {
       isAdmin: profile.is_admin === true,
       createdAt: (profile.created_at as string) ?? "",
       aiEnabled: settingsByUser.get(profile.id as string) ?? false,
+      monthPromptTokens: Number(month?.prompt_tokens ?? 0),
+      monthCompletionTokens: Number(month?.completion_tokens ?? 0),
       monthTokens: Number(month?.total_tokens ?? 0),
       monthMessages: Number(month?.chat_count ?? 0),
+      totalPromptTokens: Number(total?.prompt_tokens ?? 0),
+      totalCompletionTokens: Number(total?.completion_tokens ?? 0),
       totalTokens: Number(total?.total_tokens ?? 0),
       totalMessages: Number(total?.chat_count ?? 0),
       monthlyTokenLimit: limits?.tokenLimit ?? null,
@@ -123,18 +137,20 @@ export const GET = async () => {
     };
   });
 
-  const platformMonthTokens = businesses.reduce((sum, b) => sum + b.monthTokens, 0);
-  const platformMonthMessages = businesses.reduce((sum, b) => sum + b.monthMessages, 0);
-  const platformTotalTokens = businesses.reduce((sum, b) => sum + b.totalTokens, 0);
-  const platformTotalMessages = businesses.reduce((sum, b) => sum + b.totalMessages, 0);
+  const sum = (pick: (row: AdminBusinessRow) => number) =>
+    businesses.reduce((carry, row) => carry + pick(row), 0);
 
   return NextResponse.json({
     businesses,
     totals: {
-      monthTokens: platformMonthTokens,
-      monthMessages: platformMonthMessages,
-      totalTokens: platformTotalTokens,
-      totalMessages: platformTotalMessages,
+      monthPromptTokens: sum((b) => b.monthPromptTokens),
+      monthCompletionTokens: sum((b) => b.monthCompletionTokens),
+      monthTokens: sum((b) => b.monthTokens),
+      monthMessages: sum((b) => b.monthMessages),
+      totalPromptTokens: sum((b) => b.totalPromptTokens),
+      totalCompletionTokens: sum((b) => b.totalCompletionTokens),
+      totalTokens: sum((b) => b.totalTokens),
+      totalMessages: sum((b) => b.totalMessages),
     },
   });
 };
