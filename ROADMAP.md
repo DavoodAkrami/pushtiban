@@ -123,6 +123,10 @@ How to use:
       allowance, a token usage chart (week / month / year), open
       conversations, knowledge and Q&A counts, active flows, and a setup
       checklist that links to whatever is still missing
+- [ ] Bot keyboard menu: a bot-wide set of always-visible buttons at the bottom
+      of the Telegram chat, laid out in rows at /dashboard/menu, each button
+      wired to an existing flow or prepared reply, plus a per-message control
+      in the flow builder to show or hide the menu
 - [ ] Conversation inbox (live conversations, handoff to human)
 - [ ] Analytics dashboard (response rate, satisfaction, volumes)
 

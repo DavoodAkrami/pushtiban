@@ -42,10 +42,12 @@ import {
   FLOW_BACK_BUTTON_LABEL_MAX_LENGTH,
   FLOW_BUTTONS_PER_NODE_MAX,
   DEFAULT_FLOW_BACK_BUTTON_LABEL,
+  DEFAULT_FLOW_KEYBOARD_ACTION,
   FLOW_NODE_MESSAGE_MAX_LENGTH,
   FLOW_URL_MAX_LENGTH,
   type AutomationFlowDetail,
   type FlowButtonActionType,
+  type FlowKeyboardAction,
 } from "@/lib/flows";
 import { cn, fa } from "@/lib/utils";
 import { useAppDispatch } from "@/store/hooks";
@@ -66,6 +68,7 @@ type DraftNode = {
   replaceOnButtonClick: boolean;
   backButtonEnabled: boolean;
   backButtonLabel: string;
+  keyboardAction: FlowKeyboardAction;
   buttons: DraftButton[];
 };
 
@@ -94,6 +97,7 @@ const flowToDraft = (flow: AutomationFlowDetail): DraftNode[] => {
       backButtonEnabled: node.backButtonEnabled,
       backButtonLabel:
         node.backButtonLabel || DEFAULT_FLOW_BACK_BUTTON_LABEL,
+      keyboardAction: node.keyboardAction ?? DEFAULT_FLOW_KEYBOARD_ACTION,
       buttons: [],
     } satisfies DraftNode;
   });
@@ -124,6 +128,7 @@ const draftToApiNodes = (nodes: DraftNode[]) => {
     backButtonEnabled: node.backButtonEnabled,
     backButtonLabel:
       node.backButtonLabel.trim() || DEFAULT_FLOW_BACK_BUTTON_LABEL,
+    keyboardAction: node.keyboardAction,
     buttons: node.buttons.map((button, position) => ({
       label: button.label.trim(),
       actionType: button.actionType,
@@ -165,6 +170,24 @@ const actionLabels: Record<FlowButtonActionType, string> = {
   url: "لینک",
   end: "پایان",
 };
+
+const keyboardActionOptions: SelectOption[] = [
+  {
+    value: "inherit",
+    label: "بدون تغییر",
+    description: "منو همان‌طور که هست روی صفحهٔ مخاطب می‌ماند",
+  },
+  {
+    value: "show",
+    label: "نمایش منو",
+    description: "منوی ربات را پایین صفحه برمی‌گرداند",
+  },
+  {
+    value: "remove",
+    label: "برداشتن منو",
+    description: "منو را پنهان می‌کند تا مخاطب فقط تایپ کند",
+  },
+];
 
 const ConversationNode = React.memo(
   ({ data, selected }: NodeProps<ConversationCanvasNode>) => {
@@ -213,7 +236,9 @@ const ConversationNode = React.memo(
         {draft.messageText.trim() || "متن این پیام را از پنل ویرایش بنویسید."}
       </p>
 
-      {(draft.replaceOnButtonClick || draft.backButtonEnabled) && (
+      {(draft.replaceOnButtonClick ||
+        draft.backButtonEnabled ||
+        draft.keyboardAction !== "inherit") && (
         <div className="mt-3 flex flex-wrap gap-1.5 text-[11px] text-muted">
           {draft.replaceOnButtonClick && (
             <span className="rounded-full bg-accent/10 px-2 py-1 text-accent">
@@ -223,6 +248,16 @@ const ConversationNode = React.memo(
           {draft.backButtonEnabled && (
             <span className="rounded-full bg-surface px-2 py-1">
               دکمه بازگشت
+            </span>
+          )}
+          {draft.keyboardAction === "show" && (
+            <span className="rounded-full bg-surface px-2 py-1">
+              نمایش منو
+            </span>
+          )}
+          {draft.keyboardAction === "remove" && (
+            <span className="rounded-full bg-surface px-2 py-1">
+              برداشتن منو
             </span>
           )}
         </div>
@@ -388,6 +423,16 @@ const NodeInspector = ({
     });
   };
 
+  // Telegram carries either inline buttons or a reply keyboard on a message,
+  // and editMessageText cannot touch the reply keyboard at all — so a message
+  // that does either of those can't also change the menu.
+  const keyboardLocked =
+    node.buttons.length > 0 || node.replaceOnButtonClick;
+  const keyboardLockReason =
+    node.buttons.length > 0
+      ? "این پیام دکمهٔ زیرمتنی دارد؛ تلگرام اجازهٔ نمایش هم‌زمان دکمه و منو را نمی‌دهد."
+      : "این پیام جای پیام قبلی را می‌گیرد و تلگرام در این حالت منو را تغییر نمی‌دهد.";
+
   const updateButton = (localId: string, button: DraftButton) => {
     onChange({
       ...node,
@@ -523,6 +568,27 @@ const NodeInspector = ({
                   className="mt-3"
                 />
               )}
+            </div>
+
+            <div className="border-t border-line pt-4">
+              <Select
+                id={`flow-node-keyboard-${node.localId}`}
+                label="منوی ربات"
+                options={keyboardActionOptions}
+                value={node.keyboardAction}
+                onChange={(value) =>
+                  onChange({
+                    ...node,
+                    keyboardAction: value as FlowKeyboardAction,
+                  })
+                }
+                disabled={keyboardLocked}
+                hint={
+                  keyboardLocked
+                    ? keyboardLockReason
+                    : "منوی دکمه‌ای پایین صفحهٔ چت را در این پیام نشان بدهید یا بردارید."
+                }
+              />
             </div>
           </div>
         </section>
@@ -711,6 +777,7 @@ export const FlowBuilder = ({ flow }: { flow: AutomationFlowDetail }) => {
       replaceOnButtonClick: false,
       backButtonEnabled: false,
       backButtonLabel: DEFAULT_FLOW_BACK_BUTTON_LABEL,
+      keyboardAction: DEFAULT_FLOW_KEYBOARD_ACTION,
       buttons: [],
     };
     setNodes((current) => [...current, nextNode]);

@@ -14,12 +14,15 @@ import {
   FLOW_BACK_BUTTON_LABEL_MAX_LENGTH,
   FLOW_BUTTONS_PER_NODE_MAX,
   DEFAULT_FLOW_BACK_BUTTON_LABEL,
+  DEFAULT_FLOW_KEYBOARD_ACTION,
   FLOW_NAME_MAX_LENGTH,
   FLOW_NODE_MESSAGE_MAX_LENGTH,
   FLOW_URL_MAX_LENGTH,
+  isFlowKeyboardAction,
   type AutomationFlowDetail,
   type FlowButton,
   type FlowButtonActionType,
+  type FlowKeyboardAction,
   type FlowNode,
 } from "@/lib/flows";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -64,6 +67,7 @@ type NodeRow = {
   replace_on_button_click: boolean;
   back_button_enabled: boolean;
   back_button_label: string;
+  keyboard_action: FlowKeyboardAction;
   automation_flow_buttons: ButtonRow[];
 };
 
@@ -83,6 +87,7 @@ const FLOW_DETAIL_SELECT = `
   id, trigger_type, trigger_keyword, name, command_description, is_active, created_at, updated_at,
   automation_flow_nodes (
     id, flow_id, message_text, is_root, replace_on_button_click, back_button_enabled, back_button_label,
+    keyboard_action,
     automation_flow_buttons:automation_flow_buttons!automation_flow_buttons_node_id_fkey (
       id, node_id, flow_id, label, action_type, next_node_id, url, position
     )
@@ -108,6 +113,7 @@ const toNode = (row: NodeRow): FlowNode => ({
   replaceOnButtonClick: row.replace_on_button_click,
   backButtonEnabled: row.back_button_enabled,
   backButtonLabel: row.back_button_label,
+  keyboardAction: row.keyboard_action ?? DEFAULT_FLOW_KEYBOARD_ACTION,
   buttons: (row.automation_flow_buttons ?? [])
     .sort((a, b) => a.position - b.position)
     .map(toButton),
@@ -226,11 +232,13 @@ export const PATCH = async (
     if (hasNodes) {
       const { error: schemaError } = await admin
         .from("automation_flow_nodes")
-        .select("replace_on_button_click, back_button_enabled, back_button_label")
+        .select(
+          "replace_on_button_click, back_button_enabled, back_button_label, keyboard_action"
+        )
         .limit(1);
       if (schemaError) {
         return jsonError(
-          "برای ذخیره این تنظیمات، ابتدا نسخه تازه اسکریپت flows.sql را در Supabase اجرا کنید.",
+          "برای ذخیره این تنظیمات، ابتدا نسخه تازه اسکریپت‌های flows.sql و telegram-menu.sql را در Supabase اجرا کنید.",
           503
         );
       }
@@ -340,6 +348,7 @@ export const PATCH = async (
         replaceOnButtonClick: boolean;
         backButtonEnabled: boolean;
         backButtonLabel: string;
+        keyboardAction?: unknown;
         buttons: ButtonInput[];
       };
       const nodes = body.nodes as NodeInput[];
@@ -367,6 +376,11 @@ export const PATCH = async (
           node.backButtonLabel.trim().length > FLOW_BACK_BUTTON_LABEL_MAX_LENGTH
         )
           return jsonError("عنوان دکمه بازگشت نامعتبر است.", 400);
+        if (
+          node.keyboardAction !== undefined &&
+          !isFlowKeyboardAction(node.keyboardAction)
+        )
+          return jsonError("تنظیم منوی ربات برای این پیام معتبر نیست.", 400);
         if (node.buttons.length > FLOW_BUTTONS_PER_NODE_MAX)
           return jsonError(`هر پیام حداکثر ${FLOW_BUTTONS_PER_NODE_MAX} دکمه می‌تواند داشته باشد.`, 400);
         for (const btn of node.buttons) {
@@ -405,6 +419,9 @@ export const PATCH = async (
             back_button_enabled: n.backButtonEnabled,
             back_button_label:
               n.backButtonLabel.trim() || DEFAULT_FLOW_BACK_BUTTON_LABEL,
+            keyboard_action: isFlowKeyboardAction(n.keyboardAction)
+              ? n.keyboardAction
+              : DEFAULT_FLOW_KEYBOARD_ACTION,
           }))
         )
         .select("id");

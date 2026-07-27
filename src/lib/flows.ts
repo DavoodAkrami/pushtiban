@@ -8,6 +8,19 @@ export const DEFAULT_FLOW_BACK_BUTTON_LABEL = "بازگشت";
 
 export type FlowButtonActionType = "node" | "url" | "end";
 
+/**
+ * What a message does to the bot's keyboard menu when it is delivered.
+ * "inherit" leaves whatever the customer already has on screen.
+ */
+export type FlowKeyboardAction = "inherit" | "show" | "remove";
+
+export const DEFAULT_FLOW_KEYBOARD_ACTION: FlowKeyboardAction = "inherit";
+
+export const isFlowKeyboardAction = (
+  value: unknown
+): value is FlowKeyboardAction =>
+  value === "inherit" || value === "show" || value === "remove";
+
 export type FlowButton = {
   id: string;
   nodeId: string;
@@ -27,6 +40,7 @@ export type FlowNode = {
   replaceOnButtonClick: boolean;
   backButtonEnabled: boolean;
   backButtonLabel: string;
+  keyboardAction: FlowKeyboardAction;
   buttons: FlowButton[];
 };
 

@@ -18,6 +18,14 @@ import {
   listNotificationRecipients,
   isAdminForConnection,
 } from "@/lib/ai/inbox";
+import {
+  buildReplyKeyboard,
+  REPLY_KEYBOARD_REMOVE,
+  type MenuButtonActionType,
+  type ReplyKeyboardMarkup,
+  type TelegramMenuButton,
+} from "@/lib/telegram-menu";
+import type { FlowKeyboardAction } from "@/lib/flows";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decryptTelegramToken } from "@/lib/telegram/token-crypto";
 
@@ -274,11 +282,13 @@ type NodeRow = {
   replace_on_button_click: boolean;
   back_button_enabled: boolean;
   back_button_label: string;
+  keyboard_action: FlowKeyboardAction;
   automation_flow_buttons: ButtonRow[];
 };
 
 const FLOW_NODE_SELECT = `
   id, flow_id, message_text, replace_on_button_click, back_button_enabled, back_button_label,
+  keyboard_action,
   automation_flow_buttons:automation_flow_buttons!automation_flow_buttons_node_id_fkey (
     id, label, action_type, next_node_id, url, position
   )
@@ -367,6 +377,7 @@ const buildInlineKeyboard = (node: NodeRow, previousNodeId?: string) => {
 
 const deliverFlowNode = async ({
   chatId,
+  menuKeyboard,
   messageId,
   node,
   previousNodeId,
@@ -374,6 +385,11 @@ const deliverFlowNode = async ({
   token,
 }: {
   chatId: number;
+  /**
+   * Resolves the bot's reply keyboard. A getter rather than a value so a node
+   * that keeps the menu as-is — the common case — costs no extra query.
+   */
+  menuKeyboard?: () => Promise<ReplyKeyboardMarkup | null>;
   messageId?: number;
   node: NodeRow;
   previousNodeId?: string;
@@ -385,15 +401,110 @@ const deliverFlowNode = async ({
     chat_id: chatId,
     text: node.message_text,
   };
+  // editMessageText cannot change the chat's reply keyboard, so replace-mode
+  // messages ignore keyboard_action entirely.
   if (replace && typeof messageId === "number") {
     body.message_id = messageId;
     body.reply_markup = { inline_keyboard: keyboard };
     return telegramPost(token, "editMessageText", body);
   }
+
+  // A message carries an inline keyboard or a reply keyboard, never both, so
+  // inline buttons win and the menu simply stays as the customer last saw it.
+  const keyboardAction = node.keyboard_action ?? "inherit";
   if (keyboard.length > 0) {
     body.reply_markup = { inline_keyboard: keyboard };
+  } else if (keyboardAction === "remove") {
+    body.reply_markup = REPLY_KEYBOARD_REMOVE;
+  } else if (keyboardAction === "show" && menuKeyboard) {
+    const keyboardMarkup = await menuKeyboard();
+    if (keyboardMarkup) body.reply_markup = keyboardMarkup;
   }
   return telegramPost(token, "sendMessage", body);
+};
+
+type MenuRow = {
+  is_enabled: boolean;
+  is_persistent: boolean;
+  resize_keyboard: boolean;
+  one_time_keyboard: boolean;
+  input_field_placeholder: string | null;
+  telegram_menu_buttons: {
+    label: string;
+    row_index: number;
+    position: number;
+  }[];
+};
+
+/**
+ * The bot's active reply keyboard, or null when there is no menu. Fails open:
+ * a bot whose owner has not run telegram-menu.sql keeps working without a menu.
+ */
+const loadMenuKeyboard = async (
+  connectionId: string
+): Promise<ReplyKeyboardMarkup | null> => {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("telegram_menus")
+    .select(
+      `is_enabled, is_persistent, resize_keyboard, one_time_keyboard, input_field_placeholder,
+       telegram_menu_buttons ( label, row_index, position )`
+    )
+    .eq("telegram_connection_id", connectionId)
+    .eq("is_enabled", true)
+    .maybeSingle();
+
+  if (error || !data) return null;
+
+  const row = data as unknown as MenuRow;
+  return buildReplyKeyboard({
+    isEnabled: row.is_enabled,
+    isPersistent: row.is_persistent,
+    resizeKeyboard: row.resize_keyboard,
+    oneTimeKeyboard: row.one_time_keyboard,
+    inputFieldPlaceholder: row.input_field_placeholder ?? "",
+    buttons: (row.telegram_menu_buttons ?? []).map(
+      (button, index): TelegramMenuButton => ({
+        id: String(index),
+        label: button.label,
+        rowIndex: button.row_index,
+        position: button.position,
+        actionType: "flow",
+        flowId: null,
+        automationId: null,
+      })
+    ),
+  });
+};
+
+type MenuButtonTarget = {
+  action_type: MenuButtonActionType;
+  flow_id: string | null;
+  automation_id: string | null;
+};
+
+/**
+ * Resolve a plain message against the menu. A reply-keyboard press arrives as
+ * ordinary text equal to the button label, so this is the only way to tell one
+ * apart from anything else the customer typed.
+ */
+const findMenuButton = async ({
+  connectionId,
+  labelNormalized,
+}: {
+  connectionId: string;
+  labelNormalized: string;
+}): Promise<MenuButtonTarget | null> => {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("telegram_menu_buttons")
+    .select("action_type, flow_id, automation_id")
+    .eq("telegram_connection_id", connectionId)
+    .eq("label_normalized", labelNormalized)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return data as MenuButtonTarget;
 };
 
 export const POST = async (request: NextRequest, { params }: RouteContext) => {
@@ -440,6 +551,25 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
     return NextResponse.json({ error: "Unavailable" }, { status: 503 });
   }
 
+  // The menu is read at most once per update, and only when we are about to
+  // send something the customer will see.
+  let pendingMenuKeyboard: Promise<ReplyKeyboardMarkup | null> | null = null;
+  const menuKeyboard = () =>
+    (pendingMenuKeyboard ??= loadMenuKeyboard(connection.id));
+
+  /**
+   * Send a customer-facing message with the bot's menu attached, so the
+   * keyboard stays on screen through the whole conversation.
+   */
+  const sendToCustomer = async (body: Record<string, unknown>) => {
+    const keyboard = await menuKeyboard();
+    return telegramPost(
+      token,
+      "sendMessage",
+      keyboard ? { reply_markup: keyboard, ...body } : body
+    );
+  };
+
   // Handle inline button press
   if (update.callback_query) {
     const cq = update.callback_query;
@@ -473,7 +603,7 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
         if (recipients.length === 0) {
           // No owner/admin linked — tell the customer instead of failing
           // silently.
-          await telegramPost(token, "sendMessage", {
+          await sendToCustomer({
             chat_id: chatId,
             text: "در حال حاضر پشتیبانی در دسترس نیست؛ بعداً دوباره تلاش کنید.",
           });
@@ -484,7 +614,7 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
             token,
           });
           // Confirm to the customer that the message was forwarded.
-          await telegramPost(token, "sendMessage", {
+          await sendToCustomer({
             chat_id: chatId,
             text: "پیام شما برای پشتیبان ارسال شد؛ منتظر پاسخ باشید.",
           });
@@ -557,6 +687,7 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
 
       const sent = await deliverFlowNode({
         chatId,
+        menuKeyboard,
         messageId,
         node: targetNode as NodeRow,
         previousNodeId: sourceNode.id,
@@ -585,6 +716,7 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
 
     const sent = await deliverFlowNode({
       chatId,
+      menuKeyboard,
       node: node as NodeRow,
       token,
     });
@@ -615,8 +747,8 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
   if (typeof senderId === "number" && text.startsWith("/start ")) {
     const payload = text.slice("/start ".length).trim();
     if (payload.startsWith(OWNER_LINK_PREFIX)) {
-      const token = payload.slice(OWNER_LINK_PREFIX.length);
-      if (LINK_TOKEN_RE.test(token)) {
+      const linkToken = payload.slice(OWNER_LINK_PREFIX.length);
+      if (LINK_TOKEN_RE.test(linkToken)) {
         // Token is the bot_id itself for now (the magic-link route signs it
         // with the connection's user_id encoded as base64url; here we simply
         // trust that the deep link was generated by the dashboard route and
@@ -631,7 +763,7 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
           .eq("id", connection.id);
         await telegramPost(token, "sendMessage", {
           chat_id: chatId,
-          text: "✅ تلگرام شما به‌عنوان دریافت‌کننده پیام‌های پشتیبانی متصل شد.",
+          text: "✅ تلگرام شما به‌عنوان دریافت‌کنندهٔ پیام‌های پشتیبانی متصل شد.",
         });
         return NextResponse.json({ ok: true });
       }
@@ -687,10 +819,12 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
       }
     }
 
-    // Plain /start with no payload — send a welcome and exit.
-    await telegramPost(token, "sendMessage", {
+    // /start carrying a payload we don't recognise — treat it as a plain start
+    // and welcome the customer. Bare /start is handled with the other commands
+    // further down.
+    await sendToCustomer({
       chat_id: chatId,
-      text: "سلام! زدن /start رویت شد.",
+      text: "سلام! چطور می‌توانم کمکتان کنم؟",
     });
     return NextResponse.json({ ok: true });
   }
@@ -713,7 +847,7 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
           replyText: text,
           senderTelegramId: senderId,
         });
-        await telegramPost(token, "sendMessage", {
+        await sendToCustomer({
           chat_id: conversation.customer_telegram_id,
           text: `پاسخ پشتیبان:\n\n${text}`,
         });
@@ -767,10 +901,58 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
 
     const sent = await deliverFlowNode({
       chatId,
+      menuKeyboard,
       node: rootNode as NodeRow,
       token,
     });
     return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+  }
+
+  // A reply-keyboard press arrives as plain text equal to the button label, so
+  // the menu is checked here — after flows, whose keywords the menu editor
+  // refuses to shadow, and before prepared replies.
+  if (!parsedCommand.detected) {
+    const menuButton = await findMenuButton({
+      connectionId: connection.id,
+      labelNormalized: keywordNormalized,
+    });
+
+    if (menuButton?.action_type === "flow" && menuButton.flow_id) {
+      const { data: rootNode } = await admin
+        .from("automation_flow_nodes")
+        .select(`${FLOW_NODE_SELECT}, automation_flows!inner(is_active)`)
+        .eq("flow_id", menuButton.flow_id)
+        .eq("is_root", true)
+        .eq("automation_flows.is_active", true)
+        .maybeSingle();
+
+      if (rootNode) {
+        const sent = await deliverFlowNode({
+          chatId,
+          menuKeyboard,
+          node: rootNode as unknown as NodeRow,
+          token,
+        });
+        return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+      }
+    }
+
+    if (menuButton?.action_type === "reply" && menuButton.automation_id) {
+      const { data: menuReply } = await admin
+        .from("telegram_keyword_automations")
+        .select("reply_text")
+        .eq("id", menuButton.automation_id)
+        .eq("is_active", true)
+        .maybeSingle();
+
+      if (menuReply) {
+        const sent = await sendToCustomer({
+          chat_id: chatId,
+          text: menuReply.reply_text,
+        });
+        return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+      }
+    }
   }
 
   // Fall back to simple keyword automations
@@ -787,15 +969,24 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
     return NextResponse.json({ error: "Unavailable" }, { status: 503 });
   }
   if (automation) {
-    const sent = await telegramPost(token, "sendMessage", {
+    const sent = await sendToCustomer({
       chat_id: chatId,
       text: automation.reply_text,
     });
     return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
   }
 
-  // Slash commands never fall through to AI, including unknown commands.
+  // Slash commands never fall through to AI, including unknown commands. Bare
+  // /start is the exception: with no flow of its own it still deserves a
+  // greeting, and it is where the bot's menu keyboard first appears.
   if (parsedCommand.detected) {
+    if (parsedCommand.keyword === "/start") {
+      const sent = await sendToCustomer({
+        chat_id: chatId,
+        text: "سلام! چطور می‌توانم کمکتان کنم؟",
+      });
+      return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+    }
     return NextResponse.json({ ok: true });
   }
 
@@ -852,7 +1043,7 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
   if (aiReply.needsHuman) {
     if (!handoffEnabled) {
       // Handoff is off — never contact an admin. Tell the customer plainly.
-      const sent = await telegramPost(token, "sendMessage", {
+      const sent = await sendToCustomer({
         chat_id: chatId,
         text: "متأسفم، پاسخ این سوال را نمی‌دانم.",
       });
@@ -878,7 +1069,7 @@ export const POST = async (request: NextRequest, { params }: RouteContext) => {
     return NextResponse.json({ ok: true });
   }
 
-  const sent = await telegramPost(token, "sendMessage", {
+  const sent = await sendToCustomer({
     chat_id: chatId,
     text:
       aiReply.text ??

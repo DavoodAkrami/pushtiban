@@ -17,6 +17,7 @@ import {
   GitBranch,
   Inbox,
   LayoutDashboard,
+  LayoutGrid,
   LogOut,
   Menu,
   MessageSquareText,
@@ -97,6 +98,7 @@ const NAV_GROUPS: NavGroup[] = [
             label: "پیام‌های آماده",
             icon: MessageSquareText,
           },
+          { href: "/dashboard/menu", label: "منوی ربات", icon: LayoutGrid },
         ],
       },
       {
