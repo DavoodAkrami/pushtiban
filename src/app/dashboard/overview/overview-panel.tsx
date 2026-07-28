@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   ArrowLeft,
   BookOpen,
@@ -16,6 +16,7 @@ import {
   Send,
   Sparkles,
   ToggleRight,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { luxe } from "@/components/motion/reveal";
@@ -31,7 +32,7 @@ import {
   type UsageRange,
 } from "@/components/dashboard/usage";
 import { Badge } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Chart } from "@/components/ui/chart";
 import { Icon } from "@/components/ui/icon";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -163,6 +164,7 @@ export const OverviewPanel = () => {
   const { usage } = useBusinessUsage();
   const [overview, setOverview] = React.useState<Overview | null>(null);
   const [loading, setLoading] = React.useState(true);
+  const [setupDismissed, setSetupDismissed] = React.useState(false);
   const [range, setRange] = React.useState<UsageRange>("week");
   const { points, totals, loading: seriesLoading } = useUsageSeries(
     { scope: "self" },
@@ -211,6 +213,91 @@ export const OverviewPanel = () => {
   const knowledgeCount =
     (overview?.knowledge.facts ?? 0) + (overview?.knowledge.qaPairs ?? 0);
 
+  const setupSteps = [
+    {
+      id: "telegram",
+      done: overview?.telegram.connected ?? false,
+      icon: Send,
+      title: overview?.telegram.connected
+        ? `ربات «${overview.telegram.botName}» متصل است`
+        : "ربات تلگرام را وصل کنید",
+      description: overview?.telegram.connected
+        ? `مشتری‌ها از @${overview.telegram.botUsername} پاسخ می‌گیرند.`
+        : "از منوی حساب → تنظیمات → اتصال‌ها ربات خود را متصل کنید.",
+    },
+    {
+      id: "assistant",
+      done: overview?.assistant.enabled ?? false,
+      icon: ToggleRight,
+      title: "دستیار هوشمند را روشن کنید",
+      description:
+        "بعد از فلوها و پیام‌های آماده، دستیار به پرسش‌های باقی‌مانده پاسخ می‌دهد.",
+      href: "/dashboard/ai-assistance",
+      actionLabel: "تنظیمات دستیار",
+    },
+    {
+      id: "facts",
+      done: (overview?.knowledge.facts ?? 0) > 0,
+      icon: BookOpen,
+      title: "اطلاعات کسب‌وکارتان را بنویسید",
+      description:
+        (overview?.knowledge.facts ?? 0) > 0
+          ? `${fa(overview?.knowledge.facts ?? 0)} مورد اطلاعات ثبت شده است.`
+          : "ساعت کاری، شرایط ارسال و هر چیزی که دستیار باید همیشه بداند.",
+      href: "/dashboard/ai-assistance/facts",
+      actionLabel: "افزودن اطلاعات",
+    },
+    {
+      id: "qa",
+      done: (overview?.knowledge.qaPairs ?? 0) > 0,
+      icon: HelpCircle,
+      title: "پرسش‌های پرتکرار را پاسخ دهید",
+      description:
+        (overview?.knowledge.qaPairs ?? 0) > 0
+          ? `${fa(overview?.knowledge.qaPairs ?? 0)} پرسش و پاسخ ثبت شده است.`
+          : "پاسخ آماده برای سؤال‌هایی که مشتری‌ها بیشتر می‌پرسند.",
+      href: "/dashboard/ai-assistance/qa",
+      actionLabel: "افزودن پرسش",
+    },
+    {
+      id: "automation",
+      done:
+        (overview?.automation.flows ?? 0) > 0 ||
+        (overview?.automation.preparedReplies ?? 0) > 0,
+      icon: GitBranch,
+      title: "یک فلو یا پیام آماده بسازید",
+      description:
+        (overview?.automation.flows ?? 0) > 0 ||
+        (overview?.automation.preparedReplies ?? 0) > 0
+          ? `${fa(overview?.automation.flows ?? 0)} فلو و ${fa(
+              overview?.automation.preparedReplies ?? 0
+            )} پیام آماده دارید.`
+          : "پرتکرارترین مسیرها را بدون مصرف توکن پاسخ دهید.",
+      href: "/dashboard/flow",
+      actionLabel: "ساخت فلو",
+    },
+    {
+      id: "owner",
+      done: overview?.telegram.ownerLinked ?? false,
+      icon: Bot,
+      title: "تلگرام شخصی خود را وصل کنید",
+      description:
+        "تا وقتی دستیار پاسخی ندارد، پیام مشتری در تلگرام به دست شما برسد.",
+      href: "/dashboard/ai-assistance",
+      actionLabel: "اتصال حساب",
+    },
+  ] satisfies Array<{
+    id: string;
+    done: boolean;
+    icon: LucideIcon;
+    title: string;
+    description: string;
+    href?: string;
+    actionLabel?: string;
+  }>;
+  const pendingSetupSteps = setupSteps.filter((step) => !step.done);
+  const showSetup = !setupDismissed && (loading || pendingSetupSteps.length > 0);
+
   return (
     <div className="mx-auto max-w-5xl">
       <header className="mb-8">
@@ -229,6 +316,51 @@ export const OverviewPanel = () => {
       </header>
 
       <div className="space-y-8">
+        <AnimatePresence initial={false}>
+          {showSetup && (
+            <motion.section
+              key="setup-checklist"
+              aria-labelledby="overview-setup-heading"
+              initial={reduce ? { opacity: 0 } : { opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={reduce ? { opacity: 0 } : { opacity: 0, y: -8 }}
+              transition={{ duration: reduce ? 0 : 0.28, ease: luxe }}
+              className="rounded-3xl border border-accent/20 bg-surface/40 p-5 sm:p-6"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex min-w-0 items-start gap-3">
+                  <Icon icon={Sparkles} tile size="sm" tone="accent" />
+                  <div className="min-w-0">
+                    <h2 id="overview-setup-heading" className="text-lg font-bold">
+                      قدم‌های بعدی برای راه‌اندازی
+                    </h2>
+                    <p className="mt-1 text-xs leading-6 text-muted">
+                      این کارها را انجام دهید تا دستیار برای پاسخ‌گویی آماده شود.
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="بستن راهنمای راه‌اندازی"
+                  title="بستن راهنمای راه‌اندازی"
+                  onClick={() => setSetupDismissed(true)}
+                  className="shrink-0 text-muted"
+                >
+                  <X className="size-4" aria-hidden />
+                </Button>
+              </div>
+
+              <ul className="mt-5 space-y-2" aria-busy={loading}>
+                {setupSteps.map((step) => (
+                  <SetupRow key={step.id} {...step} />
+                ))}
+              </ul>
+            </motion.section>
+          )}
+        </AnimatePresence>
+
         {/* Message quota — the number a business checks first. */}
         <section
           aria-label="سهمیه پیام این ماه"
@@ -390,96 +522,6 @@ export const OverviewPanel = () => {
               ariaLabel={`مصرف توکن ورودی و خروجی کسب‌وکار شما در ${RANGE_HINTS[range]}`}
             />
           </div>
-        </section>
-
-        {/* Setup checklist */}
-        <section aria-labelledby="overview-setup-heading">
-          <h2 id="overview-setup-heading" className="mb-4 text-lg font-bold">
-            راه‌اندازی دستیار
-          </h2>
-
-          {loading ? (
-            <div role="status" aria-label="در حال بارگذاری وضعیت راه‌اندازی" className="space-y-2">
-              {[0, 1, 2, 3].map((item) => (
-                <Skeleton key={item} className="h-20 w-full rounded-2xl" />
-              ))}
-            </div>
-          ) : (
-            <ul className="space-y-2">
-              <SetupRow
-                done={overview?.telegram.connected ?? false}
-                icon={Send}
-                title={
-                  overview?.telegram.connected
-                    ? `ربات «${overview.telegram.botName}» متصل است`
-                    : "ربات تلگرام را وصل کنید"
-                }
-                description={
-                  overview?.telegram.connected
-                    ? `مشتری‌ها از @${overview.telegram.botUsername} پاسخ می‌گیرند.`
-                    : "از منوی حساب → تنظیمات → اتصال‌ها ربات خود را متصل کنید."
-                }
-              />
-              <SetupRow
-                done={overview?.assistant.enabled ?? false}
-                icon={ToggleRight}
-                title="دستیار هوشمند را روشن کنید"
-                description="بعد از فلوها و پیام‌های آماده، دستیار به پرسش‌های باقی‌مانده پاسخ می‌دهد."
-                href="/dashboard/ai-assistance"
-                actionLabel="تنظیمات دستیار"
-              />
-              <SetupRow
-                done={(overview?.knowledge.facts ?? 0) > 0}
-                icon={BookOpen}
-                title="اطلاعات کسب‌وکارتان را بنویسید"
-                description={
-                  (overview?.knowledge.facts ?? 0) > 0
-                    ? `${fa(overview?.knowledge.facts ?? 0)} مورد اطلاعات ثبت شده است.`
-                    : "ساعت کاری، شرایط ارسال و هر چیزی که دستیار باید همیشه بداند."
-                }
-                href="/dashboard/ai-assistance/facts"
-                actionLabel="افزودن اطلاعات"
-              />
-              <SetupRow
-                done={(overview?.knowledge.qaPairs ?? 0) > 0}
-                icon={HelpCircle}
-                title="پرسش‌های پرتکرار را پاسخ دهید"
-                description={
-                  (overview?.knowledge.qaPairs ?? 0) > 0
-                    ? `${fa(overview?.knowledge.qaPairs ?? 0)} پرسش و پاسخ ثبت شده است.`
-                    : "پاسخ آماده برای سؤال‌هایی که مشتری‌ها بیشتر می‌پرسند."
-                }
-                href="/dashboard/ai-assistance/qa"
-                actionLabel="افزودن پرسش"
-              />
-              <SetupRow
-                done={
-                  (overview?.automation.flows ?? 0) > 0 ||
-                  (overview?.automation.preparedReplies ?? 0) > 0
-                }
-                icon={GitBranch}
-                title="یک فلو یا پیام آماده بسازید"
-                description={
-                  (overview?.automation.flows ?? 0) > 0 ||
-                  (overview?.automation.preparedReplies ?? 0) > 0
-                    ? `${fa(overview?.automation.flows ?? 0)} فلو و ${fa(
-                        overview?.automation.preparedReplies ?? 0
-                      )} پیام آماده دارید.`
-                    : "پرتکرارترین مسیرها را بدون مصرف توکن پاسخ دهید."
-                }
-                href="/dashboard/flow"
-                actionLabel="ساخت فلو"
-              />
-              <SetupRow
-                done={overview?.telegram.ownerLinked ?? false}
-                icon={Bot}
-                title="تلگرام شخصی خود را وصل کنید"
-                description="تا وقتی دستیار پاسخی ندارد، پیام مشتری در تلگرام به دست شما برسد."
-                href="/dashboard/ai-assistance"
-                actionLabel="اتصال حساب"
-              />
-            </ul>
-          )}
         </section>
 
         {(overview?.assistant.enabled ?? false) === false && !loading && (

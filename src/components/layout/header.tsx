@@ -8,12 +8,13 @@ import {
   useMotionValueEvent,
   AnimatePresence,
 } from "framer-motion";
-import { Bot, LayoutDashboard, Menu, Moon, Sun, X } from "lucide-react";
+import { LayoutDashboard, Menu, Moon, Sun, X } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { luxe } from "@/components/motion/reveal";
 import { useSessionProfile } from "@/store/use-session";
+import { Logo } from "@/components/ui/brand/logo";
 
 const NAV_ITEMS = [
   { label: "امکانات", href: "#features" },
@@ -72,10 +73,7 @@ export function Header() {
           href="#"
           className="flex items-center gap-2.5 font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 rounded-full"
         >
-          <span className="flex size-8 items-center justify-center rounded-xl bg-accent text-accent-foreground shadow-glow">
-            <Bot className="size-5" />
-          </span>
-          پشتیبان
+          <Logo variant="full" size="md" />
         </a>
 
         <ul className="hidden items-center gap-1 md:flex">

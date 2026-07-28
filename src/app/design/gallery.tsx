@@ -56,10 +56,11 @@ import {
   SkeletonCard,
   SkeletonText,
 } from "@/components/ui/skeleton";
-import { Icon } from "@/components/ui/icon";
 import { Spinner } from "@/components/ui/spinner";
+import { Icon } from "@/components/ui/icon";
 import { GlassCard } from "@/components/ui/glass-card";
 import { Chart } from "@/components/ui/chart";
+import { Logo } from "@/components/ui/brand/logo";
 import { fa } from "@/lib/utils";
 
 /* ---------------------------------- data --------------------------------- */
@@ -683,6 +684,37 @@ function IconsDemo() {
   );
 }
 
+function LogoDemo() {
+  return (
+    <div className="space-y-8">
+      <Row label="واریانت‌ها">
+        <div className="flex flex-wrap items-center gap-4">
+          <Logo variant="full" size="md" />
+          <Logo variant="icon" size="md" />
+          <Logo variant="text" size="md" />
+          <Logo variant="default" size="md" />
+        </div>
+      </Row>
+      <Row label="اندازه‌ها (Full)">
+        <div className="flex flex-wrap items-center gap-4">
+          <Logo variant="full" size="sm" />
+          <Logo variant="full" size="md" />
+          <Logo variant="full" size="lg" />
+          <Logo variant="full" size="xl" />
+        </div>
+      </Row>
+      <Row label="اندازه‌ها (Icon Only)">
+        <div className="flex flex-wrap items-center gap-4">
+          <Logo variant="icon" size="sm" />
+          <Logo variant="icon" size="md" />
+          <Logo variant="icon" size="lg" />
+          <Logo variant="icon" size="xl" />
+        </div>
+      </Row>
+    </div>
+  );
+}
+
 function ColorsDemo() {
   const tokens = [
     { name: "background", cls: "bg-background", hex: "#191919" },
@@ -895,6 +927,10 @@ function GalleryInner() {
 
       <Section title="آیکون‌ها" lead="آیکون‌های Lucide با اندازه‌ها و رنگ‌های سیستم، به‌همراه کاشی نرم — امضای بصری محصول.">
         <IconsDemo />
+      </Section>
+
+      <Section title="لوگو" lead="لوگوی پشتیبان در واریانت‌ها و اندازه‌های مختلف.">
+        <LogoDemo />
       </Section>
 
       <Section title="کارت شیشه‌ای" lead="سطح اصلی محتوا؛ با درخشش دنباله‌روی نشانگر.">

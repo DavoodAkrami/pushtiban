@@ -33,6 +33,7 @@ import { Select } from "@/components/ui/select";
 import { luxe } from "@/components/motion/reveal";
 import { BUSINESS_CATEGORIES } from "@/lib/business-categories";
 import { cn, fa } from "@/lib/utils";
+import { Logo } from "@/components/ui/brand/logo";
 
 export type BotIdentity = {
   id: string;
@@ -202,8 +203,8 @@ const ChatDemo = ({ botName }: { botName: string }) => {
       >
         <div className="flex items-center justify-between border-b border-line px-4 py-3 sm:px-5">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent/15 text-accent">
-              <Bot className="size-4" aria-hidden />
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-accent/15 text-accent">
+              <Logo variant="icon" size="md" className="rounded-full" />
             </span>
             <div className="min-w-0">
               <p className="truncate text-sm font-bold">{botName}</p>
@@ -536,10 +537,7 @@ export const OnboardingClient = ({
           href="/"
           className="mb-6 flex w-fit items-center gap-2.5 rounded-full font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
         >
-          <span className="flex size-9 items-center justify-center rounded-xl bg-accent text-accent-foreground shadow-glow">
-            <Bot className="size-5" aria-hidden />
-          </span>
-          پشتیبان
+          <Logo variant="full" size="md" />
         </Link>
 
         <div className="grid overflow-hidden rounded-3xl border border-line bg-surface/60 shadow-soft lg:grid-cols-[15rem_minmax(0,1fr)]">

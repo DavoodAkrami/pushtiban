@@ -25,6 +25,12 @@ const DashboardLayout = async ({
     .eq("id", user.id)
     .maybeSingle();
 
+  const { data: businessInfo } = await supabase
+    .from("profiles")
+    .select("business_category")
+    .eq("id", user.id)
+    .maybeSingle();
+
   if (profile && !profile.onboarding_completed_at) redirect("/onboarding");
 
   // Separate query so a missing is_admin column (admin.sql not run yet)
@@ -50,6 +56,11 @@ const DashboardLayout = async ({
   return (
     <ToastProvider>
       <DashboardShell
+        businessCategory={
+          typeof businessInfo?.business_category === "string"
+            ? businessInfo.business_category
+            : ""
+        }
         businessName={businessName}
         fullName={fullName}
         email={user.email ?? ""}

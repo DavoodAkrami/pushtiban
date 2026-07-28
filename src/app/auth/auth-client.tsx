@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import { motion, useReducedMotion } from "framer-motion";
 import {
   ArrowLeft,
-  Bot,
   Eye,
   EyeOff,
   Lock,
@@ -19,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { luxe } from "@/components/motion/reveal";
 import { createClient } from "@/lib/supabase/client";
 import { cn, fa } from "@/lib/utils";
+import { Logo } from "@/components/ui/brand/logo";
 
 type Mode = "login" | "signup";
 
@@ -188,10 +188,7 @@ export const AuthClient = ({ initialError }: { initialError?: string }) => {
           href="/"
           className="mx-auto mb-8 flex w-fit items-center gap-2.5 rounded-full font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
         >
-          <span className="flex size-9 items-center justify-center rounded-xl bg-accent text-accent-foreground shadow-glow">
-            <Bot className="size-5" aria-hidden />
-          </span>
-          پشتیبان
+          <Logo variant="full" size="md" />
         </Link>
 
         <div className="rounded-3xl border border-line bg-surface/60 p-7 shadow-soft sm:p-9">

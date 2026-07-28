@@ -7,6 +7,7 @@ import {
   Command,
   GitBranch,
   Hash,
+  Link2,
   Pencil,
   Plus,
   Trash2,
@@ -47,6 +48,10 @@ import {
   type AutomationFlowDetail,
 } from "@/lib/flows";
 import { fa } from "@/lib/utils";
+import {
+  requestSettingsOpen,
+  TELEGRAM_CONNECTION_CHANGED_EVENT,
+} from "@/lib/settings-events";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   createFlow,
@@ -502,6 +507,22 @@ export const FlowsPanel = () => {
     if (connectionStatus === "idle") void dispatch(loadAutomations());
   }, [connectionStatus, dispatch, flowsStatus]);
 
+  React.useEffect(() => {
+    const refreshConnection = () => {
+      void dispatch(loadFlows());
+      void dispatch(loadAutomations());
+    };
+    window.addEventListener(
+      TELEGRAM_CONNECTION_CHANGED_EVENT,
+      refreshConnection
+    );
+    return () =>
+      window.removeEventListener(
+        TELEGRAM_CONNECTION_CHANGED_EVENT,
+        refreshConnection
+      );
+  }, [dispatch]);
+
   const openEdit = async (flow: AutomationFlow) => {
     setBusyFlowId(flow.id);
     const result = await dispatch(loadFlowDetail(flow.id));
@@ -634,7 +655,18 @@ export const FlowsPanel = () => {
             variant="info"
             title="ابتدا ربات تلگرام را متصل کنید"
             description="از منوی حساب وارد تنظیمات و بخش اتصالات شوید. پس از اتصال ربات، می‌توانید اولین فلو را بسازید."
-          />
+          >
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-3"
+              startIcon={<Link2 className="size-4" />}
+              onClick={() => requestSettingsOpen("connections")}
+            >
+              اتصال ربات در تنظیمات
+            </Button>
+          </Alert>
         )}
 
         {bot && connectionStatus === "succeeded" && (

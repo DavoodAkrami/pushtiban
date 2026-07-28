@@ -123,6 +123,16 @@ How to use:
       allowance, a token usage chart (week / month / year), open
       conversations, knowledge and Q&A counts, active flows, and a setup
       checklist that links to whatever is still missing
+- [x] Keep unfinished overview setup steps above the dashboard metrics, hide
+      completed steps, and let the user dismiss the checklist
+- [x] Overview setup steps render immediately, show completed steps with green
+      ticks while unfinished work remains, and hide after everything is done
+- [x] Production dashboard inbox with searchable status queues, full
+      transcripts, Telegram replies, and close actions
+- [x] Telegram-gated automation, flow, and menu pages link directly to the
+      Settings connections flow
+- [x] Settings business information section for editing business name and
+      category
 - [ ] Bot keyboard menu: a bot-wide set of always-visible buttons at the bottom
       of the Telegram chat, laid out in rows at /dashboard/menu, each button
       wired to an existing flow or prepared reply, plus a per-message control

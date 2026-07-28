@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
+import { Select, type SelectOption } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Modal,
@@ -32,11 +33,17 @@ import {
 } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast";
 import { cn, fa } from "@/lib/utils";
+import { BUSINESS_CATEGORIES, isBusinessCategory } from "@/lib/business-categories";
 import { createClient } from "@/lib/supabase/client";
+import {
+  notifyTelegramConnectionChanged,
+  type SettingsSection,
+} from "@/lib/settings-events";
 
 type ProfileDetails = {
   fullName: string;
   businessName: string;
+  businessCategory: string;
 };
 
 type BotIdentity = {
@@ -45,17 +52,24 @@ type BotIdentity = {
   username: string;
 };
 
-type SettingsSection = "profile" | "connections";
-
 type SettingsModalProps = ProfileDetails & {
   email: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onProfileUpdated: (profile: ProfileDetails) => void;
   restoreFocus: () => void;
+  initialSection?: SettingsSection;
 };
 
 const TOKEN_RE = /^\d{6,20}:[A-Za-z0-9_-]{20,100}$/;
+
+const BUSINESS_CATEGORY_OPTIONS: SelectOption[] = BUSINESS_CATEGORIES.map(
+  (category) => ({
+    value: category.slug,
+    label: category.label,
+    description: category.description,
+  })
+);
 
 const CommandRow = ({ command }: { command: string }) => {
   const [copied, setCopied] = React.useState(false);
@@ -158,6 +172,7 @@ const ConnectionFlow = () => {
 
       setBot(data.bot);
       setToken("");
+      notifyTelegramConnectionChanged();
       toast({
         title: "ربات متصل شد",
         description: `ربات «${data.bot.name}» با موفقیت به حساب شما متصل شد.`,
@@ -190,6 +205,7 @@ const ConnectionFlow = () => {
 
       setBot(null);
       setStep("telegram");
+      notifyTelegramConnectionChanged();
       toast({
         title: "ربات قطع شد",
         description: "اتصال ربات تلگرام شما قطع شد.",
@@ -397,13 +413,16 @@ const ConnectionFlow = () => {
 
 const SECTIONS: { id: SettingsSection; label: string; icon: React.ElementType }[] = [
   { id: "profile", label: "پروفایل", icon: UserRound },
+  { id: "business", label: "اطلاعات کسب‌وکار", icon: Building2 },
   { id: "connections", label: "اتصالات", icon: Link2 },
 ];
 
 export const SettingsModal = ({
+  businessCategory,
   businessName,
   email,
   fullName,
+  initialSection = "profile",
   open,
   onOpenChange,
   onProfileUpdated,
@@ -413,33 +432,44 @@ export const SettingsModal = ({
   const [draftFullName, setDraftFullName] = React.useState(fullName);
   const [draftBusinessName, setDraftBusinessName] =
     React.useState(businessName);
+  const [draftBusinessCategory, setDraftBusinessCategory] =
+    React.useState(businessCategory);
   const [savedFullName, setSavedFullName] = React.useState(fullName);
   const [savedBusinessName, setSavedBusinessName] =
     React.useState(businessName);
+  const [savedBusinessCategory, setSavedBusinessCategory] =
+    React.useState(businessCategory);
   const [fullNameError, setFullNameError] = React.useState("");
   const [businessNameError, setBusinessNameError] = React.useState("");
+  const [businessCategoryError, setBusinessCategoryError] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const { toast } = useToast();
   const headingId = `settings-${activeSection}-title`;
 
   React.useEffect(() => {
     if (!open) return;
-    setActiveSection("profile");
+    setActiveSection(initialSection);
     const nextFullName = fullName.trim();
     const nextBusinessName = businessName.trim();
+    const nextBusinessCategory = businessCategory.trim();
     setDraftFullName(nextFullName);
     setDraftBusinessName(nextBusinessName);
+    setDraftBusinessCategory(nextBusinessCategory);
     setSavedFullName(nextFullName);
     setSavedBusinessName(nextBusinessName);
+    setSavedBusinessCategory(nextBusinessCategory);
     setFullNameError("");
     setBusinessNameError("");
-  }, [businessName, fullName, open]);
+    setBusinessCategoryError("");
+  }, [businessCategory, businessName, fullName, initialSection, open]);
 
   const normalizedFullName = draftFullName.trim();
   const normalizedBusinessName = draftBusinessName.trim();
-  const hasChanges =
-    normalizedFullName !== savedFullName ||
-    normalizedBusinessName !== savedBusinessName;
+  const normalizedBusinessCategory = draftBusinessCategory.trim();
+  const hasProfileChanges = normalizedFullName !== savedFullName;
+  const hasBusinessChanges =
+    normalizedBusinessName !== savedBusinessName ||
+    normalizedBusinessCategory !== savedBusinessCategory;
 
   const saveProfile = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -449,15 +479,8 @@ export const SettingsModal = ({
       normalizedFullName.length < 3 || normalizedFullName.length > 80
         ? `نام شما باید بین ${fa(3)} تا ${fa(80)} حرف باشد.`
         : "";
-    const nextBusinessNameError =
-      normalizedBusinessName.length < 2 ||
-      normalizedBusinessName.length > 100
-        ? `نام کسب‌وکار باید بین ${fa(2)} تا ${fa(100)} حرف باشد.`
-        : "";
-
     setFullNameError(nextFullNameError);
-    setBusinessNameError(nextBusinessNameError);
-    if (nextFullNameError || nextBusinessNameError || !hasChanges) return;
+    if (nextFullNameError || !hasProfileChanges) return;
 
     setSaving(true);
     let profileSaved = false;
@@ -482,7 +505,6 @@ export const SettingsModal = ({
         .from("profiles")
         .update({
           full_name: normalizedFullName,
-          business_name: normalizedBusinessName,
         })
         .eq("id", user.id)
         .select("id")
@@ -500,18 +522,16 @@ export const SettingsModal = ({
       profileSaved = true;
       const updatedDetails = {
         fullName: normalizedFullName,
-        businessName: normalizedBusinessName,
+        businessName: savedBusinessName,
+        businessCategory: savedBusinessCategory,
       };
       setDraftFullName(normalizedFullName);
-      setDraftBusinessName(normalizedBusinessName);
       setSavedFullName(normalizedFullName);
-      setSavedBusinessName(normalizedBusinessName);
       onProfileUpdated(updatedDetails);
 
       const { error: metadataError } = await supabase.auth.updateUser({
         data: {
           full_name: normalizedFullName,
-          business_name: normalizedBusinessName,
         },
       });
 
@@ -519,7 +539,7 @@ export const SettingsModal = ({
         title: "تغییرات پروفایل ذخیره شد",
         description: metadataError
           ? "اطلاعات ذخیره شد، اما همگام‌سازی حساب کامل نشد."
-          : "نام شما و کسب‌وکارتان به‌روزرسانی شد.",
+          : "نام شما به‌روزرسانی شد.",
         variant: metadataError ? "warning" : "success",
       });
     } catch {
@@ -527,6 +547,102 @@ export const SettingsModal = ({
         title: profileSaved
           ? "تغییرات پروفایل ذخیره شد"
           : "ذخیره پروفایل انجام نشد",
+        description: profileSaved
+          ? "اطلاعات ذخیره شد، اما همگام‌سازی حساب کامل نشد."
+          : "اتصال اینترنت را بررسی کنید و دوباره تلاش کنید.",
+        variant: profileSaved ? "warning" : "error",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveBusinessInfo = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (saving) return;
+
+    const nextBusinessNameError =
+      normalizedBusinessName.length < 2 ||
+      normalizedBusinessName.length > 100
+        ? `نام کسب‌وکار باید بین ${fa(2)} تا ${fa(100)} حرف باشد.`
+        : "";
+    const nextBusinessCategoryError = isBusinessCategory(
+      normalizedBusinessCategory
+    )
+      ? ""
+      : "دسته کسب‌وکارتان را انتخاب کنید.";
+
+    setBusinessNameError(nextBusinessNameError);
+    setBusinessCategoryError(nextBusinessCategoryError);
+    if (nextBusinessNameError || nextBusinessCategoryError || !hasBusinessChanges)
+      return;
+
+    setSaving(true);
+    let profileSaved = false;
+
+    try {
+      const supabase = createClient();
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        toast({
+          title: "ذخیره اطلاعات کسب‌وکار انجام نشد",
+          description: "صفحه را تازه‌سازی کنید و دوباره تلاش کنید.",
+          variant: "error",
+        });
+        return;
+      }
+
+      const { data: updatedProfile, error: profileError } = await supabase
+        .from("profiles")
+        .update({
+          business_name: normalizedBusinessName,
+          business_category: normalizedBusinessCategory,
+        })
+        .eq("id", user.id)
+        .select("id")
+        .maybeSingle();
+
+      if (profileError || !updatedProfile) {
+        toast({
+          title: "ذخیره اطلاعات کسب‌وکار انجام نشد",
+          description: "اتصال اینترنت را بررسی کنید و دوباره تلاش کنید.",
+          variant: "error",
+        });
+        return;
+      }
+
+      profileSaved = true;
+      const updatedDetails = {
+        fullName: savedFullName,
+        businessName: normalizedBusinessName,
+        businessCategory: normalizedBusinessCategory,
+      };
+      setDraftBusinessName(normalizedBusinessName);
+      setDraftBusinessCategory(normalizedBusinessCategory);
+      setSavedBusinessName(normalizedBusinessName);
+      setSavedBusinessCategory(normalizedBusinessCategory);
+      onProfileUpdated(updatedDetails);
+
+      const { error: metadataError } = await supabase.auth.updateUser({
+        data: { business_name: normalizedBusinessName },
+      });
+
+      toast({
+        title: "اطلاعات کسب‌وکار ذخیره شد",
+        description: metadataError
+          ? "اطلاعات ذخیره شد، اما همگام‌سازی حساب کامل نشد."
+          : "نام و دسته کسب‌وکار به‌روزرسانی شد.",
+        variant: metadataError ? "warning" : "success",
+      });
+    } catch {
+      toast({
+        title: profileSaved
+          ? "اطلاعات کسب‌وکار ذخیره شد"
+          : "ذخیره اطلاعات کسب‌وکار انجام نشد",
         description: profileSaved
           ? "اطلاعات ذخیره شد، اما همگام‌سازی حساب کامل نشد."
           : "اتصال اینترنت را بررسی کنید و دوباره تلاش کنید.",
@@ -608,47 +724,28 @@ export const SettingsModal = ({
                       اطلاعات شما
                     </h2>
                     <p className="mt-1.5 text-sm leading-7 text-muted">
-                      نامی که در داشبورد می‌بینید و نام صاحب حساب را اینجا تغییر دهید.
+                      نام صاحب حساب و ایمیل ورود شما در این بخش قرار دارد.
                     </p>
                   </header>
 
                   <div className="mt-7 rounded-3xl border border-line bg-surface/35 p-5 sm:p-6">
-                    <div className="grid gap-5 lg:grid-cols-2">
-                      <Input
-                        id="settings-business-name"
-                        label="نام کسب‌وکار"
-                        hint="همین نام در منوی داشبورد نمایش داده می‌شود."
-                        value={draftBusinessName}
-                        onChange={(event) => {
-                          setDraftBusinessName(event.target.value);
-                          if (businessNameError) setBusinessNameError("");
-                        }}
-                        error={businessNameError}
-                        startIcon={<Building2 />}
-                        autoComplete="organization"
-                        minLength={2}
-                        maxLength={100}
-                        disabled={saving}
-                        required
-                      />
-                      <Input
-                        id="settings-full-name"
-                        label="نام شما"
-                        hint="برای شناسایی صاحب این حساب استفاده می‌شود."
-                        value={draftFullName}
-                        onChange={(event) => {
-                          setDraftFullName(event.target.value);
-                          if (fullNameError) setFullNameError("");
-                        }}
-                        error={fullNameError}
-                        startIcon={<UserRound />}
-                        autoComplete="name"
-                        minLength={3}
-                        maxLength={80}
-                        disabled={saving}
-                        required
-                      />
-                    </div>
+                    <Input
+                      id="settings-full-name"
+                      label="نام شما"
+                      hint="برای شناسایی صاحب این حساب استفاده می‌شود."
+                      value={draftFullName}
+                      onChange={(event) => {
+                        setDraftFullName(event.target.value);
+                        if (fullNameError) setFullNameError("");
+                      }}
+                      error={fullNameError}
+                      startIcon={<UserRound />}
+                      autoComplete="name"
+                      minLength={3}
+                      maxLength={80}
+                      disabled={saving}
+                      required
+                    />
 
                     <div className="mt-6 flex flex-col gap-3 rounded-2xl bg-background/55 p-4 sm:flex-row sm:items-center">
                       <span className="flex min-w-0 items-center gap-3">
@@ -677,9 +774,76 @@ export const SettingsModal = ({
                     type="submit"
                     className="flex-1 sm:flex-none"
                     loading={saving}
-                    disabled={!hasChanges}
+                    disabled={!hasProfileChanges}
                   >
                     ذخیره تغییرات
+                  </Button>
+                </footer>
+              </form>
+            )}
+
+            {activeSection === "business" && (
+              <form
+                onSubmit={saveBusinessInfo}
+                noValidate
+                className="flex min-h-0 flex-1 flex-col"
+              >
+                <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-7 lg:p-10">
+                  <header className="pe-10">
+                    <h2 id={headingId} className="text-xl font-bold">
+                      اطلاعات کسب‌وکار
+                    </h2>
+                    <p className="mt-1.5 text-sm leading-7 text-muted">
+                      نام و حوزه فعالیت کسب‌وکارتان را برای نمایش در داشبورد و شخصی‌سازی دستیار تغییر دهید.
+                    </p>
+                  </header>
+
+                  <div className="mt-7 rounded-3xl border border-line bg-surface/35 p-5 sm:p-6">
+                    <div className="space-y-5">
+                      <Input
+                        id="settings-business-name"
+                        label="نام کسب‌وکار"
+                        hint="این نام در منوی داشبورد و پیام‌های مدیریتی نمایش داده می‌شود."
+                        value={draftBusinessName}
+                        onChange={(event) => {
+                          setDraftBusinessName(event.target.value);
+                          if (businessNameError) setBusinessNameError("");
+                        }}
+                        error={businessNameError}
+                        startIcon={<Building2 />}
+                        autoComplete="organization"
+                        minLength={2}
+                        maxLength={100}
+                        disabled={saving}
+                        required
+                      />
+                      <Select
+                        id="settings-business-category"
+                        label="دسته کسب‌وکار"
+                        hint="این انتخاب به دستیار کمک می‌کند پاسخ‌ها را با فضای کسب‌وکار شما هماهنگ کند."
+                        options={BUSINESS_CATEGORY_OPTIONS}
+                        value={draftBusinessCategory}
+                        onChange={(value) => {
+                          setDraftBusinessCategory(value);
+                          if (businessCategoryError) setBusinessCategoryError("");
+                        }}
+                        error={businessCategoryError}
+                        searchable
+                        disabled={saving}
+                        required
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <footer className="flex shrink-0 flex-wrap justify-end gap-3 border-t border-line bg-surface/30 px-5 py-4 sm:px-7 lg:px-10">
+                  <Button
+                    type="submit"
+                    className="flex-1 sm:flex-none"
+                    loading={saving}
+                    disabled={!hasBusinessChanges}
+                  >
+                    ذخیره اطلاعات کسب‌وکار
                   </Button>
                 </footer>
               </form>

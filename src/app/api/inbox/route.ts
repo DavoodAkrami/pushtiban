@@ -34,9 +34,12 @@ export const GET = async (request: NextRequest) => {
   } = await supabase.auth.getUser();
   if (!user) return jsonError("نشست شما تمام شده؛ دوباره وارد شوید.", 401);
 
-  const status = new URL(request.url).searchParams.get("status") ?? "open";
+  const requestedStatus = new URL(request.url).searchParams.get("status");
+  const status = requestedStatus === "answered" || requestedStatus === "all"
+    ? requestedStatus
+    : "open";
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("support_conversations")
     .select(
       "id, customer_display_name, customer_username, last_customer_message_text, last_customer_message_at, status, queued_reason, created_at"
@@ -44,6 +47,8 @@ export const GET = async (request: NextRequest) => {
     .eq("user_id", user.id)
     .order("last_customer_message_at", { ascending: false, nullsFirst: false })
     .limit(100);
+  if (status !== "all") query = query.eq("status", status);
+  const { data, error } = await query;
 
   if (error) {
     const setupRequired = SETUP_ERROR_CODES.has(error.code);
@@ -56,10 +61,7 @@ export const GET = async (request: NextRequest) => {
     );
   }
 
-  // Filter by status client-side since we may want "all" vs "open".
-  const rows = ((data as SupportConversationRow[]) ?? []).filter(
-    (row) => status === "all" || row.status === status
-  );
+  const rows = (data as SupportConversationRow[]) ?? [];
 
   const conversations: ConversationView[] = rows.map((row) => ({
     id: row.id,
@@ -110,9 +112,6 @@ export const POST = async (request: NextRequest) => {
     customer_telegram_id: number;
   };
 
-  // Record the reply in the database.
-  await recordOwnerReply({ conversationId, replyText: text });
-
   // Deliver the reply to the customer via the bot.
   const admin = createAdminClient();
   const { data: connection } = await admin
@@ -149,6 +148,9 @@ export const POST = async (request: NextRequest) => {
   } finally {
     clearTimeout(timeout);
   }
+
+  // Only mark the conversation answered after Telegram accepted the reply.
+  await recordOwnerReply({ conversationId, replyText: text });
 
   return NextResponse.json({ ok: true });
 };

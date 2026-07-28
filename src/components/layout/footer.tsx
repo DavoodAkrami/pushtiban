@@ -1,4 +1,4 @@
-import { Bot } from "lucide-react";
+import { Logo } from "@/components/ui/brand/logo";
 
 const LINK_GROUPS = [
   {
@@ -25,12 +25,7 @@ export function Footer() {
       <div className="mx-auto w-full max-w-6xl px-5 py-16 sm:px-8">
         <div className="grid gap-10 md:grid-cols-[1.4fr_repeat(4,1fr)]">
           <div>
-            <a href="#" className="flex items-center gap-2.5 font-bold">
-              <span className="flex size-8 items-center justify-center rounded-xl bg-accent text-white">
-                <Bot className="size-4" aria-hidden />
-              </span>
-              پشتیبان
-            </a>
+            <Logo variant="full" size="lg" className="mb-4" />
             <p className="mt-4 max-w-xs text-sm leading-7 text-muted">
               پلتفرم هوش مصنوعی پشتیبانی مشتریان؛ ساخته‌شده برای کسب‌وکارهایی
               که به کیفیت اهمیت می‌دهند.

@@ -17,13 +17,13 @@ const InboxPage = async () => {
   // is not yet set up (the user will see an empty-state with a note).
   let initialConversations: Array<{
     id: string;
-    customer_display_name: string | null;
-    customer_username: string | null;
-    last_customer_message_text: string | null;
-    last_customer_message_at: string | null;
-    status: string;
-    queued_reason: string;
-    created_at: string;
+    customerDisplayName: string | null;
+    customerUsername: string | null;
+    lastCustomerMessageText: string | null;
+    lastCustomerMessageAt: string | null;
+    status: "open" | "answered" | "closed" | "dismissed";
+    queuedReason: "ai_unknown" | "customer_request" | "ai_disabled" | "frustration";
+    createdAt: string;
   }> = [];
   let setupRequired = false;
 
@@ -40,7 +40,16 @@ const InboxPage = async () => {
     if (error) {
       setupRequired = ["42P01", "42703", "PGRST204", "PGRST205"].includes(error.code);
     } else if (data) {
-      initialConversations = data as typeof initialConversations;
+      initialConversations = data.map((row) => ({
+        id: row.id,
+        customerDisplayName: row.customer_display_name,
+        customerUsername: row.customer_username,
+        lastCustomerMessageText: row.last_customer_message_text,
+        lastCustomerMessageAt: row.last_customer_message_at,
+        status: row.status,
+        queuedReason: row.queued_reason,
+        createdAt: row.created_at,
+      }));
     }
   }
 

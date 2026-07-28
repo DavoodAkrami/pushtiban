@@ -8,6 +8,7 @@ import {
   GitBranch,
   GripVertical,
   LayoutGrid,
+  Link2,
   MessageSquareText,
   Plus,
   Save,
@@ -38,6 +39,10 @@ import {
   type TelegramMenu,
 } from "@/lib/telegram-menu";
 import { fa } from "@/lib/utils";
+import {
+  requestSettingsOpen,
+  TELEGRAM_CONNECTION_CHANGED_EVENT,
+} from "@/lib/settings-events";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { loadAutomations } from "@/store/slices/automations-slice";
 import {
@@ -472,6 +477,22 @@ export const MenuPanel = () => {
     if (connectionStatus === "idle") void dispatch(loadAutomations());
   }, [connectionStatus, dispatch, status]);
 
+  React.useEffect(() => {
+    const refreshConnection = () => {
+      void dispatch(loadTelegramMenu());
+      void dispatch(loadAutomations());
+    };
+    window.addEventListener(
+      TELEGRAM_CONNECTION_CHANGED_EVENT,
+      refreshConnection
+    );
+    return () =>
+      window.removeEventListener(
+        TELEGRAM_CONNECTION_CHANGED_EVENT,
+        refreshConnection
+      );
+  }, [dispatch]);
+
   // Adopt the server copy whenever it changes and nothing local is pending.
   React.useEffect(() => {
     if (dirty) return;
@@ -751,7 +772,18 @@ export const MenuPanel = () => {
             variant="info"
             title="ابتدا ربات تلگرام را متصل کنید"
             description="از منوی حساب وارد تنظیمات و بخش اتصالات شوید. پس از اتصال ربات، می‌توانید منو را بسازید."
-          />
+          >
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-3"
+              startIcon={<Link2 className="size-4" />}
+              onClick={() => requestSettingsOpen("connections")}
+            >
+              اتصال ربات در تنظیمات
+            </Button>
+          </Alert>
         )}
 
         {loading && (

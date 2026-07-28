@@ -5,11 +5,11 @@ import * as AccordionPrimitive from "@radix-ui/react-accordion";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { TbLayoutSidebarRightCollapse, TbLayoutSidebarRightExpand } from "react-icons/tb";
 import { useTheme } from "next-themes";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   BarChart3,
-  Bot,
   Check,
   ChevronDown,
   ChevronsUpDown,
@@ -24,8 +24,6 @@ import {
   Monitor,
   Moon,
   Palette,
-  PanelRightClose,
-  PanelRightOpen,
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
@@ -47,6 +45,11 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
 import { cn, fa } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
+import { Logo } from "@/components/ui/brand/logo";
+import {
+  SETTINGS_OPEN_EVENT,
+  type SettingsSection,
+} from "@/lib/settings-events";
 import type { SessionProfile } from "@/store/slices/session-slice";
 import { useSessionProfile } from "@/store/use-session";
 import { useBusinessUsage } from "@/store/use-usage";
@@ -790,12 +793,9 @@ const MobileHeader = ({
         </button>
       </DialogPrimitive.Trigger>
 
-      <span className="flex min-w-0 items-center justify-center gap-2.5 font-bold">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-accent text-accent-foreground shadow-glow">
-          <Bot className="size-[1.1rem]" aria-hidden />
+<span className="flex min-w-0 items-center justify-center gap-2.5 font-bold">
+          <Logo variant="full" size="md" />
         </span>
-        <span className="truncate">پشتیبان</span>
-      </span>
 
       <span
         title={displayName}
@@ -879,9 +879,7 @@ const MobileNavigationDrawer = ({
             >
               <header className="flex h-11 shrink-0 items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-2.5">
-                  <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent text-accent-foreground shadow-glow">
-                    <Bot className="size-5" aria-hidden />
-                  </span>
+                  <Logo variant="icon" size="xl" className="flex-shrink-0" />
                   <div className="min-w-0">
                     <DialogPrimitive.Title className="truncate text-sm font-bold">
                       پشتیبان
@@ -931,12 +929,14 @@ const MobileNavigationDrawer = ({
 
 export const DashboardShell = ({
   children,
+  businessCategory,
   businessName,
   email,
   fullName,
   isAdmin = false,
 }: {
   children: React.ReactNode;
+  businessCategory: string;
   businessName: string;
   email: string;
   fullName: string;
@@ -951,12 +951,16 @@ export const DashboardShell = ({
   const [mobileProfileMenuOpen, setMobileProfileMenuOpen] =
     React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [settingsSection, setSettingsSection] =
+    React.useState<SettingsSection>("profile");
   const [logoutConfirmationOpen, setLogoutConfirmationOpen] =
     React.useState(false);
   const [signingOut, setSigningOut] = React.useState(false);
   const [themeReady, setThemeReady] = React.useState(false);
   const [currentBusinessName, setCurrentBusinessName] =
     React.useState(businessName);
+  const [currentBusinessCategory, setCurrentBusinessCategory] =
+    React.useState(businessCategory);
   const [currentFullName, setCurrentFullName] = React.useState(fullName);
   const desktopToggleRef = React.useRef<HTMLButtonElement>(null);
   const desktopAccountTriggerRef = React.useRef<HTMLButtonElement>(null);
@@ -969,8 +973,7 @@ export const DashboardShell = ({
   const reduce = useReducedMotion();
   const { toast } = useToast();
 
-  const ToggleIcon = sidebarOpen ? PanelRightClose : PanelRightOpen;
-  const toggleLabel = sidebarOpen ? "بستن سایدبار" : "باز کردن سایدبار";
+  const toggleLabel = sidebarOpen ? "بستن سایدبار" : "باز کردن سایدбар";
 
   const toggleSidebar = () => {
     setSidebarOpen((value) => !value);
@@ -1010,11 +1013,12 @@ export const DashboardShell = ({
     setDesktopProfileMenuOpen((value) => !value);
   };
 
-  const openSettings = () => {
+  const openSettings = (section: SettingsSection = "profile") => {
     const openedFromMobile = mobileNavOpen;
     setDesktopProfileMenuOpen(false);
     setMobileProfileMenuOpen(false);
     setMobileNavOpen(false);
+    setSettingsSection(section);
 
     if (openedFromMobile) {
       window.requestAnimationFrame(() => setSettingsOpen(true));
@@ -1022,6 +1026,21 @@ export const DashboardShell = ({
     }
     setSettingsOpen(true);
   };
+
+  React.useEffect(() => {
+    const handleSettingsRequest = (event: Event) => {
+      const detail = (event as CustomEvent<{ section?: SettingsSection }>).detail;
+      setDesktopProfileMenuOpen(false);
+      setMobileProfileMenuOpen(false);
+      setMobileNavOpen(false);
+      setSettingsSection(detail?.section ?? "profile");
+      window.requestAnimationFrame(() => setSettingsOpen(true));
+    };
+
+    window.addEventListener(SETTINGS_OPEN_EVENT, handleSettingsRequest);
+    return () =>
+      window.removeEventListener(SETTINGS_OPEN_EVENT, handleSettingsRequest);
+  }, []);
 
   const openSignOutConfirmation = () => {
     const openedFromMobile = mobileNavOpen;
@@ -1091,8 +1110,9 @@ export const DashboardShell = ({
 
   React.useEffect(() => {
     setCurrentBusinessName(businessName);
+    setCurrentBusinessCategory(businessCategory);
     setCurrentFullName(fullName);
-  }, [businessName, fullName]);
+  }, [businessCategory, businessName, fullName]);
 
   React.useEffect(() => setThemeReady(true), []);
 
@@ -1128,41 +1148,53 @@ export const DashboardShell = ({
         transition={reduce ? { duration: 0 } : { duration: 0.45, ease: luxe }}
         className="sticky top-0 hidden h-dvh shrink-0 flex-col overflow-visible border-e border-line bg-surface/60 p-4 xl:flex"
       >
-        <Tooltip
-          content={toggleLabel}
-          side="end"
-          delay={500}
-          wrapperClassName="w-full"
-        >
-          <button
-            ref={desktopToggleRef}
-            type="button"
-            data-sidebar-toggle
-            aria-label={toggleLabel}
-            aria-expanded={sidebarOpen}
-            onClick={toggleSidebar}
-            className={cn(
-              "flex min-h-11 w-full items-center gap-3 rounded-full text-start font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
-              !sidebarOpen && "justify-center"
-            )}
+        <div className="flex items-center gap-2">
+          <Tooltip
+            content={toggleLabel}
+            side="end"
+            delay={500}
+            wrapperClassName="flex-1"
           >
-            <span
+            <button
+              ref={desktopToggleRef}
+              type="button"
+              data-sidebar-toggle
+              aria-label={toggleLabel}
+              aria-expanded={sidebarOpen}
+              onClick={toggleSidebar}
               className={cn(
-                "flex size-9 shrink-0 items-center justify-center rounded-xl transition-colors duration-300 ease-luxe",
-                sidebarHovered
-                  ? "bg-card text-foreground"
-                  : "bg-accent text-accent-foreground shadow-glow"
+                "flex min-h-11 flex-1 items-center gap-3 rounded-full text-start font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+                !sidebarOpen && "justify-center"
               )}
             >
-              {sidebarHovered ? (
-                <ToggleIcon className="size-5" aria-hidden />
+              {sidebarHovered && !sidebarOpen ? (
+                <TbLayoutSidebarRightExpand
+                  className="size-5 flex-shrink-0"
+                  aria-hidden
+                />
               ) : (
-                <Bot className="size-5" aria-hidden />
+                <Logo variant="icon" size="sm" className="flex-shrink-0" />
               )}
-            </span>
-            {sidebarOpen && <span>پشتیبان</span>}
-          </button>
-        </Tooltip>
+              {sidebarOpen && <span className="truncate">پشتیبان</span>}
+            </button>
+          </Tooltip>
+
+          {sidebarOpen && (
+            <Tooltip content={toggleLabel} side="bottom">
+              <button
+                type="button"
+                aria-label={toggleLabel}
+                onClick={toggleSidebar}
+                className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-card/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+              >
+                <TbLayoutSidebarRightCollapse
+                  className="size-5"
+                  aria-hidden
+                />
+              </button>
+            </Tooltip>
+          )}
+        </div>
 
         <div
           className={cn(
@@ -1237,8 +1269,10 @@ export const DashboardShell = ({
       <SettingsModal
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
+        initialSection={settingsSection}
         fullName={currentFullName}
         businessName={currentBusinessName}
+        businessCategory={currentBusinessCategory}
         email={email || profile?.email || ""}
         restoreFocus={() => {
           const target = window.matchMedia("(min-width: 1280px)").matches
@@ -1249,6 +1283,7 @@ export const DashboardShell = ({
         onProfileUpdated={(updatedProfile) => {
           setCurrentFullName(updatedProfile.fullName);
           setCurrentBusinessName(updatedProfile.businessName);
+          setCurrentBusinessCategory(updatedProfile.businessCategory);
         }}
       />
 

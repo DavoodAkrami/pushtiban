@@ -7,6 +7,7 @@ import {
   Bot,
   Command,
   Hash,
+  Link2,
   MessageSquareText,
   Pencil,
   Plus,
@@ -47,6 +48,10 @@ import {
   type KeywordAutomation,
 } from "@/lib/automations";
 import { fa } from "@/lib/utils";
+import {
+  requestSettingsOpen,
+  TELEGRAM_CONNECTION_CHANGED_EVENT,
+} from "@/lib/settings-events";
 import { Camera, MessageCircle } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
@@ -626,6 +631,19 @@ const AutomationPanelContent = () => {
     void dispatch(loadAutomations());
   }, [dispatch]);
 
+  React.useEffect(() => {
+    const refreshConnection = () => void dispatch(loadAutomations());
+    window.addEventListener(
+      TELEGRAM_CONNECTION_CHANGED_EVENT,
+      refreshConnection
+    );
+    return () =>
+      window.removeEventListener(
+        TELEGRAM_CONNECTION_CHANGED_EVENT,
+        refreshConnection
+      );
+  }, [dispatch]);
+
   const openCreate = () => {
     setEditingRule(null);
     setEditorOpen(true);
@@ -793,7 +811,18 @@ const AutomationPanelContent = () => {
             variant="info"
             title="ابتدا ربات تلگرام را متصل کنید"
             description="از منوی حساب وارد تنظیمات و بخش اتصالات شوید. پس از اتصال ربات، می‌توانید اولین پاسخ کلیدواژه‌ای را بسازید."
-          />
+          >
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-3"
+              startIcon={<Link2 className="size-4" />}
+              onClick={() => requestSettingsOpen("connections")}
+            >
+              اتصال ربات در تنظیمات
+            </Button>
+          </Alert>
         )}
 
         {bot && status === "succeeded" && (
