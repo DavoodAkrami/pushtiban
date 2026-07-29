@@ -57,7 +57,7 @@ const toFlow = (row: FlowRow): AutomationFlow => ({
 });
 
 export const GET = async () => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return jsonError("نشست شما تمام شده؛ دوباره وارد حساب شوید.", 401);
 
@@ -100,7 +100,7 @@ export const POST = async (request: NextRequest) => {
   const contentLength = Number(request.headers.get("content-length") ?? 0);
   if (contentLength > MAX_BODY_BYTES) return jsonError("داده‌های ارسالی بیش از حد مجاز است.", 413);
 
-  const supabase = createClient();
+  const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return jsonError("نشست شما تمام شده؛ دوباره وارد حساب شوید.", 401);
 

@@ -4,8 +4,10 @@ import { createServerClient } from "@supabase/ssr";
 /**
  * Keeps the Supabase session fresh on every request (token refresh writes
  * back to cookies) and redirects signed-in users away from /auth.
+ *
+ * Runs on the Node.js runtime — `proxy` does not support the edge runtime.
  */
-export const middleware = async (request: NextRequest) => {
+export const proxy = async (request: NextRequest) => {
   let response = NextResponse.next({ request });
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;

@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 const SETUP_ERROR_CODES = new Set(["42P01", "PGRST204", "PGRST205"]);
 
 const AiAssistancePage = async () => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

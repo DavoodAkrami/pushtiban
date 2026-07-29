@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
  * the dashboard sidebar (remaining messages) and the overview page.
  */
 export const GET = async () => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

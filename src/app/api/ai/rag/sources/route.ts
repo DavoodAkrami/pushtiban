@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
  * RAG playground can show what has been ingested and optionally target one.
  */
 export const GET = async () => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

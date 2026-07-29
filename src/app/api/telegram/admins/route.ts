@@ -21,7 +21,7 @@ type AdminRow = {
 
 /** GET /api/telegram/admins?botId=... — list the admins added by this owner. */
 export const GET = async (request: NextRequest) => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -52,7 +52,7 @@ export const GET = async (request: NextRequest) => {
 
 /** POST /api/telegram/admins — add a new admin by Telegram numeric id. Body: { connectionId, adminTelegramId, adminDisplayName? }. */
 export const POST = async (request: NextRequest) => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -112,7 +112,7 @@ export const POST = async (request: NextRequest) => {
 
 /** DELETE /api/telegram/admins — remove an admin. Body: { id }. */
 export const DELETE = async (request: NextRequest) => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

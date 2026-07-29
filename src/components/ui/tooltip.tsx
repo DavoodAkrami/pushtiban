@@ -17,7 +17,7 @@ export interface TooltipProps {
   className?: string;
   /** Extra classes for the trigger wrapper span (e.g. `w-full` in menus). */
   wrapperClassName?: string;
-  children: React.ReactElement;
+  children: React.ReactElement<React.HTMLAttributes<HTMLElement>>;
 }
 
 /* Outer span handles placement (static transforms), inner motion element
@@ -51,7 +51,9 @@ export function Tooltip({
   const id = React.useId();
   const reduce = useReducedMotion();
   const [open, setOpen] = React.useState(false);
-  const timer = React.useRef<ReturnType<typeof setTimeout>>();
+  const timer = React.useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined
+  );
 
   const show = () => {
     clearTimeout(timer.current);

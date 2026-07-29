@@ -28,7 +28,7 @@ type ConversationView = {
 
 /** GET /api/inbox — list the signed-in user's support conversations. */
 export const GET = async (request: NextRequest) => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -79,7 +79,7 @@ export const GET = async (request: NextRequest) => {
 
 /** POST /api/inbox — owner sends a reply from the website. Body: { conversationId, text }. */
 export const POST = async (request: NextRequest) => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -157,7 +157,7 @@ export const POST = async (request: NextRequest) => {
 
 /** DELETE /api/inbox — close a conversation. Body: { conversationId }. */
 export const DELETE = async (request: NextRequest) => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

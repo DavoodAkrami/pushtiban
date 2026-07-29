@@ -6,7 +6,7 @@ whitespace, soft glass, and restrained use of a single accent blue.
 
 ## Stack
 
-- **Next.js 14** (App Router) + **TypeScript**
+- **Next.js 16** (App Router, Turbopack) + **React 19** + **TypeScript**
 - **Tailwind CSS** — token-driven theming via CSS variables (`darkMode: "class"`)
 - **Framer Motion** — word/char reveals, blur-to-sharp scroll reveals, stagger,
   parallax, mouse-follow layers, scroll-driven timeline progress

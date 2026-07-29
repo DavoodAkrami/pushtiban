@@ -34,7 +34,7 @@ const toFact = (row: FactRow) => ({
 
 /** GET /api/ai/knowledge/facts — list the signed-in user's business facts. */
 export const GET = async () => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -64,7 +64,7 @@ export const GET = async () => {
 export const POST = async (request: NextRequest) => {
   if (!hasValidOrigin(request)) return jsonError("درخواست معتبر نیست.", 403);
 
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -111,7 +111,7 @@ export const POST = async (request: NextRequest) => {
 export const PUT = async (request: NextRequest) => {
   if (!hasValidOrigin(request)) return jsonError("درخواست معتبر نیست.", 403);
 
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -162,7 +162,7 @@ export const PUT = async (request: NextRequest) => {
 export const DELETE = async (request: NextRequest) => {
   if (!hasValidOrigin(request)) return jsonError("درخواست معتبر نیست.", 403);
 
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

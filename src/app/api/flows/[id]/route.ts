@@ -38,7 +38,7 @@ const MAX_BODY_BYTES = 512_000;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-type RouteContext = { params: { id: string } };
+type RouteContext = { params: Promise<{ id: string }> };
 
 const jsonError = (error: string, status: number) =>
   NextResponse.json({ error }, { status });
@@ -132,14 +132,12 @@ const toFlowDetail = (row: FlowDetailRow): AutomationFlowDetail => ({
 });
 
 // GET /api/flows/[id] — full flow with nodes and buttons
-export const GET = async (
-  _request: NextRequest,
-  { params }: RouteContext
-) => {
+export const GET = async (_request: NextRequest, ctx: RouteContext) => {
+  const params = await ctx.params;
   if (!UUID_RE.test(params.id))
     return jsonError("فلو موردنظر پیدا نشد.", 404);
 
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -165,10 +163,8 @@ export const GET = async (
 };
 
 // PATCH /api/flows/[id] — update flow metadata + full node/button tree replacement
-export const PATCH = async (
-  request: NextRequest,
-  { params }: RouteContext
-) => {
+export const PATCH = async (request: NextRequest, ctx: RouteContext) => {
+  const params = await ctx.params;
   if (!hasValidOrigin(request)) return jsonError("درخواست معتبر نیست.", 403);
   if (!UUID_RE.test(params.id)) return jsonError("فلو موردنظر پیدا نشد.", 404);
 
@@ -176,7 +172,7 @@ export const PATCH = async (
   if (contentLength > MAX_BODY_BYTES)
     return jsonError("داده‌های ارسالی بیش از حد مجاز است.", 413);
 
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -500,14 +496,12 @@ export const PATCH = async (
 };
 
 // DELETE /api/flows/[id]
-export const DELETE = async (
-  request: NextRequest,
-  { params }: RouteContext
-) => {
+export const DELETE = async (request: NextRequest, ctx: RouteContext) => {
+  const params = await ctx.params;
   if (!hasValidOrigin(request)) return jsonError("درخواست معتبر نیست.", 403);
   if (!UUID_RE.test(params.id)) return jsonError("فلو موردنظر پیدا نشد.", 404);
 
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

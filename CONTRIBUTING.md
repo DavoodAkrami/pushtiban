@@ -7,7 +7,7 @@ adding features or components. (Codebase is English; product copy is Persian.)
 
 | Layer      | Choice                                              |
 | ---------- | --------------------------------------------------- |
-| Framework  | Next.js 14 (App Router) + TypeScript, static-first  |
+| Framework  | Next.js 16 (App Router, Turbopack) + React 19 + TypeScript |
 | Styling    | Tailwind CSS, token-driven via CSS variables        |
 | Animation  | **Framer Motion** (the only animation library used) |
 | Primitives | Radix UI (`@radix-ui/react-dialog`, `-accordion`)   |
@@ -22,13 +22,18 @@ adding features or components. (Codebase is English; product copy is Persian.)
 
 Run: `npm run dev` · Build: `npm run build` · Lint: `npm run lint`
 
+Next.js 16 removed `next lint`, so linting runs through the ESLint CLI
+(`eslint.config.mjs`, flat config) and `next build` no longer lints for you —
+run both commands.
+
 ## Data layer
 
 - **Database = Supabase, always.** No other database, ORM, or ad-hoc
   persistence. Use the shared helpers instead of constructing clients
-  inline: `src/lib/supabase/client.ts` (client components) and
+  inline: `src/lib/supabase/client.ts` (client components, synchronous) and
   `src/lib/supabase/server.ts` (server components, route handlers, server
-  actions). Secrets live in `.env.local` — copy `.env.example` to start.
+  actions) — **`await createClient()`**, since Next 16's `cookies()` is async.
+  Secrets live in `.env.local` — copy `.env.example` to start.
   `SUPABASE_SERVICE_ROLE_KEY` is server-only; never expose it with a
   `NEXT_PUBLIC_` prefix.
 - **Server state = Redux Toolkit; UI state = React.** The store in

@@ -2,8 +2,8 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
 /** Supabase client for Server Components, Route Handlers and Server Actions. */
-export function createClient() {
-  const cookieStore = cookies();
+export const createClient = async () => {
+  const cookieStore = await cookies();
 
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -19,10 +19,10 @@ export function createClient() {
               cookieStore.set(name, value, options)
             );
           } catch {
-            // Server Components cannot write cookies; middleware keeps the session fresh.
+            // Server Components cannot write cookies; the proxy keeps the session fresh.
           }
         },
       },
     }
   );
-}
+};

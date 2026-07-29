@@ -7,7 +7,7 @@ export const metadata: Metadata = {
 };
 
 const InboxPage = async () => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

@@ -39,7 +39,7 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const COMPACT_UUID_RE = /^[A-Za-z0-9_-]{22}$/;
 
-type RouteContext = { params: { botId: string } };
+type RouteContext = { params: Promise<{ botId: string }> };
 
 type TelegramMessageEntity = {
   type?: string;
@@ -507,7 +507,8 @@ const findMenuButton = async ({
   return data as MenuButtonTarget;
 };
 
-export const POST = async (request: NextRequest, { params }: RouteContext) => {
+export const POST = async (request: NextRequest, ctx: RouteContext) => {
+  const params = await ctx.params;
   if (!BOT_ID_RE.test(params.botId)) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }

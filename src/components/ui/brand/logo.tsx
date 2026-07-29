@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { cn } from "@/lib/utils";
 
 interface LogoProps {
@@ -29,7 +30,7 @@ export function Logo({
   className,
 }: LogoProps) {
   return (
-    <a
+    <Link
       href="/"
       className={cn("flex items-center gap-2.5 font-bold", className)}
       aria-label="پشتیبان - بازگشت به صفحه اصلی"
@@ -49,6 +50,6 @@ export function Logo({
           پشتیبان
         </span>
       )}
-    </a>
+    </Link>
   );
 }

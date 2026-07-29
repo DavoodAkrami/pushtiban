@@ -12,17 +12,17 @@ const SETUP_ERROR_CODES = new Set(["42P01", "42703", "PGRST204", "PGRST205"]);
 const jsonError = (error: string, status: number, setupRequired = false) =>
   NextResponse.json({ error, setupRequired }, { status });
 
-type RouteContext = { params: { conversationId: string } };
+type RouteContext = { params: Promise<{ conversationId: string }> };
 
 /** GET /api/inbox/[conversationId] — fetch a conversation + its transcript. */
 export const GET = async (_request: NextRequest, context: RouteContext) => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return jsonError("نشست شما تمام شده؛ دوباره وارد شوید.", 401);
 
-  const { conversationId } = context.params;
+  const { conversationId } = await context.params;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(conversationId)) {
     return jsonError("شناسه گفتگو معتبر نیست.", 400);
   }

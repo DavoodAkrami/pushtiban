@@ -1,8 +1,11 @@
-# CLAUDE.md
+# agent.md
 
-پشتیبان — Persian RTL AI customer-support SaaS. Next.js 14 (App Router) +
-TypeScript + Tailwind + Framer Motion. Dark theme is the default. Full
-conventions: **CONTRIBUTING.md**. Live component gallery: **`/design`**.
+> Mirror of **CLAUDE.md** for non-Claude agent tools. The two files must stay
+> byte-identical below this note — edit CLAUDE.md, then copy it over.
+
+پشتیبان — Persian RTL AI customer-support SaaS. Next.js 16 (App Router) +
+React 19 + TypeScript + Tailwind + Framer Motion. Dark theme is the default.
+Full conventions: **CONTRIBUTING.md**. Live component gallery: **`/design`**.
 
 ## Rules for agents working in this repo
 
@@ -29,13 +32,13 @@ conventions: **CONTRIBUTING.md**. Live component gallery: **`/design`**.
    these libraries already provide (no CSS keyframe choreography, no GSAP, no
    custom focus traps or dropdown logic from scratch).
 
-4. **Use Supabase for any database work.** All persistence goes through
+5. **Use Supabase for any database work.** All persistence goes through
    Supabase (`@supabase/supabase-js` / `@supabase/ssr`). Use the shared
    helpers — `src/lib/supabase/client.ts` in client components and
    `src/lib/supabase/server.ts` in server components / route handlers /
    server actions. Never introduce another database, ORM, or ad-hoc storage.
 
-5. **Redux Toolkit is for server-side state only.** The store at
+6. **Redux Toolkit is for server-side state only.** The store at
    `src/store/` (slices in `src/store/slices/`) holds data that comes from
    the server — session/profile, Supabase rows, fetched resources. **UI
    state (open/closed, hover, form fields, steps, toggles) never goes in
@@ -44,26 +47,26 @@ conventions: **CONTRIBUTING.md**. Live component gallery: **`/design`**.
    `useSelector`/`useDispatch`, and no other state library (Zustand, Jotai,
    plain Context stores).
 
-6. **Keep `ROADMAP.md` current.** It is the product source of truth: add a
+7. **Keep `ROADMAP.md` current.** It is the product source of truth: add a
    feature there before building it, and tick it (`- [x]`) once it ships and
    is verified. Never delete shipped items.
 
-7. **Schema changes go in `supabase/*.sql`.** Whenever you need anything
+8. **Schema changes go in `supabase/*.sql`.** Whenever you need anything
    added or changed in Supabase (tables, columns, triggers, RLS policies,
    functions), write the SQL into a file in the `supabase/` folder (e.g.
    `supabase/auth.sql`) — idempotent so it can be re-run safely — and then
    **ask the user in chat to paste/run it in the Supabase SQL Editor**.
    Never assume the schema exists until the user confirms they ran it.
 
-8. **Code comments and documentation are English-only.** Persian is
+9. **Code comments and documentation are English-only.** Persian is
    exclusively the language of the app's UI (user-facing copy). All code
    comments, docstrings, SQL comments, commit messages, and docs are written
    in English.
 
-9. **Use arrow functions, not `function` declarations.** Components,
-   handlers, hooks, utilities — write them as `const name = () => {}`.
-   Existing `function` code is migrated opportunistically when a file is
-   touched; new code is always arrow-style.
+10. **Use arrow functions, not `function` declarations.** Components,
+    handlers, hooks, utilities — write them as `const name = () => {}`.
+    Existing `function` code is migrated opportunistically when a file is
+    touched; new code is always arrow-style.
 
 ## Quick facts
 
@@ -75,5 +78,13 @@ conventions: **CONTRIBUTING.md**. Live component gallery: **`/design`**.
 - Buttons `rounded-full`, cards `rounded-3xl`, inputs `rounded-2xl`.
 - Every animated component must honor `useReducedMotion()`.
 - Verify with `npm run build` + `npm run lint`, in both themes, before done.
-
-(End of file - total 77 lines)
+  `next build` no longer lints on its own — run both.
+- Next 16 request APIs are async: `await cookies()`, `await params`,
+  `await searchParams`. The server Supabase helper is `await createClient()`;
+  the browser helper in `src/lib/supabase/client.ts` stays synchronous.
+- Route-level auth lives in `src/proxy.ts` (Next 16 renamed `middleware`);
+  it runs on the Node.js runtime.
+- If `next dev` throws `MODULE_NOT_FOUND` for a file that plainly exists (e.g.
+  `@xyflow/react/dist/style.css`), the Turbopack cache in `.next/dev` is stale
+  — `rm -rf .next` and restart. Turbopack is the default builder in Next 16,
+  so this is the first thing to try on an inexplicable dev-only failure.

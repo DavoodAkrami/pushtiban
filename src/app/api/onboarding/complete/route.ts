@@ -25,7 +25,7 @@ export const POST = async (request: NextRequest) => {
     return jsonError("اطلاعات واردشده بیش از حد طولانی است.", 413);
   }
 
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

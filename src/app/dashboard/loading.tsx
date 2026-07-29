@@ -2,7 +2,7 @@ import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
 
 /**
  * Route-level loading UI for every /dashboard segment — renders inside the
- * shell (sidebar stays put) while the page and the auth middleware resolve.
+ * shell (sidebar stays put) while the page and the auth proxy resolve.
  */
 export default function DashboardLoading() {
   return (

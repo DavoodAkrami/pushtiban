@@ -23,7 +23,7 @@ export const runtime = "nodejs";
 const MAX_BODY_BYTES = 8_500;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-type RouteContext = { params: { id: string } };
+type RouteContext = { params: Promise<{ id: string }> };
 
 type AutomationRow = {
   id: string;
@@ -57,14 +57,15 @@ const hasValidOrigin = (request: NextRequest) => {
 };
 
 const authenticatedUser = async () => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   return user;
 };
 
-export const PATCH = async (request: NextRequest, { params }: RouteContext) => {
+export const PATCH = async (request: NextRequest, ctx: RouteContext) => {
+  const params = await ctx.params;
   if (!hasValidOrigin(request)) {
     return jsonError("درخواست معتبر نیست؛ صفحه را تازه کنید و دوباره تلاش کنید.", 403);
   }
@@ -267,7 +268,8 @@ export const PATCH = async (request: NextRequest, { params }: RouteContext) => {
   }
 };
 
-export const DELETE = async (request: NextRequest, { params }: RouteContext) => {
+export const DELETE = async (request: NextRequest, ctx: RouteContext) => {
+  const params = await ctx.params;
   if (!hasValidOrigin(request)) {
     return jsonError("درخواست معتبر نیست؛ صفحه را تازه کنید و دوباره تلاش کنید.", 403);
   }

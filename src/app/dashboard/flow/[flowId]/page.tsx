@@ -6,8 +6,9 @@ export const metadata: Metadata = {
   description: "طراحی دیداری پیام‌ها، دکمه‌ها و مسیرهای یک فلو.",
 };
 
-const FlowPage = ({ params }: { params: { flowId: string } }) => (
-  <FlowDetailPage flowId={params.flowId} />
-);
+const FlowPage = async ({ params }: { params: Promise<{ flowId: string }> }) => {
+  const { flowId } = await params;
+  return <FlowDetailPage flowId={flowId} />;
+};
 
 export default FlowPage;

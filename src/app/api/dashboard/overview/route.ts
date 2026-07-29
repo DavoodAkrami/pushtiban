@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
  * zero instead of failing the whole page.
  */
 export const GET = async () => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

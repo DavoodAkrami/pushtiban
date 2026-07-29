@@ -6,18 +6,21 @@ export const metadata: Metadata = {
   description: "حساب پشتیبان را بسازید و ربات پشتیبانی تلگرام‌تان را راه‌اندازی کنید.",
 };
 
-const AuthPage = ({
+const AuthPage = async ({
   searchParams,
 }: {
-  searchParams: { error?: string };
-}) => (
-  <AuthClient
-    initialError={
-      searchParams.error === "confirmation"
-        ? "تأیید ایمیل کامل نشد؛ لینک ایمیل را دوباره باز کنید."
-        : undefined
-    }
-  />
-);
+  searchParams: Promise<{ error?: string }>;
+}) => {
+  const { error } = await searchParams;
+  return (
+    <AuthClient
+      initialError={
+        error === "confirmation"
+          ? "تأیید ایمیل کامل نشد؛ لینک ایمیل را دوباره باز کنید."
+          : undefined
+      }
+    />
+  );
+};
 
 export default AuthPage;

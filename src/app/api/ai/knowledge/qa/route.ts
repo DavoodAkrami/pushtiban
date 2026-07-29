@@ -43,7 +43,7 @@ const toQa = (row: QaRow) => ({
  * are silent; the rows will be retried on the next call.
  */
 const backfillMissingEmbeddings = async (
-  supabase: ReturnType<typeof createClient>,
+  supabase: Awaited<ReturnType<typeof createClient>>,
   userId: string
 ) => {
   if (!isEmbeddingsConfigured()) return;
@@ -69,7 +69,7 @@ const backfillMissingEmbeddings = async (
 
 /** GET /api/ai/knowledge/qa — list the signed-in user's Q&A pairs. */
 export const GET = async () => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -103,7 +103,7 @@ export const GET = async () => {
 export const POST = async (request: NextRequest) => {
   if (!hasValidOrigin(request)) return jsonError("درخواست معتبر نیست.", 403);
 
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -176,7 +176,7 @@ export const POST = async (request: NextRequest) => {
 export const PUT = async (request: NextRequest) => {
   if (!hasValidOrigin(request)) return jsonError("درخواست معتبر نیست.", 403);
 
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -247,7 +247,7 @@ export const PUT = async (request: NextRequest) => {
 export const DELETE = async (request: NextRequest) => {
   if (!hasValidOrigin(request)) return jsonError("درخواست معتبر نیست.", 403);
 
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

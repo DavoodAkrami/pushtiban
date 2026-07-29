@@ -313,7 +313,6 @@ const DashboardNavigation = ({
       activeSectionIds.forEach((id) => next.add(id));
       return next;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSectionIds]);
 
   // Render a parent accordion item (has children).
@@ -823,7 +822,7 @@ const MobileNavigationDrawer = ({
   profile,
   themeReady,
 }: {
-  accountTriggerRef: React.RefObject<HTMLButtonElement>;
+  accountTriggerRef: React.RefObject<HTMLButtonElement | null>;
   businessName: string;
   isAdmin: boolean;
   menuOpen: boolean;

@@ -31,7 +31,7 @@ export const GET = async (request: NextRequest) => {
   }
 
   if (scope === "self") {
-    const supabase = createClient();
+    const supabase = await createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();

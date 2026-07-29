@@ -31,7 +31,7 @@ export const PUT = async (request: NextRequest) => {
     return jsonError("درخواست بزرگ‌تر از حد مجاز است.", 413);
   }
 
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

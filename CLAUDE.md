@@ -1,8 +1,8 @@
 # CLAUDE.md
 
-پشتیبان — Persian RTL AI customer-support SaaS. Next.js 14 (App Router) +
-TypeScript + Tailwind + Framer Motion. Dark theme is the default. Full
-conventions: **CONTRIBUTING.md**. Live component gallery: **`/design`**.
+پشتیبان — Persian RTL AI customer-support SaaS. Next.js 16 (App Router) +
+React 19 + TypeScript + Tailwind + Framer Motion. Dark theme is the default.
+Full conventions: **CONTRIBUTING.md**. Live component gallery: **`/design`**.
 
 ## Rules for agents working in this repo
 
@@ -75,3 +75,13 @@ conventions: **CONTRIBUTING.md**. Live component gallery: **`/design`**.
 - Buttons `rounded-full`, cards `rounded-3xl`, inputs `rounded-2xl`.
 - Every animated component must honor `useReducedMotion()`.
 - Verify with `npm run build` + `npm run lint`, in both themes, before done.
+  `next build` no longer lints on its own — run both.
+- Next 16 request APIs are async: `await cookies()`, `await params`,
+  `await searchParams`. The server Supabase helper is `await createClient()`;
+  the browser helper in `src/lib/supabase/client.ts` stays synchronous.
+- Route-level auth lives in `src/proxy.ts` (Next 16 renamed `middleware`);
+  it runs on the Node.js runtime.
+- If `next dev` throws `MODULE_NOT_FOUND` for a file that plainly exists (e.g.
+  `@xyflow/react/dist/style.css`), the Turbopack cache in `.next/dev` is stale
+  — `rm -rf .next` and restart. Turbopack is the default builder in Next 16,
+  so this is the first thing to try on an inexplicable dev-only failure.

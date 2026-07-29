@@ -159,7 +159,7 @@ const readTargets = async (
 
 // GET /api/telegram/menu — the menu plus everything a button can point at.
 export const GET = async () => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -227,7 +227,7 @@ export const PUT = async (request: NextRequest) => {
   if (contentLength > MAX_BODY_BYTES)
     return jsonError("داده‌های ارسالی بیش از حد مجاز است.", 413);
 
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

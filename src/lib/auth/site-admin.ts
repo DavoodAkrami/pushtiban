@@ -11,7 +11,7 @@ export type SiteAdminCheck =
  * profile. Route handlers translate `{ ok: false }` into a Persian 401/403.
  */
 export const requireSiteAdmin = async (): Promise<SiteAdminCheck> => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

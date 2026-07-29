@@ -24,7 +24,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="fa" dir="rtl" suppressHydrationWarning>
+    <html
+      lang="fa"
+      dir="rtl"
+      suppressHydrationWarning
+      // Next 16 no longer overrides `scroll-behavior: smooth` (globals.css)
+      // during navigation; this opts back into instant scroll on route change.
+      data-scroll-behavior="smooth"
+    >
       <body className={`${vazirmatn.variable} font-sans antialiased`}>
         <StoreProvider>
           <ThemeProvider

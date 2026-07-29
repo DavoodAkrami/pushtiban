@@ -112,7 +112,7 @@ export const POST = async (request: NextRequest) => {
         : null;
 
     // Authenticate the request; RAG retrieval is scoped to the signed-in user.
-    const supabase = createClient();
+    const supabase = await createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();

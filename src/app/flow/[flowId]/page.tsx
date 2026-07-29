@@ -1,6 +1,12 @@
 import { redirect } from "next/navigation";
 
-const LegacyFlowPage = ({ params }: { params: { flowId: string } }) =>
-  redirect(`/dashboard/flow/${params.flowId}`);
+const LegacyFlowPage = async ({
+  params,
+}: {
+  params: Promise<{ flowId: string }>;
+}) => {
+  const { flowId } = await params;
+  redirect(`/dashboard/flow/${flowId}`);
+};
 
 export default LegacyFlowPage;

@@ -60,7 +60,7 @@ const setupMessage =
   "راه‌اندازی اتوماسیون هنوز کامل نشده است؛ اسکریپت پایگاه داده را اجرا کنید.";
 
 export const GET = async () => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -129,7 +129,7 @@ export const POST = async (request: NextRequest) => {
     return jsonError("متن پاسخ طولانی‌تر از حد مجاز است.", 413);
   }
 
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

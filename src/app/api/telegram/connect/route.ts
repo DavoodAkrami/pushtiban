@@ -39,7 +39,7 @@ export const POST = async (request: NextRequest) => {
     return jsonError("توکن واردشده معتبر نیست.", 413);
   }
 
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

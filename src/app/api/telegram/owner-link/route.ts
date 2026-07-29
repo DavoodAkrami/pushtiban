@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
  * Returns: { link: "https://t.me/<botUsername>?start=link_owner_<token>" }
  */
 export const POST = async (request: NextRequest) => {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

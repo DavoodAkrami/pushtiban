@@ -10,7 +10,7 @@ export const GET = async (request: NextRequest) => {
   const nextPath = safeNextPath(url.searchParams.get("next"));
 
   if (code) {
-    const supabase = createClient();
+    const supabase = await createClient();
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (!error) return NextResponse.redirect(new URL(nextPath, url.origin));
   }
