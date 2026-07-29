@@ -54,6 +54,8 @@ How to use:
       NVIDIA NIM via OpenAI-compatible client, OpenRouter via `@openrouter/sdk`
 - [x] AI provider test chatbot at `/ai/test` — pick a model (incl. OpenRouter
       free auto via `openrouter/free`) and stream a reply
+- [ ] Upgrade to Next.js 16 (Active LTS) + React 19 — Next.js 14 reached end of
+      life and no longer receives security patches
 
 ## Phase 3 — Core product
 
