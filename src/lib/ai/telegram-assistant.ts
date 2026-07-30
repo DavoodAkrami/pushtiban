@@ -13,6 +13,13 @@ import {
   retrieveRagContext,
   buildRagSystemPrompt,
 } from "@/lib/ai/rag";
+import {
+  DEFAULT_PERSONA,
+  buildPersonaIdentity,
+  buildPersonaLines,
+  getBusinessPersona,
+  type BusinessPersona,
+} from "@/lib/ai/persona";
 import { checkAiLimits, getGlobalAiSettings, logAiUsage } from "@/lib/ai/usage";
 
 const TELEGRAM_MESSAGE_MAX_LENGTH = 4096;
@@ -20,12 +27,14 @@ const COMPLETION_TIMEOUT_MS = 25_000;
 const DEFAULT_NVIDIA_MODEL = "meta/llama-3.3-70b-instruct";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 
-const FALLBACK_SYSTEM_PROMPT = [
-  "You are the customer-support assistant for a business using Pushtiban.",
-  "Answer the user's question clearly and concisely in the same language as the user.",
-  "Do not invent business-specific facts. If necessary information is missing, say so and ask one focused follow-up question.",
-  "Return plain text suitable for a Telegram message.",
-].join(" ");
+/** Used when RAG retrieval fails — persona still applies, context does not. */
+const buildFallbackSystemPrompt = (persona: BusinessPersona): string =>
+  [
+    buildPersonaIdentity(persona),
+    ...buildPersonaLines(persona),
+    "Reply in the user's language, briefly and accurately, as plain text for Telegram.",
+    "Never invent business details; if you are missing information, say so and ask one focused follow-up question.",
+  ].join("\n");
 
 const truncateTelegramMessage = (value: string) =>
   Array.from(value).slice(0, TELEGRAM_MESSAGE_MAX_LENGTH).join("");
@@ -233,21 +242,27 @@ export type TelegramAiResult = {
  * Generate an AI reply for a Telegram user message.
  *
  * When `userId` is provided (the business owner whose bot received the
- * message), the full RAG pipeline runs: intent detection → standing business
- * facts → curated Q&A → filtered vector chunks → augmented system prompt. This
- * is the production path used by the Telegram webhook.
+ * message), the full pipeline runs: the owner's persona (business name,
+ * category, intro, instructions, style levels) plus intent detection →
+ * standing business facts → curated Q&A → filtered vector chunks → augmented
+ * system prompt. This is the production path used by the Telegram webhook.
  *
- * When `userId` is omitted, falls back to a plain LLM reply with no retrieval.
+ * When `userId` is omitted, falls back to a plain LLM reply with no retrieval
+ * and no persona.
  *
- * Returns `{ text, needsHuman }`. The AI is given an `escalate_to_admin` tool:
- * it calls the tool when it genuinely cannot answer using the knowledge base,
- * OR when the customer explicitly asks to involve an admin/owner/human. When
- * `needsHuman` is true the webhook should offer the customer a "ask admin?"
- * inline button instead of sending `text`. When `false`, `text` is the final
- * reply to send.
+ * Returns `{ text, needsHuman }`. When `options.handoffEnabled` is not false
+ * the AI is given an `escalate_to_admin` tool: it calls the tool when it
+ * genuinely cannot answer using the knowledge base, OR when the customer
+ * explicitly asks to involve an admin/owner/human. When `needsHuman` is true
+ * the webhook should offer the customer a "ask admin?" inline button instead
+ * of sending `text`. When `false`, `text` is the final reply to send.
  *
- * Errors during retrieval are non-fatal: we fall back to the plain
- * FALLBACK_SYSTEM_PROMPT so the customer still gets a reply.
+ * Passing `handoffEnabled: false` (the owner turned handoff off) omits the
+ * tool and its instructions entirely — the escalation path is unreachable in
+ * that configuration, so paying its input tokens on every message is waste.
+ *
+ * Errors during retrieval are non-fatal: we fall back to a persona-only
+ * prompt so the customer still gets a reply.
  */
 const ESCALATE_TOOL = {
   type: "function" as const,
@@ -269,20 +284,20 @@ const ESCALATE_TOOL = {
   },
 };
 
-const buildEscalationSystemPrompt = (basePrompt: string): string => {
-  const instructions = [
-    "You have a tool called `escalate_to_admin`. Use it ONLY in these situations:",
-    "1. The customer explicitly asks to talk to, message, or be connected with an admin, owner, operator, support agent, or human (e.g. 'پیام به ادمین', 'پشتیبان انسانی', 'connect me to a human').",
-    "2. You cannot confidently answer the question even with the provided business knowledge — say a brief apology in the `preface` and call the tool instead of guessing or narrating your own failure.",
-    "Do NOT call the tool for questions you CAN answer, for greetings, or for general conversation. When the tool is not needed, reply normally with a helpful answer.",
-  ].join(" ");
-  return `${basePrompt}\n\n${instructions}`;
-};
+const buildEscalationSystemPrompt = (basePrompt: string): string =>
+  `${basePrompt}\nCall \`escalate_to_admin\` ONLY when the customer asks to reach a human/admin, or when you genuinely cannot answer (put a one-line apology in \`preface\`). Never call it for questions you can answer, greetings, or small talk.`;
 
 export const generateTelegramAiReply = async (
   question: string,
-  userId?: string
+  userId?: string,
+  options: { handoffEnabled?: boolean } = {}
 ): Promise<TelegramAiResult> => {
+  // When the owner has human handoff switched off, the escalation tool can
+  // never lead anywhere — the webhook replies "I don't know" either way. Not
+  // sending the tool schema or its instructions saves those input tokens on
+  // every single message.
+  const escalationAvailable = options.handoffEnabled !== false;
+
   // Platform-wide kill switch and per-business monthly caps, both managed
   // from /dashboard/admin. When either gate rejects the call, no LLM request
   // is made — the webhook sends its generic "AI unavailable" fallback.
@@ -296,24 +311,32 @@ export const generateTelegramAiReply = async (
     }
   }
 
-  // Try to build a RAG-augmented system prompt scoped to this owner's
-  // knowledge base. Any failure → fall back to the plain prompt below.
-  let systemPrompt = FALLBACK_SYSTEM_PROMPT;
-  if (userId) {
-    try {
-      const retrieval = await retrieveRagContext({
-        question,
-        userId,
-      });
-      systemPrompt = buildRagSystemPrompt(retrieval);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message.slice(0, 200) : "Unknown error";
-      console.error("Telegram RAG retrieval failed; using fallback:", message);
-    }
-  }
+  // Business identity + owner-authored persona. Retrieval and the persona are
+  // independent, so they run together; a persona read never throws.
+  const [persona, retrieval] = await Promise.all([
+    userId ? getBusinessPersona(userId) : Promise.resolve(DEFAULT_PERSONA),
+    userId
+      ? retrieveRagContext({ question, userId }).catch((error: unknown) => {
+          const message =
+            error instanceof Error
+              ? error.message.slice(0, 200)
+              : "Unknown error";
+          console.error(
+            "Telegram RAG retrieval failed; using fallback:",
+            message
+          );
+          return null;
+        })
+      : Promise.resolve(null),
+  ]);
 
-  systemPrompt = buildEscalationSystemPrompt(systemPrompt);
+  let systemPrompt = retrieval
+    ? buildRagSystemPrompt(retrieval, persona)
+    : buildFallbackSystemPrompt(persona);
+
+  if (escalationAvailable) {
+    systemPrompt = buildEscalationSystemPrompt(systemPrompt);
+  }
 
   // The site admin can pin one chat model in /dashboard/admin/settings. It
   // overrides the env var for whichever provider owns that model id, and that
@@ -351,6 +374,26 @@ export const generateTelegramAiReply = async (
     if (!provider.client) continue;
 
     const usage = userId ? { userId, provider: provider.id } : undefined;
+
+    // Handoff off → no tool, no tool-call parsing, no retry path.
+    if (!escalationAvailable) {
+      try {
+        const text = await requestCompletion({
+          client: provider.client,
+          model: provider.model,
+          question,
+          systemPrompt,
+          usage,
+        });
+        if (text) return { text, needsHuman: false };
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message.slice(0, 200) : "Unknown error";
+        console.error(`Telegram AI provider ${provider.id} failed:`, message);
+      }
+      continue;
+    }
+
     let result: TelegramAiResult | null = null;
     try {
       result = await requestCompletionWithEscalation({

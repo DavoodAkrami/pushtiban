@@ -139,6 +139,15 @@ How to use:
       Settings connections flow
 - [x] Settings business information section for editing business name and
       category
+- [x] Per-business AI personalization at /dashboard/ai-assistance/persona: the
+      assistant knows the business name and category (so introductions are
+      specific, not generic), the owner writes a business intro and behaviour
+      instructions, and four style dials — warmth, enthusiasm, headings/lists,
+      emoji — each set to کمتر / پیش‌فرض / بیشتر
+- [x] Leaner AI prompts: retrieval metadata the model cannot act on (similarity
+      scores, per-item categories) and verbose section markers dropped, and the
+      escalation tool plus its instructions are only sent when the owner has
+      human handoff switched on
 - [ ] Bot keyboard menu: a bot-wide set of always-visible buttons at the bottom
       of the Telegram chat, laid out in rows at /dashboard/menu, each button
       wired to an existing flow or prepared reply, plus a per-message control

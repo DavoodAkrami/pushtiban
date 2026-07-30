@@ -8,6 +8,7 @@ import {
   type ProviderId,
 } from "@/configs";
 import { retrieveRagContext, buildRagSystemPrompt } from "@/lib/ai/rag";
+import { getBusinessPersona } from "@/lib/ai/persona";
 import { logAiUsage, type UsageTokens } from "@/lib/ai/usage";
 import { createClient } from "@/lib/supabase/server";
 
@@ -140,7 +141,8 @@ export const POST = async (request: NextRequest) => {
       );
     });
 
-    const systemPrompt = buildRagSystemPrompt(retrieval);
+    const persona = await getBusinessPersona(user.id);
+    const systemPrompt = buildRagSystemPrompt(retrieval, persona);
     const messages: ChatMessage[] = [
       { role: "system", content: systemPrompt },
       { role: "user", content: question },

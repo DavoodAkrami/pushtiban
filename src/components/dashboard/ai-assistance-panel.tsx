@@ -16,6 +16,7 @@ import {
   Users,
   ArrowLeft,
   ArrowRight,
+  Wand2,
   type LucideIcon,
 } from "lucide-react";
 import { luxe } from "@/components/motion/reveal";
@@ -284,6 +285,14 @@ export const AiAssistancePanel = ({
                 </motion.div>
               )}
             </AnimatePresence>
+
+            {/* Persona — how the assistant introduces itself and sounds */}
+            <KnowledgeLinkCard
+              href="/dashboard/ai-assistance/persona"
+              icon={Wand2}
+              title="شخصیت و لحن دستیار"
+              description="کسب‌وکارتان را معرفی کنید و لحن پاسخ‌ها را تنظیم کنید؛ صمیمیت، شور، تیتر و فهرست و ایموجی."
+            />
 
             {/* Knowledge navigation cards */}
             <div className="grid gap-3 sm:grid-cols-2">

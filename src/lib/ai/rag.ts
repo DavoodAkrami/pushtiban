@@ -8,6 +8,12 @@ import {
 } from "@/configs";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getGlobalAiSettings, logAiUsage } from "@/lib/ai/usage";
+import {
+  DEFAULT_PERSONA,
+  buildPersonaIdentity,
+  buildPersonaLines,
+  type BusinessPersona,
+} from "@/lib/ai/persona";
 
 export type RagChunk = {
   id: string;
@@ -332,62 +338,54 @@ export const retrieveRagContext = async ({
 };
 
 // ---------------------------------------------------------------------------
-// System-prompt builder — injects facts, Q&A, and chunked context as
-// structured sections so the LLM knows what each piece is.
+// System-prompt builder — persona first (so the assistant knows *who* it is
+// answering for), then facts, Q&A, and chunked context as labelled sections.
+//
+// Written for token economy: retrieval metadata the model cannot act on
+// (similarity scores, per-item category tags) is deliberately left out, and
+// sections use a single short header instead of open/close markers. Only the
+// sections that actually have content are emitted.
 // ---------------------------------------------------------------------------
 
-export const buildRagSystemPrompt = (retrieval: RagRetrieval): string => {
+export const buildRagSystemPrompt = (
+  retrieval: RagRetrieval,
+  persona: BusinessPersona = DEFAULT_PERSONA
+): string => {
   const { facts, qa, chunks, intent } = retrieval;
 
   const sections: string[] = [
-    "You are the customer-support assistant for a business using Pushtiban.",
-    "Answer the user's question clearly and concisely in the same language as the user.",
-    "Prioritize the sources below in this order: standing facts > curated Q&A > knowledge-base chunks.",
-    "If none of the sources answer the question, say so plainly and do not invent facts.",
-    "Return plain text suitable for a Telegram message.",
+    buildPersonaIdentity(persona),
+    ...buildPersonaLines(persona),
+    "Reply in the user's language, briefly and accurately, as plain text for Telegram.",
+    "Source priority: FACTS > Q&A > KB. Never invent business details; if the sources do not cover the question, say so.",
   ];
 
   if (intent && intent.category !== "general") {
-    sections.push(`The user's question appears to be about: ${intent.category}.`);
+    sections.push(`Topic: ${intent.category}.`);
   }
 
   // Standing facts — always-on context.
   if (facts.length) {
-    sections.push("", "=== FACTS (always known) ===");
-    facts.forEach((fact, i) => {
-      sections.push(`[F${i + 1}] (${fact.category}) ${fact.factText}`);
-    });
-    sections.push("=== END FACTS ===");
+    sections.push("", "FACTS:");
+    facts.forEach((fact) => sections.push(`- ${fact.factText}`));
   }
 
   // Curated Q&A pairs — high-authority, direct matches.
   if (qa.length) {
-    sections.push("", "=== CURATED Q&A ===");
-    qa.forEach((pair, i) => {
-      sections.push(
-        `[Q${i + 1}] (similarity ${pair.similarity.toFixed(3)})`,
-        `Q: ${pair.question}`,
-        `A: ${pair.answer}`
-      );
-    });
-    sections.push("=== END Q&A ===");
+    sections.push("", "Q&A:");
+    qa.forEach((pair) => sections.push(`Q: ${pair.question}`, `A: ${pair.answer}`));
   }
 
   // Chunked knowledge — fuzzier, retrieved via vector similarity.
   if (chunks.length) {
-    sections.push("", "=== KNOWLEDGE BASE ===");
-    chunks.forEach((chunk, i) => {
-      sections.push(
-        `[${i + 1}] (${chunk.category}, similarity ${chunk.similarity.toFixed(3)})\n${chunk.content}`
-      );
-    });
-    sections.push("=== END KNOWLEDGE BASE ===");
+    sections.push("", "KB:");
+    chunks.forEach((chunk) => sections.push(`- ${chunk.content}`));
   }
 
   if (!facts.length && !qa.length && !chunks.length) {
     sections.push(
       "",
-      "No knowledge-base context was retrieved; answer from general knowledge, but say so if you are unsure."
+      "No stored context matched; answer from general knowledge and say so if unsure."
     );
   }
 

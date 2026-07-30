@@ -1034,7 +1034,8 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
   const aiReply = await withTelegramTyping({
     chatId,
     token,
-    task: () => generateTelegramAiReply(text, connection.user_id),
+    task: () =>
+      generateTelegramAiReply(text, connection.user_id, { handoffEnabled }),
   });
 
   // aiReply is { text, needsHuman }. When the AI flagged the question as

@@ -35,6 +35,7 @@ import {
   BookOpen,
   HelpCircle,
   ToggleRight,
+  Wand2,
   type LucideIcon,
 } from "lucide-react";
 import { LogoutConfirmationModal } from "@/components/dashboard/logout-confirmation-modal";
@@ -113,6 +114,11 @@ const NAV_GROUPS: NavGroup[] = [
             href: "/dashboard/ai-assistance",
             label: "تنظیمات دستیار",
             icon: ToggleRight,
+          },
+          {
+            href: "/dashboard/ai-assistance/persona",
+            label: "شخصیت و لحن",
+            icon: Wand2,
           },
           {
             href: "/dashboard/ai-assistance/facts",
