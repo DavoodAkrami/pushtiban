@@ -86,10 +86,19 @@ const INTENT_SYSTEM_PROMPT = [
 
 const INTENT_TIMEOUT_MS = 8_000;
 
+/**
+ * Added only when the chat has memory: it lets "و برای دو تا؟" condense into a
+ * standalone query instead of an unsearchable fragment. Costs nothing on the
+ * first message of a session.
+ */
+const INTENT_FOLLOW_UP_LINE =
+  ' The previous customer message is given for context only: if the current message depends on it (pronouns, "همون", "و برای...", a bare number), resolve it into a standalone searchQuery. Classify the CURRENT message.';
+
 const requestIntent = async (
   client: NonNullable<ReturnType<typeof getOpenAIClient>>,
   question: string,
-  usageUserId?: string
+  usageUserId?: string,
+  previousUserMessage?: string
 ): Promise<RagIntent | null> => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), INTENT_TIMEOUT_MS);
@@ -98,8 +107,18 @@ const requestIntent = async (
       {
         model: "gpt-4o-mini",
         messages: [
-          { role: "system", content: INTENT_SYSTEM_PROMPT },
-          { role: "user", content: question },
+          {
+            role: "system",
+            content: previousUserMessage
+              ? `${INTENT_SYSTEM_PROMPT}${INTENT_FOLLOW_UP_LINE}`
+              : INTENT_SYSTEM_PROMPT,
+          },
+          {
+            role: "user",
+            content: previousUserMessage
+              ? `Previous: ${previousUserMessage}\nCurrent: ${question}`
+              : question,
+          },
         ],
         max_tokens: 32,
         stream: false,
@@ -139,17 +158,25 @@ const requestIntent = async (
 /**
  * Ask the LLM to classify the user's question into a category so we can
  * pre-filter the vector search. Falls back to null (no filter) on any error.
+ *
+ * `previousUserMessage` (from the chat memory, when the session is still open)
+ * is used only to resolve follow-ups into a standalone search query.
  */
 export const extractIntent = async (
   question: string,
-  usageUserId?: string
+  usageUserId?: string,
+  previousUserMessage?: string
 ): Promise<RagIntent | null> => {
   // Prefer OpenAI (cheap, fast), fall back to NVIDIA NIM.
   const openai = getOpenAIClient();
-  if (openai) return requestIntent(openai, question, usageUserId);
+  if (openai) {
+    return requestIntent(openai, question, usageUserId, previousUserMessage);
+  }
 
   const nvidia = getNvidiaNimClient();
-  if (nvidia) return requestIntent(nvidia, question, usageUserId);
+  if (nvidia) {
+    return requestIntent(nvidia, question, usageUserId, previousUserMessage);
+  }
 
   return null;
 };
@@ -174,10 +201,13 @@ export const retrieveRagContext = async ({
   userId,
   matchCount,
   minSimilarity,
+  previousUserMessage,
   sourceId = null,
 }: {
   question: string;
   userId: string;
+  /** The customer's previous message, when the chat session is still open. */
+  previousUserMessage?: string;
   /** Defaults to the admin-set global value when omitted. */
   matchCount?: number;
   /** Defaults to the admin-set global value when omitted. */
@@ -230,7 +260,7 @@ export const retrieveRagContext = async ({
   //    condensed search query we embed (falls back to the raw message when
   //    the intent call fails, returns nothing, or is disabled globally).
   const intent = settings.intentEnabled
-    ? await extractIntent(question, userId)
+    ? await extractIntent(question, userId, previousUserMessage)
     : null;
   const queryEmbedding = await embedQuery(intent?.searchQuery ?? question);
   if (!queryEmbedding) {
@@ -350,13 +380,14 @@ export const retrieveRagContext = async ({
 
 export const buildRagSystemPrompt = (
   retrieval: RagRetrieval,
-  persona: BusinessPersona = DEFAULT_PERSONA
+  persona: BusinessPersona = DEFAULT_PERSONA,
+  options: { continuingSession?: boolean } = {}
 ): string => {
   const { facts, qa, chunks, intent } = retrieval;
 
   const sections: string[] = [
     buildPersonaIdentity(persona),
-    ...buildPersonaLines(persona),
+    ...buildPersonaLines(persona, options),
     REPLY_FORMAT_LINE,
     "Source priority: FACTS > Q&A > KB. Never invent business details; if the sources do not cover the question, say so.",
   ];

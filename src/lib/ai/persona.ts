@@ -177,10 +177,18 @@ export const buildPersonaIdentity = (persona: BusinessPersona): string => {
 
 /**
  * The lines that follow the identity line: what the business is, how the owner
- * wants the assistant to behave, how to introduce itself, and any style dial
- * the owner moved off "default".
+ * wants the assistant to behave, whether to introduce itself, and any style
+ * dial the owner moved off "default".
+ *
+ * `continuingSession` comes from the chat memory (src/lib/ai/memory.ts): on
+ * the first message of a session the assistant is told to introduce itself, on
+ * every message after that it is told not to. Both are one short line, so the
+ * two states cost the same.
  */
-export const buildPersonaLines = (persona: BusinessPersona): string[] => {
+export const buildPersonaLines = (
+  persona: BusinessPersona,
+  { continuingSession = false }: { continuingSession?: boolean } = {}
+): string[] => {
   const lines: string[] = [];
 
   if (persona.intro) lines.push(`About the business: ${persona.intro}`);
@@ -188,13 +196,16 @@ export const buildPersonaLines = (persona: BusinessPersona): string[] => {
     lines.push(`Owner's instructions: ${persona.instructions}`);
   }
 
-  // Greetings are the moment the business name matters most: without this the
-  // model answers "سلام" with a generic "how can I help?" that could belong to
-  // any bot.
+  // Greetings are the moment the business name matters most: without the first
+  // line the model answers "سلام" with a generic "how can I help?" that could
+  // belong to any bot — and without the second it repeats that introduction on
+  // every single turn.
   lines.push(
-    `On a greeting or "who are you": say you are the AI support assistant of ${
-      persona.businessName || "this business"
-    }, add one line on what it does, and invite questions about it.`
+    continuingSession
+      ? "Ongoing conversation: do not greet or introduce yourself again; answer directly."
+      : `On a greeting or "who are you": say you are the AI support assistant of ${
+          persona.businessName || "this business"
+        }, add one line on what it does, and invite questions about it.`
   );
 
   const style = (

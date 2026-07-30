@@ -1,7 +1,10 @@
 import "server-only";
 
 import type OpenAI from "openai";
-import type { ChatCompletionMessageFunctionToolCall } from "openai/resources/chat/completions";
+import type {
+  ChatCompletionMessageFunctionToolCall,
+  ChatCompletionMessageParam,
+} from "openai/resources/chat/completions";
 import {
   getNvidiaNimClient,
   getOpenAIClient,
@@ -21,6 +24,7 @@ import {
   getBusinessPersona,
   type BusinessPersona,
 } from "@/lib/ai/persona";
+import type { ChatTurn } from "@/lib/ai/memory";
 import { checkAiLimits, getGlobalAiSettings, logAiUsage } from "@/lib/ai/usage";
 
 const TELEGRAM_MESSAGE_MAX_LENGTH = 4096;
@@ -29,10 +33,13 @@ const DEFAULT_NVIDIA_MODEL = "meta/llama-3.3-70b-instruct";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 
 /** Used when RAG retrieval fails — persona still applies, context does not. */
-const buildFallbackSystemPrompt = (persona: BusinessPersona): string =>
+const buildFallbackSystemPrompt = (
+  persona: BusinessPersona,
+  options: { continuingSession?: boolean }
+): string =>
   [
     buildPersonaIdentity(persona),
-    ...buildPersonaLines(persona),
+    ...buildPersonaLines(persona, options),
     REPLY_FORMAT_LINE,
     "Never invent business details; if you are missing information, say so and ask one focused follow-up question.",
   ].join("\n");
@@ -48,15 +55,13 @@ type Provider = {
 
 const requestCompletion = async ({
   client,
+  messages,
   model,
-  question,
-  systemPrompt,
   usage,
 }: {
   client: OpenAI;
+  messages: ChatCompletionMessageParam[];
   model: string;
-  question: string;
-  systemPrompt: string;
   usage?: { userId: string; provider: string };
 }) => {
   const controller = new AbortController();
@@ -66,10 +71,7 @@ const requestCompletion = async ({
     const completion = await client.chat.completions.create(
       {
         model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: question },
-        ],
+        messages,
         max_tokens: 700,
         stream: false,
       },
@@ -101,15 +103,13 @@ const requestCompletion = async ({
  */
 const requestCompletionWithEscalation = async ({
   client,
+  messages,
   model,
-  question,
-  systemPrompt,
   usage,
 }: {
   client: OpenAI;
+  messages: ChatCompletionMessageParam[];
   model: string;
-  question: string;
-  systemPrompt: string;
   usage?: { userId: string; provider: string };
 }): Promise<TelegramAiResult | null> => {
   const controller = new AbortController();
@@ -119,10 +119,7 @@ const requestCompletionWithEscalation = async ({
     const completion = await client.chat.completions.create(
       {
         model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: question },
-        ],
+        messages,
         tools: [ESCALATE_TOOL],
         tool_choice: "auto",
         max_tokens: 700,
@@ -251,6 +248,12 @@ export type TelegramAiResult = {
  * When `userId` is omitted, falls back to a plain LLM reply with no retrieval
  * and no persona.
  *
+ * `options.history` is the chat's short-term memory (src/lib/ai/memory.ts):
+ * the recent turns of an open session, sent as real chat messages. When it is
+ * non-empty the assistant is told not to introduce itself again, and the
+ * customer's previous message is handed to the intent classifier so follow-ups
+ * ("و برای دو تا؟") condense into a searchable query.
+ *
  * Returns `{ text, needsHuman }`. When `options.handoffEnabled` is not false
  * the AI is given an `escalate_to_admin` tool: it calls the tool when it
  * genuinely cannot answer using the knowledge base, OR when the customer
@@ -291,8 +294,17 @@ const buildEscalationSystemPrompt = (basePrompt: string): string =>
 export const generateTelegramAiReply = async (
   question: string,
   userId?: string,
-  options: { handoffEnabled?: boolean } = {}
+  options: { handoffEnabled?: boolean; history?: ChatTurn[] } = {}
 ): Promise<TelegramAiResult> => {
+  // Chat memory (src/lib/ai/memory.ts). A non-empty history means the customer
+  // is mid-session: the assistant must not re-introduce itself, and the
+  // previous message helps the intent call resolve follow-ups.
+  const history = options.history ?? [];
+  const continuingSession = history.length > 0;
+  const previousUserMessage = [...history]
+    .reverse()
+    .find((turn) => turn.role === "user")?.text;
+
   // When the owner has human handoff switched off, the escalation tool can
   // never lead anywhere — the webhook replies "I don't know" either way. Not
   // sending the tool schema or its instructions saves those input tokens on
@@ -317,7 +329,11 @@ export const generateTelegramAiReply = async (
   const [persona, retrieval] = await Promise.all([
     userId ? getBusinessPersona(userId) : Promise.resolve(DEFAULT_PERSONA),
     userId
-      ? retrieveRagContext({ question, userId }).catch((error: unknown) => {
+      ? retrieveRagContext({
+          question,
+          userId,
+          previousUserMessage,
+        }).catch((error: unknown) => {
           const message =
             error instanceof Error
               ? error.message.slice(0, 200)
@@ -332,12 +348,20 @@ export const generateTelegramAiReply = async (
   ]);
 
   let systemPrompt = retrieval
-    ? buildRagSystemPrompt(retrieval, persona)
-    : buildFallbackSystemPrompt(persona);
+    ? buildRagSystemPrompt(retrieval, persona, { continuingSession })
+    : buildFallbackSystemPrompt(persona, { continuingSession });
 
   if (escalationAvailable) {
     systemPrompt = buildEscalationSystemPrompt(systemPrompt);
   }
+
+  // The session's recent turns sit between the system prompt and the new
+  // question, so the model reads them as what they are: earlier messages.
+  const messages: ChatCompletionMessageParam[] = [
+    { role: "system", content: systemPrompt },
+    ...history.map((turn) => ({ role: turn.role, content: turn.text })),
+    { role: "user", content: question },
+  ];
 
   // The site admin can pin one chat model in /dashboard/admin/settings. It
   // overrides the env var for whichever provider owns that model id, and that
@@ -381,9 +405,8 @@ export const generateTelegramAiReply = async (
       try {
         const text = await requestCompletion({
           client: provider.client,
+          messages,
           model: provider.model,
-          question,
-          systemPrompt,
           usage,
         });
         if (text) return { text, needsHuman: false };
@@ -399,9 +422,8 @@ export const generateTelegramAiReply = async (
     try {
       result = await requestCompletionWithEscalation({
         client: provider.client,
+        messages,
         model: provider.model,
-        question,
-        systemPrompt,
         usage,
       });
     } catch (error) {
@@ -416,9 +438,8 @@ export const generateTelegramAiReply = async (
       try {
         const text = await requestCompletion({
           client: provider.client,
+          messages,
           model: provider.model,
-          question,
-          systemPrompt,
           usage,
         });
         if (text) return { text, needsHuman: false };

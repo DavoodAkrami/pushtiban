@@ -30,6 +30,7 @@ import {
   getBusinessPersona,
   type BusinessPersona,
 } from "@/lib/ai/persona";
+import { loadChatSession, recordChatTurns } from "@/lib/ai/memory";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   markdownToTelegramHtml,
@@ -1024,9 +1025,16 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
   // greeting, and it is where the bot's menu keyboard first appears.
   if (parsedCommand.detected) {
     if (parsedCommand.keyword === "/start") {
-      const sent = await sendToCustomer({
-        chat_id: chatId,
-        text: buildStartGreeting(await getBusinessPersona(connection.user_id)),
+      const greeting = buildStartGreeting(
+        await getBusinessPersona(connection.user_id)
+      );
+      const sent = await sendToCustomer({ chat_id: chatId, text: greeting });
+      // Remembered as an assistant turn so the customer's first real question
+      // is not answered with a second introduction.
+      await recordChatTurns({
+        connectionId: connection.id,
+        chatId,
+        turns: [{ role: "assistant", text: greeting }],
       });
       return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
     }
@@ -1073,12 +1081,39 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
     return NextResponse.json({ ok: true });
   }
 
+  // Short-term memory: the turns of this chat's open session, or nothing at all
+  // when the customer has been quiet longer than the session window.
+  const session = await loadChatSession({
+    connectionId: connection.id,
+    chatId,
+  });
+
   const aiReply = await withTelegramTyping({
     chatId,
     token,
     task: () =>
-      generateTelegramAiReply(text, connection.user_id, { handoffEnabled }),
+      generateTelegramAiReply(text, connection.user_id, {
+        handoffEnabled,
+        history: session.turns,
+      }),
   });
+
+  /**
+   * Store the exchange once the customer has it. Awaited rather than
+   * fire-and-forget: on serverless the request can be frozen the moment we
+   * return, and a dropped write would cost the next message its context.
+   */
+  const remember = (assistantText: string | null) =>
+    recordChatTurns({
+      connectionId: connection.id,
+      chatId,
+      turns: [
+        { role: "user", text },
+        ...(assistantText
+          ? [{ role: "assistant" as const, text: assistantText }]
+          : []),
+      ],
+    });
 
   // aiReply is { text, needsHuman }. When the AI flagged the question as
   // needing a human AND handoff is enabled, we create a support conversation
@@ -1091,6 +1126,7 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
         chat_id: chatId,
         text: "متأسفم، پاسخ این سوال را نمی‌دانم.",
       });
+      await remember(null);
       return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
     }
     const conversation = await upsertConversationForCustomer({
@@ -1110,6 +1146,7 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
       prefaceText: aiReply.text,
       token,
     });
+    await remember(aiReply.text);
     return NextResponse.json({ ok: true });
   }
 
@@ -1119,5 +1156,6 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
         chat_id: chatId,
         text: "در حال حاضر امکان پاسخ‌گویی هوشمند نیست؛ کمی بعد دوباره تلاش کنید.",
       });
+  await remember(aiReply.text);
   return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
 };
