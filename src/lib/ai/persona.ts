@@ -156,6 +156,13 @@ const STYLE_DIRECTIVES: Record<
   },
 };
 
+/**
+ * How the reply itself should look. Telegram gets this Markdown converted to
+ * its HTML subset by `markdownToTelegramHtml`, so the model may use it.
+ */
+export const REPLY_FORMAT_LINE =
+  "Reply in the user's language, briefly and accurately. Markdown renders: **bold**, *italic*, `code`, `- ` bullets, [links](https://x.com).";
+
 /** The identity line — the part that makes introductions business-specific. */
 export const buildPersonaIdentity = (persona: BusinessPersona): string => {
   const { businessName, businessCategory } = persona;
@@ -169,8 +176,9 @@ export const buildPersonaIdentity = (persona: BusinessPersona): string => {
 };
 
 /**
- * The owner-authored and style lines that follow the identity line. Returns an
- * empty array when the owner has customized nothing.
+ * The lines that follow the identity line: what the business is, how the owner
+ * wants the assistant to behave, how to introduce itself, and any style dial
+ * the owner moved off "default".
  */
 export const buildPersonaLines = (persona: BusinessPersona): string[] => {
   const lines: string[] = [];
@@ -179,6 +187,15 @@ export const buildPersonaLines = (persona: BusinessPersona): string[] => {
   if (persona.instructions) {
     lines.push(`Owner's instructions: ${persona.instructions}`);
   }
+
+  // Greetings are the moment the business name matters most: without this the
+  // model answers "سلام" with a generic "how can I help?" that could belong to
+  // any bot.
+  lines.push(
+    `On a greeting or "who are you": say you are the AI support assistant of ${
+      persona.businessName || "this business"
+    }, add one line on what it does, and invite questions about it.`
+  );
 
   const style = (
     Object.keys(STYLE_DIRECTIVES) as Array<keyof typeof STYLE_DIRECTIVES>

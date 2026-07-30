@@ -15,6 +15,7 @@ import {
 } from "@/lib/ai/rag";
 import {
   DEFAULT_PERSONA,
+  REPLY_FORMAT_LINE,
   buildPersonaIdentity,
   buildPersonaLines,
   getBusinessPersona,
@@ -32,7 +33,7 @@ const buildFallbackSystemPrompt = (persona: BusinessPersona): string =>
   [
     buildPersonaIdentity(persona),
     ...buildPersonaLines(persona),
-    "Reply in the user's language, briefly and accurately, as plain text for Telegram.",
+    REPLY_FORMAT_LINE,
     "Never invent business details; if you are missing information, say so and ask one focused follow-up question.",
   ].join("\n");
 

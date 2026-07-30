@@ -26,7 +26,15 @@ import {
   type TelegramMenuButton,
 } from "@/lib/telegram-menu";
 import type { FlowKeyboardAction } from "@/lib/flows";
+import {
+  getBusinessPersona,
+  type BusinessPersona,
+} from "@/lib/ai/persona";
 import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  markdownToTelegramHtml,
+  TELEGRAM_MESSAGE_MAX_LENGTH,
+} from "@/lib/telegram/format";
 import { decryptTelegramToken } from "@/lib/telegram/token-crypto";
 
 export const runtime = "nodejs";
@@ -244,12 +252,15 @@ const sendAskAdminPrompt = async ({
   prefaceText: string | null;
   token: string;
 }) => {
+  // The preface is written by the AI, so it may contain Markdown; the trailing
+  // question is ours and needs no escaping.
   const text = prefaceText
-    ? `${prefaceText}\n\nسوال شما را به پشتیبان ارسال کنم؟`
+    ? `${markdownToTelegramHtml(prefaceText)}\n\nسوال شما را به پشتیبان ارسال کنم؟`
     : "متأسفم، پاسخ این سوال را نمی‌دانم. آن را برای پشتیبان ارسال کنم؟";
   await telegramPost(token, "sendMessage", {
     chat_id: chatId,
     text,
+    ...(prefaceText ? { parse_mode: "HTML" } : {}),
     reply_markup: {
       inline_keyboard: [
         [
@@ -259,6 +270,17 @@ const sendAskAdminPrompt = async ({
       ],
     },
   });
+};
+
+/**
+ * The bare `/start` greeting. It never reaches the model — it is the same
+ * introduction the AI is told to give, written from the cached persona so the
+ * first message the customer sees already names the business.
+ */
+const buildStartGreeting = (persona: BusinessPersona) => {
+  const name = persona.businessName;
+  if (!name) return "سلام! چطور می‌توانم کمکتان کنم؟";
+  return `سلام! من دستیار هوش مصنوعی ${name} هستم و اینجا هستم تا کمکتان کنم. هر سوالی دربارهٔ ${name} دارید بپرسید.`;
 };
 
 /** Telelgram /start handler — supports deep-link owner-linking payload. */
@@ -569,6 +591,26 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
       "sendMessage",
       keyboard ? { reply_markup: keyboard, ...body } : body
     );
+  };
+
+  /**
+   * Send AI-authored text. The model writes Markdown, which Telegram shows
+   * literally unless it is converted to Telegram's HTML subset first. Falls
+   * back to the raw text when the rendered form would exceed the message limit
+   * or Telegram rejects the markup, so a formatting problem never costs the
+   * customer the answer.
+   */
+  const sendAiTextToCustomer = async (chatId: number, text: string) => {
+    const html = markdownToTelegramHtml(text);
+    if (html && html.length <= TELEGRAM_MESSAGE_MAX_LENGTH) {
+      const sent = await sendToCustomer({
+        chat_id: chatId,
+        text: html,
+        parse_mode: "HTML",
+      });
+      if (sent) return true;
+    }
+    return sendToCustomer({ chat_id: chatId, text });
   };
 
   // Handle inline button press
@@ -984,7 +1026,7 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
     if (parsedCommand.keyword === "/start") {
       const sent = await sendToCustomer({
         chat_id: chatId,
-        text: "سلام! چطور می‌توانم کمکتان کنم؟",
+        text: buildStartGreeting(await getBusinessPersona(connection.user_id)),
       });
       return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
     }
@@ -1071,11 +1113,11 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
     return NextResponse.json({ ok: true });
   }
 
-  const sent = await sendToCustomer({
-    chat_id: chatId,
-    text:
-      aiReply.text ??
-      "در حال حاضر امکان پاسخ‌گویی هوشمند نیست؛ کمی بعد دوباره تلاش کنید.",
-  });
+  const sent = aiReply.text
+    ? await sendAiTextToCustomer(chatId, aiReply.text)
+    : await sendToCustomer({
+        chat_id: chatId,
+        text: "در حال حاضر امکان پاسخ‌گویی هوشمند نیست؛ کمی بعد دوباره تلاش کنید.",
+      });
   return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
 };

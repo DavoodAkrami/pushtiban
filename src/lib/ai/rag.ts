@@ -10,6 +10,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getGlobalAiSettings, logAiUsage } from "@/lib/ai/usage";
 import {
   DEFAULT_PERSONA,
+  REPLY_FORMAT_LINE,
   buildPersonaIdentity,
   buildPersonaLines,
   type BusinessPersona,
@@ -356,7 +357,7 @@ export const buildRagSystemPrompt = (
   const sections: string[] = [
     buildPersonaIdentity(persona),
     ...buildPersonaLines(persona),
-    "Reply in the user's language, briefly and accurately, as plain text for Telegram.",
+    REPLY_FORMAT_LINE,
     "Source priority: FACTS > Q&A > KB. Never invent business details; if the sources do not cover the question, say so.",
   ];
 

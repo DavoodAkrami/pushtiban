@@ -148,6 +148,13 @@ How to use:
       scores, per-item categories) and verbose section markers dropped, and the
       escalation tool plus its instructions are only sent when the owner has
       human handoff switched on
+- [x] AI replies render with formatting in Telegram: the assistant's Markdown
+      (bold, italic, bullet lists, links, code, quotes) is converted to
+      Telegram's HTML before sending instead of showing raw `**stars**`
+- [x] Business-specific introductions: on a greeting or "who are you", the
+      assistant introduces itself as the AI support agent of the business, says
+      in one line what it does, and invites questions — and bare /start opens
+      with the same introduction instead of a generic hello
 - [ ] Bot keyboard menu: a bot-wide set of always-visible buttons at the bottom
       of the Telegram chat, laid out in rows at /dashboard/menu, each button
       wired to an existing flow or prepared reply, plus a per-message control
