@@ -65,6 +65,16 @@ Full conventions: **CONTRIBUTING.md**. Live component gallery: **`/design`**.
     Existing `function` code is migrated opportunistically when a file is
     touched; new code is always arrow-style.
 
+11. **Touching the AI means updating the AI docs.** The "The AI system — how
+    the assistant is fed" section of **README.md** is the contract for
+    everything that reaches the model: the persona, retrieval (facts, Q&A,
+    chunks, intent), the chat memory and its session window, output
+    formatting, escalation, and the gates and token rules around them. If you
+    change what is sent to the model, how it is retrieved, how long it is
+    remembered, or what it costs, **update that section in the same change** —
+    including the file and table each piece comes from. A change that leaves
+    the section stale is not done.
+
 ## Quick facts
 
 - All UI text is Persian; digits via `fa()` from `src/lib/utils.ts`; layout

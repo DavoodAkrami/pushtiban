@@ -103,10 +103,12 @@ export const POST = async (request: NextRequest) => {
     const clampedMatchCount = Number.isFinite(requestedMatchCount)
       ? Math.min(Math.max(1, Math.floor(requestedMatchCount)), 10)
       : 4;
-    const requestedMinSimilarity = Number((body as { minSimilarity?: unknown }).minSimilarity ?? 0.2);
+    const requestedMinSimilarity = Number(
+      (body as { minSimilarity?: unknown }).minSimilarity ?? 0.35
+    );
     const clampedMinSimilarity = Number.isFinite(requestedMinSimilarity)
       ? Math.min(Math.max(0, requestedMinSimilarity), 1)
-      : 0.2;
+      : 0.35;
     const sourceId =
       typeof body.sourceId === "string" && body.sourceId.trim()
         ? body.sourceId.trim()

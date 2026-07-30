@@ -90,8 +90,11 @@ emits **nothing** — only the dials the owner moved cost tokens.
    condenses it into a search query. When the chat has memory, the previous
    customer message is passed in so follow-ups resolve into standalone queries.
    Toggleable platform-wide by a site admin.
-2. **Facts** — every row of `ai_knowledge_facts` for the business. Always
-   included, never vector-searched.
+2. **Facts** — rows of `ai_knowledge_facts` for the business. Always included,
+   never vector-searched. This is the only section with no similarity bar to
+   limit it, so it is capped at **20 facts / 1200 characters** (oldest first,
+   `src/lib/ai/limits.ts`); the facts editor warns the owner when their list
+   exceeds the cap.
 3. **Q&A** — `match_knowledge_qa` (pgvector, cosine) over curated pairs in
    `ai_knowledge_qa`. The condensed query is what gets embedded.
 4. **Chunks** — `match_knowledge_chunks_filtered` over `knowledge_chunks`. The
@@ -99,6 +102,22 @@ emits **nothing** — only the dials the owner moved cost tokens.
 
 Thresholds and match counts come from `ai_global_settings` (site admin), and the
 prompt states the source priority explicitly: **FACTS > Q&A > KB**.
+
+The two similarity thresholds are deliberately different, and both are
+calibrated for `text-embedding-3-small`, whose cosine scores run well below the
+old `ada-002` range. Q&A matching is question→question — symmetric, so it scores
+high and sits at **0.45**. Chunk matching is question→passage — asymmetric and
+inherently lower, so it sits *below* the Q&A bar at **0.35**. Setting the chunk
+bar too low is not a small mistake: at the original 0.2 an unrelated one-line
+chunk scored 0.21 and was injected into every prompt.
+
+**Retrieval is per business and enforced in SQL.** Both RPCs filter on
+`user_id = match_user_id` inside the query, and RLS covers the tables. Because
+the functions are `security definer` they bypass that RLS, so execute is granted
+to `service_role` only (`supabase/rag-security.sql`) — they are called
+exclusively through `createAdminClient()`. Granting them to `anon` would let
+anyone holding the public key read any business's knowledge base by passing its
+user id.
 
 **3. Memory** — `src/lib/ai/memory.ts`, table `telegram_chat_sessions`
 
@@ -109,6 +128,10 @@ assistant introduces itself again.
 
 - One row per `(connection, chat)`, updated in place — the table grows with the
   customer base, not with traffic.
+- The window is enforced **twice**: the query itself filters on `last_seen_at`,
+  so a cold chat returns no row at all, and the surviving row is then trimmed
+  per turn. Timestamps are clamped forward so clock skew between instances
+  cannot keep a turn alive past the window.
 - Sent to the model: at most **4 turns / 600 characters**, oldest dropped first.
   Stored: at most 8 turns, 400 characters each, nothing older than the window.
 - The bare `/start` greeting is recorded as an assistant turn, so the first real
@@ -146,16 +169,17 @@ The prompt is deliberately lean, and changes should keep it that way:
 - Section markers are one short header (`FACTS:`), not open/close banners.
 - Unused capabilities are not described — no handoff, no escalation text.
 - Untouched persona dials cost nothing.
-- Memory is the only part that grows with conversation length, which is why it
-  is capped twice (turns *and* characters).
+- Memory and facts are the two parts that grow without a similarity bar to stop
+  them, which is why both are capped twice (count *and* characters).
 
 ### SQL
 
 `supabase/ai-assistant.sql` (settings, facts, Q&A) · `supabase/rag.sql`
 (pgvector, match functions) · `supabase/knowledge.sql` (sources, chunks) ·
 `supabase/ai-persona.sql` (persona columns) · `supabase/ai-memory.sql`
-(chat sessions) · `supabase/inbox.sql` (handoff) · `supabase/admin.sql`
-(global settings, usage logs).
+(chat sessions) · `supabase/rag-security.sql` (match-function grants) ·
+`supabase/inbox.sql` (handoff) · `supabase/admin.sql` (global settings, usage
+logs).
 
 ## Notes
 

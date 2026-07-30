@@ -7,6 +7,7 @@ import {
   isEmbeddingsConfigured,
 } from "@/configs";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { FACTS_MAX_CHARS, FACTS_MAX_COUNT } from "@/lib/ai/limits";
 import { getGlobalAiSettings, logAiUsage } from "@/lib/ai/usage";
 import {
   DEFAULT_PERSONA,
@@ -224,20 +225,33 @@ export const retrieveRagContext = async ({
   const effectiveMinSimilarity = minSimilarity ?? settings.chunkMinSimilarity;
 
   // 1. Standing facts — always-on context, not vector-retrieved.
+  //
+  // Facts are sent on EVERY message, so unlike the retrieved sections they are
+  // not self-limiting: a business with fifty facts would pay for all fifty on
+  // every single customer message. Always-on only stays affordable while the
+  // set is small, so it is capped by count and by characters (oldest first, so
+  // the cap is stable as new facts are added rather than reshuffling context).
   const facts: RagFact[] = [];
   {
     const { data: factRows } = await admin
       .from("ai_knowledge_facts")
       .select("id, category, fact_text")
       .eq("user_id", userId)
-      .order("created_at", { ascending: true });
+      .order("created_at", { ascending: true })
+      .limit(FACTS_MAX_COUNT);
     if (factRows) {
+      let characters = 0;
       for (const row of factRows as Array<{
         id: string;
         category: string;
         fact_text: string;
       }>) {
-        facts.push({ id: row.id, category: row.category, factText: row.fact_text });
+        const factText = row.fact_text ?? "";
+        if (characters + factText.length > FACTS_MAX_CHARS && facts.length > 0) {
+          break;
+        }
+        facts.push({ id: row.id, category: row.category, factText });
+        characters += factText.length;
       }
     }
   }
@@ -390,6 +404,7 @@ export const buildRagSystemPrompt = (
     ...buildPersonaLines(persona, options),
     REPLY_FORMAT_LINE,
     "Source priority: FACTS > Q&A > KB. Never invent business details; if the sources do not cover the question, say so.",
+    "You know nothing about the customer — not their name, orders or history — beyond what they say in this conversation. Never guess it.",
   ];
 
   if (intent && intent.category !== "general") {

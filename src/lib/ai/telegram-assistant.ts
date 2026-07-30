@@ -42,6 +42,7 @@ const buildFallbackSystemPrompt = (
     ...buildPersonaLines(persona, options),
     REPLY_FORMAT_LINE,
     "Never invent business details; if you are missing information, say so and ask one focused follow-up question.",
+    "You know nothing about the customer — not their name, orders or history — beyond what they say in this conversation. Never guess it.",
   ].join("\n");
 
 const truncateTelegramMessage = (value: string) =>

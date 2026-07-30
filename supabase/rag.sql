@@ -95,7 +95,8 @@ create or replace function public.match_knowledge_chunks(
   match_user_id  uuid,
   match_count    integer default 4,
   filter_source_id uuid default null,
-  min_similarity real default 0.2
+  -- Kept in step with match_knowledge_chunks_filtered in knowledge.sql.
+  min_similarity real default 0.35
 )
 returns table (
   id          uuid,
@@ -124,10 +125,16 @@ as $$
   limit match_count;
 $$;
 
--- Allow the service role (server) to call the RPC; authenticated users also
--- can call it because RLS limits them to their own user_id.
+-- Service role ONLY. This function is `security definer`, so RLS on
+-- knowledge_chunks does not apply to the rows it reads — the caller picks the
+-- business via match_user_id, which means any grantee can read any business's
+-- knowledge base. Revoke from PUBLIC too: Postgres grants EXECUTE on new
+-- functions to PUBLIC by default, and anon/authenticated inherit it.
+-- See supabase/rag-security.sql.
+revoke execute on function public.match_knowledge_chunks(vector, uuid, integer, uuid, real)
+  from public, anon, authenticated;
 grant execute on function public.match_knowledge_chunks(vector, uuid, integer, uuid, real)
-  to authenticated, anon, service_role;
+  to service_role;
 
 -- 6) Row Level Security -----------------------------------------------------
 alter table public.knowledge_sources enable row level security;

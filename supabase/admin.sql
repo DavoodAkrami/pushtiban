@@ -57,7 +57,9 @@ create table if not exists public.ai_global_settings (
   -- override them explicitly.
   qa_min_similarity     real    not null default 0.45
                         check (qa_min_similarity    >= 0 and qa_min_similarity    <= 1),
-  chunk_min_similarity  real    not null default 0.2
+  -- Chunk matching is question->passage (asymmetric, lower scores) while
+  -- qa_min_similarity is question->question, so this bar sits below that one.
+  chunk_min_similarity  real    not null default 0.35
                         check (chunk_min_similarity >= 0 and chunk_min_similarity <= 1),
   chunk_match_count     integer not null default 4
                         check (chunk_match_count between 1 and 10),
@@ -75,6 +77,17 @@ create table if not exists public.ai_global_settings (
 -- Added after the table shipped; harmless on fresh installs.
 alter table public.ai_global_settings
   add column if not exists chat_model text not null default '';
+
+-- chunk_min_similarity shipped at 0.2, which is below any published cutoff for
+-- text-embedding-3-small and let unrelated chunks into every prompt. Move the
+-- column default and any row still sitting on the old value; a threshold a site
+-- admin has since tuned is left alone.
+alter table public.ai_global_settings
+  alter column chunk_min_similarity set default 0.35;
+
+update public.ai_global_settings
+   set chunk_min_similarity = 0.35
+ where chunk_min_similarity = 0.2;
 
 comment on table public.ai_global_settings is
   'Singleton row of platform-wide AI settings, managed from /dashboard/admin.';

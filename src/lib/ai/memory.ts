@@ -44,7 +44,7 @@ type StoredTurn = ChatTurn & { at: number };
 
 const EMPTY_SESSION: ChatSession = { turns: [], isNewSession: true };
 
-const parseStoredTurns = (value: unknown): StoredTurn[] => {
+const parseStoredTurns = (value: unknown, now: number): StoredTurn[] => {
   if (!Array.isArray(value)) return [];
   const turns: StoredTurn[] = [];
   for (const entry of value) {
@@ -53,7 +53,9 @@ const parseStoredTurns = (value: unknown): StoredTurn[] => {
     if (role !== "user" && role !== "assistant") continue;
     if (typeof text !== "string" || !text.trim()) continue;
     if (typeof at !== "number" || !Number.isFinite(at)) continue;
-    turns.push({ role, text, at });
+    // Clamp forward: a turn stamped in the future (clock skew between
+    // instances) would otherwise outlive the window. Writes persist the clamp.
+    turns.push({ role, text, at: Math.min(at, now) });
   }
   return turns;
 };
@@ -88,17 +90,25 @@ export const loadChatSession = async ({
   chatId: number;
 }): Promise<ChatSession> => {
   try {
+    const now = Date.now();
+    const cutoff = now - SESSION_WINDOW_MS;
     const admin = createAdminClient();
+
+    // The window is enforced twice, on purpose. The `last_seen_at` filter
+    // means a cold chat returns NO ROW at all — the session cannot leak past
+    // the window even if a turn carries a bad timestamp. The per-turn filter
+    // then trims the surviving row to the last 30 minutes.
     const { data } = await admin
       .from("telegram_chat_sessions")
       .select("turns")
       .eq("telegram_connection_id", connectionId)
       .eq("chat_id", chatId)
+      .gte("last_seen_at", new Date(cutoff).toISOString())
       .maybeSingle();
 
-    const cutoff = Date.now() - SESSION_WINDOW_MS;
     const recent = parseStoredTurns(
-      (data as { turns?: unknown } | null)?.turns
+      (data as { turns?: unknown } | null)?.turns,
+      now
     ).filter((turn) => turn.at >= cutoff);
     if (!recent.length) return EMPTY_SESSION;
 
@@ -131,16 +141,20 @@ export const recordChatTurns = async ({
     const cutoff = now - SESSION_WINDOW_MS;
 
     // Re-read rather than reusing what the request loaded: the stored turns are
-    // untruncated, and a second message may have landed in between.
+    // untruncated, and a second message may have landed in between. Same
+    // `last_seen_at` gate as the read — a cold row is not merged into, it is
+    // overwritten, so a new session never inherits the old one's turns.
     const { data } = await admin
       .from("telegram_chat_sessions")
       .select("turns")
       .eq("telegram_connection_id", connectionId)
       .eq("chat_id", chatId)
+      .gte("last_seen_at", new Date(cutoff).toISOString())
       .maybeSingle();
 
     const kept = parseStoredTurns(
-      (data as { turns?: unknown } | null)?.turns
+      (data as { turns?: unknown } | null)?.turns,
+      now
     ).filter((turn) => turn.at >= cutoff);
 
     const next: StoredTurn[] = [

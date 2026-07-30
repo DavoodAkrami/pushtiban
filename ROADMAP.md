@@ -155,6 +155,20 @@ How to use:
       assistant introduces itself as the AI support agent of the business, says
       in one line what it does, and invites questions — and bare /start opens
       with the same introduction instead of a generic hello
+- [x] Short-term chat memory: while a customer keeps messaging with gaps under
+      30 minutes it stays one conversation — the assistant sees the recent
+      turns, stops re-introducing itself, and follow-ups like «و برای دو تا؟»
+      resolve against the previous question. After a 30-minute silence the next
+      message starts a fresh chat with no memory
+- [x] Retrieval isolation hardened: the pgvector match functions are
+      `security definer`, so they bypass RLS — execute is now granted to the
+      service role only. Previously the public anon key could read any
+      business's knowledge base by passing its user id
+- [x] Retrieval thresholds calibrated for text-embedding-3-small: chunk
+      matching raised from 0.2 to 0.35 (question→passage scores lower than the
+      question→question Q&A match, which stays at 0.45), so unrelated chunks
+      stop being injected into every prompt; business facts capped at 20 items
+      / 1200 characters with a warning in the facts editor
 - [ ] Bot keyboard menu: a bot-wide set of always-visible buttons at the bottom
       of the Telegram chat, laid out in rows at /dashboard/menu, each button
       wired to an existing flow or prepared reply, plus a per-message control

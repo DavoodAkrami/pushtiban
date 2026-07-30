@@ -22,8 +22,12 @@ export type GlobalAiSettings = {
 
 export const DEFAULT_GLOBAL_AI_SETTINGS: GlobalAiSettings = {
   aiEnabled: true,
+  // Q&A is question->question (symmetric, scores high); chunks are
+  // question->passage (asymmetric, scores lower), so the chunk bar sits below
+  // the Q&A bar. Both are calibrated for text-embedding-3-small, whose cosine
+  // scores run well under the old ada-002 range.
   qaMinSimilarity: 0.45,
-  chunkMinSimilarity: 0.2,
+  chunkMinSimilarity: 0.35,
   chunkMatchCount: 4,
   qaMatchCount: 2,
   intentEnabled: true,

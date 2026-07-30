@@ -39,6 +39,7 @@ import { Switch } from "@/components/ui/checkbox";
 import { Icon } from "@/components/ui/icon";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
+import { FACTS_MAX_CHARS, FACTS_MAX_COUNT } from "@/lib/ai/limits";
 import { cn, fa } from "@/lib/utils";
 
 // ---- Types ----------------------------------------------------------------
@@ -1073,6 +1074,16 @@ export const FactsEditor = () => {
   const [deletingFact, setDeletingFact] = React.useState<Fact | null>(null);
   const [deleting, setDeleting] = React.useState(false);
 
+  // Mirrors the trim in retrieveRagContext: facts are sent oldest-first until
+  // either cap is reached, so anything past that never reaches the assistant.
+  const factsOverCap = React.useMemo(() => {
+    if (facts.length > FACTS_MAX_COUNT) return true;
+    return (
+      facts.reduce((total, item) => total + item.factText.length, 0) >
+      FACTS_MAX_CHARS
+    );
+  }, [facts]);
+
   const loadFacts = React.useCallback(async () => {
     setLoading(true);
     try {
@@ -1185,6 +1196,18 @@ export const FactsEditor = () => {
       />
 
       <div className="space-y-4">
+        {!loading && factsOverCap && (
+          <Alert
+            variant="warning"
+            title="بخشی از اطلاعات به دستیار فرستاده نمی‌شود"
+            description={`این اطلاعات در هر پیام به هوش مصنوعی فرستاده می‌شوند، بنابراین حداکثر ${fa(
+              FACTS_MAX_COUNT
+            )} مورد (و ${fa(
+              FACTS_MAX_CHARS
+            )} نویسه) ارسال می‌شود. موارد قدیمی‌تر در اولویت هستند؛ نکته‌های جزئی‌تر را به پرسش و پاسخ منتقل کنید.`}
+          />
+        )}
+
         {loading && (
           <div
             role="status"

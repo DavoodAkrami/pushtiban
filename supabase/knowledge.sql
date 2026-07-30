@@ -102,7 +102,10 @@ create or replace function public.match_knowledge_chunks_filtered(
   match_count    integer default 4,
   filter_category text default null,
   filter_source_id uuid default null,
-  min_similarity real default 0.2
+  -- Question->passage similarity is asymmetric and scores lower than the
+  -- question->question matching in match_knowledge_qa, so this bar sits below
+  -- that one (0.45). Calibrated for text-embedding-3-small.
+  min_similarity real default 0.35
 )
 returns table (
   id          uuid,
@@ -148,8 +151,13 @@ as $$
   limit match_count;
 $$;
 
+-- Service role ONLY — `security definer` bypasses RLS and the caller chooses
+-- the business via match_user_id. PUBLIC must be named explicitly because
+-- Postgres grants EXECUTE on new functions to it by default.
+revoke execute on function public.match_knowledge_chunks_filtered(vector, uuid, integer, text, uuid, real)
+  from public, anon, authenticated;
 grant execute on function public.match_knowledge_chunks_filtered(vector, uuid, integer, text, uuid, real)
-  to authenticated, anon, service_role;
+  to service_role;
 
 -- 6) match_knowledge_qa ------------------------------------------------------
 -- Match owner Q&A pairs by question embedding. Returns the best matches above
@@ -204,8 +212,11 @@ as $$
   limit match_count;
 $$;
 
+-- Service role ONLY — same reasoning as match_knowledge_chunks_filtered above.
+revoke execute on function public.match_knowledge_qa(vector, uuid, text, integer, real)
+  from public, anon, authenticated;
 grant execute on function public.match_knowledge_qa(vector, uuid, text, integer, real)
-  to authenticated, anon, service_role;
+  to service_role;
 
 -- 7) Row Level Security ------------------------------------------------------
 alter table public.ai_knowledge_facts enable row level security;
