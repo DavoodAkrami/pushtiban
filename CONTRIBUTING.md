@@ -151,3 +151,18 @@ widgets, WCAG-AA contrast, reduced-motion support.
 - [ ] RTL layout correct (no physical left/right leaks)
 - [ ] Persian copy with Persian digits (`fa()`)
 - [ ] Reused existing components; new ones added to `/design`
+
+## Rolling back to the pre-redesign snapshot
+
+The state of `main` just before the redesign merge was preserved under the
+git tag `archive/pre-redesign`. To restore it at any time:
+
+```bash
+git fetch origin
+git branch main-backup archive/pre-redesign   # optional: keep main untouched
+git checkout archive/pre-redesign             # or checkout main-backup
+```
+
+Never delete or move the tag — it is the single point of return. If you need
+a permanent branch from it, create one as shown above; do not force-push over
+`main` history after the merge.

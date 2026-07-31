@@ -53,9 +53,28 @@ in `CLAUDE.md`).
   A plain text message reaches the AI only after flows, menu buttons and keyword
   automations have all declined it — the AI is the fallback, never the first
   responder. Slash commands never reach it.
-- **Playground:** `/ai/rag-test` (`src/app/api/ai/rag/route.ts`) builds the exact
-  same system prompt and shows what was retrieved. It has no memory — it is a
-  prompt inspector, not a chat.
+- **Preview:** the pane on `/dashboard/assistant`
+  (`src/app/api/ai/preview/route.ts`). It does **not** reimplement the pipeline —
+  it calls `generateTelegramAiReply`, the same function the webhook calls, so
+  the persona, retrieval, `ai_global_settings` thresholds, escalation tool,
+  provider order and usage logging are identical by construction. It adds the
+  owner's `is_enabled` check (which the webhook applies itself, outside that
+  function) and converts the reply with `markdownToTelegramHtml`, so the owner
+  sees the customer's real formatting.
+
+  Two honest divergences: history is held in the browser and passed back per
+  request rather than read from `telegram_chat_sessions` (a preview is not a
+  chat with a real `chat_id`), and an escalation is *reported* as a badge rather
+  than opening a conversation. **A preview message costs a real message** off
+  the monthly cap — it is a real completion — so the pane states this up front,
+  shows the remaining count, and refreshes the sidebar quota after every reply.
+
+- **Deprecated:** `/ai/rag-test` now redirects to `/dashboard/assistant`. It sat
+  outside `src/proxy.ts`'s matcher, let the caller pick the provider and model
+  (including `openrouter`, which production can never use), hard-wired the
+  retrieval thresholds past the admin globals, and charged the owner a message
+  while skipping every gate. `/ai/test` remains — it is an unauthenticated raw
+  provider smoke test with no tenant data, not a product surface.
 
 ### What the model receives
 
@@ -98,7 +117,35 @@ emits **nothing** — only the dials the owner moved cost tokens.
 3. **Q&A** — `match_knowledge_qa` (pgvector, cosine) over curated pairs in
    `ai_knowledge_qa`. The condensed query is what gets embedded.
 4. **Chunks** — `match_knowledge_chunks_filtered` over `knowledge_chunks`. The
-   detected category is a **soft ranking boost, never a hard filter**.
+   detected category is a **soft ranking boost, never a hard filter**. The owner
+   picks a source's category when ingesting it at
+   `/dashboard/knowledge/sources`, and every chunk of that source is stored with
+   it. Before that page existed the ingest route never wrote the column, so all
+   chunks were `general` and the `+0.05` same-category bonus could only ever
+   fire for Q&A.
+
+Sources are ingested at **`/dashboard/knowledge/sources`** in three ways, all
+through `POST /api/ai/rag/ingest`: pasted text, a `.txt`/`.md`/`.csv` file read
+in the browser into that same text field, and a URL the server fetches itself
+(`src/lib/ai/fetch-url.ts`). The URL path is an SSRF sink by construction — it
+takes an owner-supplied address and fetches it from our network — so the scheme,
+port, hostname and **every resolved A/AAAA record** are checked against private,
+loopback, link-local and CGNAT ranges, and redirects are followed manually so
+each hop is re-validated. PDF and Word are deliberately not supported: they
+would need a parser dependency and a Storage bucket. Stored chunks are capped at
+**500 per business** (`CHUNKS_MAX_PER_USER`, `src/lib/ai/limits.ts`), enforced by
+the ingest route and surfaced in the editor. Deleting a source drops its chunks
+through the `on delete cascade` on `knowledge_chunks.source_id`.
+
+The sources editor expands each source into **the chunks themselves**
+(`/api/ai/rag/chunks`), because the chunk is what the model actually reads and
+the split is not always where the owner would have put it. A chunk's `content`
+and its `embedding` are two halves of one record — text that is *found* by one
+and *answered from* by the other — so **every content edit re-embeds**, and so
+does **renaming a source**, since ingest embeds each chunk as
+`# title\n\n<chunk>` and the old title is baked into every vector. A rename
+whose re-index fails keeps the new title with stale vectors: a ranking nuance,
+reported rather than rolled back, and never a broken source.
 
 Thresholds and match counts come from `ai_global_settings` (site admin), and the
 prompt states the source priority explicitly: **FACTS > Q&A > KB**.
@@ -175,7 +222,9 @@ The prompt is deliberately lean, and changes should keep it that way:
 ### SQL
 
 `supabase/ai-assistant.sql` (settings, facts, Q&A) · `supabase/rag.sql`
-(pgvector, match functions) · `supabase/knowledge.sql` (sources, chunks) ·
+(pgvector, **`knowledge_sources` + `knowledge_chunks`**, `match_knowledge_chunks`) ·
+`supabase/knowledge.sql` (the `category` column, `match_knowledge_qa` and
+`match_knowledge_chunks_filtered`) ·
 `supabase/ai-persona.sql` (persona columns) · `supabase/ai-memory.sql`
 (chat sessions) · `supabase/rag-security.sql` (match-function grants) ·
 `supabase/inbox.sql` (handoff) · `supabase/admin.sql` (global settings, usage
@@ -187,3 +236,17 @@ logs).
 - **Reduced motion** is respected globally (CSS media query + `useReducedMotion`
   in every animated component).
 - All copy is Persian with Persian numerals; layout is `dir="rtl"` end to end.
+
+## Restoring the pre-redesign codebase
+
+The version of `main` before the redesign was merged is preserved under the
+git tag `archive/pre-redesign`. To inspect or restore it:
+
+```bash
+git fetch origin
+git checkout archive/pre-redesign        # detached — browse or test it
+git branch main-backup archive/pre-redesign   # to keep it as a branch
+```
+
+The tag is immutable and is the canonical fallback if the redesign ever needs
+to be reverted.
