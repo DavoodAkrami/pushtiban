@@ -865,7 +865,7 @@ export const FlowBuilder = ({ flow }: { flow: AutomationFlowDetail }) => {
         <div className="min-w-0">
           <button
             type="button"
-            onClick={() => router.push("/dashboard/flow")}
+            onClick={() => router.push("/dashboard/automation")}
             className="flex items-center gap-2 rounded-full text-sm text-muted transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
           >
             <ArrowRight className="size-4" aria-hidden />

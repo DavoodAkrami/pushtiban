@@ -1,20 +1,37 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { isEmbeddingsConfigured } from "@/configs";
 import { embedChunks, splitIntoChunks } from "@/lib/ai/embeddings";
+import { fetchUrlAsText } from "@/lib/ai/fetch-url";
+import {
+  CHUNKS_MAX_PER_USER,
+  SOURCE_TITLE_MAX_LENGTH,
+} from "@/lib/ai/limits";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
 const MAX_BODY_BYTES = 200_000; // 200 KB per ingest request
-const TITLE_MAX_LENGTH = 200;
-const MAX_CHUNKS_PER_USER = 500; // hard ceiling on total stored chunks per user
 const SETUP_ERROR_CODES = new Set(["42P01", "42703", "PGRST204", "PGRST205"]);
+
+// Must match CATEGORY_OPTIONS in components/dashboard/knowledge/categories.ts
+// and the classifier in lib/ai/rag.ts — a category outside this set can never
+// win the same-category ranking boost.
+const CATEGORIES = new Set([
+  "general",
+  "shipping",
+  "pricing",
+  "products",
+  "returns",
+  "account",
+]);
 
 type IngestBody = {
   title?: unknown;
   text?: unknown;
   sourceType?: unknown;
+  url?: unknown;
+  category?: unknown;
 };
 
 const jsonError = (error: string, status: number, setupRequired = false) =>
@@ -64,11 +81,34 @@ export const POST = async (request: NextRequest) => {
     return jsonError("اطلاعات قابل خواندن نیست.", 400);
   }
 
-  const title = typeof body.title === "string" ? body.title.trim() : "";
-  const text = typeof body.text === "string" ? body.text : "";
-  const sourceType = body.sourceType === "url" ? "url" : "text";
+  const requestedType =
+    body.sourceType === "url" || body.sourceType === "file" ? body.sourceType : "text";
+  const category =
+    typeof body.category === "string" && CATEGORIES.has(body.category)
+      ? body.category
+      : "general";
 
-  if (!title || title.length > TITLE_MAX_LENGTH) {
+  let title = typeof body.title === "string" ? body.title.trim() : "";
+  let text = typeof body.text === "string" ? body.text : "";
+
+  // A URL source is fetched here, server-side. Until now "url" only labelled
+  // the row and the caller still had to paste the text in by hand.
+  if (requestedType === "url") {
+    const target = typeof body.url === "string" ? body.url.trim() : "";
+    if (!target) {
+      return jsonError("نشانی صفحه را وارد کنید.", 400);
+    }
+    const fetched = await fetchUrlAsText(target);
+    if (!fetched.ok) {
+      return jsonError(fetched.error, 400);
+    }
+    text = fetched.text;
+    if (!title) title = fetched.title;
+  }
+
+  const sourceType = requestedType;
+
+  if (!title || title.length > SOURCE_TITLE_MAX_LENGTH) {
     return jsonError("عنوان باید بین ۱ تا ۲۰۰ نویسه باشد.", 400);
   }
   if (!text.trim()) {
@@ -108,7 +148,7 @@ export const POST = async (request: NextRequest) => {
     if (countError) {
       return jsonError("سهمیه پایگاه دانش بررسی نشد.", 500);
     }
-    if ((existingChunks ?? 0) + bodyChunks.length > MAX_CHUNKS_PER_USER) {
+    if ((existingChunks ?? 0) + bodyChunks.length > CHUNKS_MAX_PER_USER) {
       return jsonError(
         "سهمیه پایگاه دانش شما پر شده؛ سندهای قدیمی را حذف کنید.",
         409
@@ -140,6 +180,7 @@ export const POST = async (request: NextRequest) => {
       user_id: user.id,
       chunk_index: index,
       content,
+      category,
       embedding: embeddings[index] ?? [],
     }));
 

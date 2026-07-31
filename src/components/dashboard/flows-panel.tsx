@@ -7,12 +7,12 @@ import {
   Command,
   GitBranch,
   Hash,
-  Link2,
   Pencil,
   Plus,
   Trash2,
 } from "lucide-react";
 import { luxe } from "@/components/motion/reveal";
+import { BotRequiredNotice } from "@/components/dashboard/bot-required-notice";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -48,10 +48,7 @@ import {
   type AutomationFlowDetail,
 } from "@/lib/flows";
 import { fa } from "@/lib/utils";
-import {
-  requestSettingsOpen,
-  TELEGRAM_CONNECTION_CHANGED_EVENT,
-} from "@/lib/settings-events";
+import { TELEGRAM_CONNECTION_CHANGED_EVENT } from "@/lib/settings-events";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   createFlow,
@@ -568,7 +565,7 @@ export const FlowsPanel = () => {
   };
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div>
       <header className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-black">فلوها</h1>
@@ -651,22 +648,7 @@ export const FlowsPanel = () => {
         )}
 
         {!loading && connectionStatus === "succeeded" && !bot && (
-          <Alert
-            variant="info"
-            title="ابتدا ربات تلگرام را متصل کنید"
-            description="از منوی حساب وارد تنظیمات و بخش اتصالات شوید. پس از اتصال ربات، می‌توانید اولین فلو را بسازید."
-          >
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="mt-3"
-              startIcon={<Link2 className="size-4" />}
-              onClick={() => requestSettingsOpen("connections")}
-            >
-              اتصال ربات در تنظیمات
-            </Button>
-          </Alert>
+          <BotRequiredNotice />
         )}
 
         {bot && connectionStatus === "succeeded" && (

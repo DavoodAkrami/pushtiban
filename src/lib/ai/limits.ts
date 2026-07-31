@@ -16,3 +16,14 @@
  */
 export const FACTS_MAX_COUNT = 20;
 export const FACTS_MAX_CHARS = 1200;
+
+/**
+ * Hard ceiling on stored chunks per business, so one account cannot bloat the
+ * vector store without bound. Enforced by the ingest route; surfaced by the
+ * sources editor so the owner sees the same number the server enforces.
+ */
+export const CHUNKS_MAX_PER_USER = 500;
+
+/** Largest ingest payload, matching the route's own body guard. */
+export const SOURCE_TEXT_MAX_CHARS = 100_000;
+export const SOURCE_TITLE_MAX_LENGTH = 200;

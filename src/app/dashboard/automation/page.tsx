@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
-import { AutomationPanel } from "@/components/dashboard/automation-panel";
+import { FlowsPanel } from "@/components/dashboard/flows-panel";
 
 export const metadata: Metadata = {
-  title: "پیام‌های آماده — پشتیبان",
+  title: "فلوها — پشتیبان",
+  description: "ساخت و مدیریت فلوهای تعاملی ربات تلگرام.",
 };
 
-const AutomationPage = () => <AutomationPanel />;
+const FlowsPage = () => <FlowsPanel />;
 
-export default AutomationPage;
+export default FlowsPage;

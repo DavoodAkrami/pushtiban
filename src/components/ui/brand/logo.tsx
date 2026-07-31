@@ -8,6 +8,8 @@ interface LogoProps {
   variant?: "default" | "icon" | "text" | "full";
   size?: "sm" | "md" | "lg" | "xl";
   className?: string;
+  /** Render as plain markup instead of a link home, for use inside another link. */
+  as?: "link" | "span";
 }
 
 const sizeClasses = {
@@ -24,17 +26,14 @@ const textSizeClasses = {
   xl: "text-3xl",
 };
 
-export function Logo({
+export const Logo = ({
   variant = "default",
   size = "md",
   className,
-}: LogoProps) {
-  return (
-    <Link
-      href="/"
-      className={cn("flex items-center gap-2.5 font-bold", className)}
-      aria-label="پشتیبان - بازگشت به صفحه اصلی"
-    >
+  as = "link",
+}: LogoProps) => {
+  const content = (
+    <>
       {(variant === "default" || variant === "icon" || variant === "full") && (
         <Image
           src="/logo.webp"
@@ -50,6 +49,24 @@ export function Logo({
           پشتیبان
         </span>
       )}
+    </>
+  );
+
+  if (as === "span") {
+    return (
+      <span className={cn("flex items-center gap-2.5 font-bold", className)}>
+        {content}
+      </span>
+    );
+  }
+
+  return (
+    <Link
+      href="/"
+      className={cn("flex items-center gap-2.5 font-bold", className)}
+      aria-label="پشتیبان - بازگشت به صفحه اصلی"
+    >
+      {content}
     </Link>
   );
-}
+};

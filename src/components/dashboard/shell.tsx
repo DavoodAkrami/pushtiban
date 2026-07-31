@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import * as AccordionPrimitive from "@radix-ui/react-accordion";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -10,32 +9,26 @@ import { useTheme } from "next-themes";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   BarChart3,
+  BookOpen,
   Check,
   ChevronDown,
   ChevronsUpDown,
   Gauge,
-  GitBranch,
   Inbox,
   LayoutDashboard,
-  LayoutGrid,
   LogOut,
   Menu,
-  MessageSquareText,
   Monitor,
   Moon,
   Palette,
+  Send,
   Settings2,
-  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Store,
   Sun,
   Workflow,
   X,
-  BookOpen,
-  HelpCircle,
-  ToggleRight,
-  Wand2,
   type LucideIcon,
 } from "lucide-react";
 import { LogoutConfirmationModal } from "@/components/dashboard/logout-confirmation-modal";
@@ -55,15 +48,7 @@ import type { SessionProfile } from "@/store/slices/session-slice";
 import { useSessionProfile } from "@/store/use-session";
 import { useBusinessUsage } from "@/store/use-usage";
 
-type NavChild = {
-  href: string;
-  label: string;
-  icon: LucideIcon;
-};
-
-type NavItem =
-  | { id: string; href: string; label: string; icon: LucideIcon }
-  | { id: string; label: string; icon: LucideIcon; children: NavChild[] };
+type NavItem = { id: string; href: string; label: string; icon: LucideIcon };
 
 type NavGroup = {
   id: string;
@@ -72,65 +57,47 @@ type NavGroup = {
   items: NavItem[];
 };
 
-// Hrefs that are both an accordion child and the parent of deeper routes —
-// matched exactly so deeper siblings don't double-highlight them.
-const EXACT_MATCH_HREFS = new Set([
-  "/dashboard/ai-assistance",
-  "/dashboard/admin",
-]);
+// Hrefs that are also the parent of deeper routes — matched exactly so a child
+// route does not light up its parent as well.
+const EXACT_MATCH_HREFS = new Set(["/dashboard/admin"]);
 
+// Ordered to mirror the journey of a customer message: it arrives on the bot,
+// meets the automation rules, falls through to the assistant, which answers
+// from the knowledge base. The sidebar is the only place that teaches this.
 const NAV_GROUPS: NavGroup[] = [
   {
     id: "workspace",
     items: [
-      { id: "overview", href: "/dashboard/overview", label: "نمای کلی", icon: LayoutDashboard },
-      { id: "inbox", href: "/dashboard/inbox", label: "صندوق پیام‌ها", icon: Inbox },
+      {
+        id: "overview",
+        href: "/dashboard/overview",
+        label: "نمای کلی",
+        icon: LayoutDashboard,
+      },
+      { id: "inbox", href: "/dashboard/inbox", label: "گفتگوها", icon: Inbox },
     ],
   },
   {
-    id: "tools",
-    label: "ابزارها",
+    id: "build",
     items: [
+      { id: "bot", href: "/dashboard/bot", label: "ربات تلگرام", icon: Send },
       {
         id: "automation",
+        href: "/dashboard/automation",
         label: "اتوماسیون",
         icon: Workflow,
-        children: [
-          { href: "/dashboard/flow", label: "فلوها", icon: GitBranch },
-          {
-            href: "/dashboard/automation",
-            label: "پیام‌های آماده",
-            icon: MessageSquareText,
-          },
-          { href: "/dashboard/menu", label: "منوی ربات", icon: LayoutGrid },
-        ],
       },
       {
-        id: "ai-assistance",
-        label: "دستیار هوش مصنوعی",
+        id: "assistant",
+        href: "/dashboard/assistant",
+        label: "دستیار",
         icon: Sparkles,
-        children: [
-          {
-            href: "/dashboard/ai-assistance",
-            label: "تنظیمات دستیار",
-            icon: ToggleRight,
-          },
-          {
-            href: "/dashboard/ai-assistance/persona",
-            label: "شخصیت و لحن",
-            icon: Wand2,
-          },
-          {
-            href: "/dashboard/ai-assistance/facts",
-            label: "اطلاعات کسب‌وکار",
-            icon: BookOpen,
-          },
-          {
-            href: "/dashboard/ai-assistance/qa",
-            label: "پرسش و پاسخ",
-            icon: HelpCircle,
-          },
-        ],
+      },
+      {
+        id: "knowledge",
+        href: "/dashboard/knowledge",
+        label: "دانش دستیار",
+        icon: BookOpen,
       },
     ],
   },
@@ -142,21 +109,27 @@ const ADMIN_NAV_GROUP: NavGroup = {
   label: "مدیریت",
   items: [
     {
-      id: "site-admin",
-      label: "مدیریت سایت",
-      icon: ShieldCheck,
-      children: [
-        { href: "/dashboard/admin", label: "مصرف و آمار", icon: BarChart3 },
-        { href: "/dashboard/admin/businesses", label: "کسب‌وکارها", icon: Store },
-        {
-          href: "/dashboard/admin/settings",
-          label: "تنظیمات هوش مصنوعی",
-          icon: SlidersHorizontal,
-        },
-      ],
+      id: "admin-usage",
+      href: "/dashboard/admin",
+      label: "مصرف و آمار",
+      icon: BarChart3,
+    },
+    {
+      id: "admin-businesses",
+      href: "/dashboard/admin/businesses",
+      label: "کسب‌وکارها",
+      icon: Store,
+    },
+    {
+      id: "admin-settings",
+      href: "/dashboard/admin/settings",
+      label: "تنظیمات هوش مصنوعی",
+      icon: SlidersHorizontal,
     },
   ],
 };
+
+const SIDEBAR_STATE_KEY = "pushtiban:sidebar-open";
 
 const OPEN_W = 264;
 const CLOSED_W = 76;
@@ -166,27 +139,6 @@ const THEME_OPTIONS = [
   { value: "dark", label: "تاریک", icon: Moon },
   { value: "system", label: "سیستم", icon: Monitor },
 ] as const;
-
-const SIDEBAR_INTERACTIVE_SELECTOR = [
-  "a[href]",
-  "button",
-  "input",
-  "select",
-  "textarea",
-  "label",
-  "summary",
-  "[role='button']",
-  "[role='link']",
-  "[role='menuitem']",
-  "[role='checkbox']",
-  "[role='radio']",
-  "[role='radiogroup']",
-  "[role='switch']",
-  "[role='tab']",
-  "[contenteditable='true']",
-  "[tabindex]",
-  "[data-sidebar-interactive]",
-].join(",");
 
 type AccountSectionProps = {
   actionsId: string;
@@ -273,181 +225,21 @@ const DashboardNavigation = ({
   expanded,
   isAdmin,
   onNavigate,
-  onRequestExpand,
   pathname,
 }: {
   expanded: boolean;
   isAdmin: boolean;
   onNavigate?: () => void;
-  onRequestExpand?: () => void;
   pathname: string;
 }) => {
-  const reduce = useReducedMotion();
+  const navGroups = isAdmin ? [...NAV_GROUPS, ADMIN_NAV_GROUP] : NAV_GROUPS;
 
-  const navGroups = React.useMemo(
-    () => (isAdmin ? [...NAV_GROUPS, ADMIN_NAV_GROUP] : NAV_GROUPS),
-    [isAdmin]
-  );
-
-  // Derive which accordion sections should be open from the pathname, so a
-  // deep link (or a back/forward navigation) keeps the matching section open.
-  const activeSectionIds = React.useMemo(() => {
-    const ids: string[] = [];
-    for (const group of navGroups) {
-      for (const item of group.items) {
-        if (!("children" in item)) continue;
-        const matches = (href: string) =>
-          pathname === href || pathname.startsWith(`${href}/`);
-        if (item.children.some((child) => matches(child.href))) {
-          ids.push(item.id);
-        }
-      }
-    }
-    return new Set(ids);
-  }, [navGroups, pathname]);
-
-  // Local open state — initialised from active sections, kept in sync when the
-  // pathname changes. Each parent accordion item is its own Radix item keyed by
-  // its id, surfaced through a single Radix "single collapsible" root.
-  const [openSections, setOpenSections] = React.useState<Set<string>>(() =>
-    new Set(activeSectionIds)
-  );
-
-  React.useEffect(() => {
-    setOpenSections((prev) => {
-      const next = new Set(prev);
-      activeSectionIds.forEach((id) => next.add(id));
-      return next;
-    });
-  }, [activeSectionIds]);
-
-  // Render a parent accordion item (has children).
-  const renderAccordion = (item: Extract<NavItem, { children: NavChild[] }>) => {
-    const sectionActive = activeSectionIds.has(item.id);
-    const open = openSections.has(item.id);
-
-    if (!expanded) {
-      const shortcutButton = (
-        <button
-          type="button"
-          aria-label={`باز کردن زیرمنوی ${item.label}`}
-          onClick={() => {
-            setOpenSections((prev) => {
-              const next = new Set(prev);
-              next.add(item.id);
-              return next;
-            });
-            onNavigate?.();
-            onRequestExpand?.();
-          }}
-          className={cn(
-            "flex h-11 w-full items-center justify-center rounded-2xl px-0 text-sm transition-colors duration-300 hover:bg-card/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
-            sectionActive
-              ? "bg-card/70 font-medium text-foreground"
-              : "text-muted"
-          )}
-        >
-          <item.icon className="size-[1.15rem] shrink-0" aria-hidden />
-        </button>
-      );
-
-      return (
-        <li key={item.id}>
-          <Tooltip
-            content={`باز کردن ${item.label}`}
-            side="end"
-            wrapperClassName="w-full"
-          >
-            {shortcutButton}
-          </Tooltip>
-        </li>
-      );
-    }
-
-    return (
-      <li key={item.id}>
-        <AccordionPrimitive.Root
-          type="multiple"
-          value={Array.from(openSections)}
-          onValueChange={(next) => setOpenSections(new Set(next))}
-        >
-          <AccordionPrimitive.Item value={item.id}>
-            <AccordionPrimitive.Header>
-              <AccordionPrimitive.Trigger
-                className={cn(
-                  "flex h-11 w-full items-center gap-3 rounded-2xl px-3 text-sm transition-colors duration-300 hover:bg-card/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
-                  sectionActive
-                    ? "bg-card/70 font-medium text-foreground"
-                    : "text-muted"
-                )}
-              >
-                <item.icon className="size-[1.15rem] shrink-0" aria-hidden />
-                <span className="truncate">{item.label}</span>
-                <motion.span
-                  animate={{ rotate: open ? 180 : 0 }}
-                  transition={{ duration: reduce ? 0 : 0.2, ease: luxe }}
-                  className="ms-auto shrink-0"
-                >
-                  <ChevronDown className="size-4" aria-hidden />
-                </motion.span>
-              </AccordionPrimitive.Trigger>
-            </AccordionPrimitive.Header>
-            <AccordionPrimitive.Content asChild>
-              <motion.div
-                initial={
-                  reduce ? { opacity: 1 } : { height: 0, opacity: 0 }
-                }
-                animate={{ height: "auto", opacity: 1 }}
-                exit={reduce ? { opacity: 0 } : { height: 0, opacity: 0 }}
-                transition={{ duration: reduce ? 0 : 0.24, ease: luxe }}
-                className="overflow-hidden"
-              >
-                <ul className="space-y-1 pb-1 pt-1">
-                  {item.children.map((child) => {
-                    // Some hrefs (ai-assistance, admin) are both a child link
-                    // and the parent of deeper routes, so we match them
-                    // exactly (no trailing-slash fallback) to avoid
-                    // double-highlighting deeper children.
-                    const childActive =
-                      pathname === child.href ||
-                      (!EXACT_MATCH_HREFS.has(child.href) &&
-                        pathname.startsWith(`${child.href}/`));
-
-                    return (
-                      <li key={child.href}>
-                        <Link
-                          href={child.href}
-                          onClick={() => onNavigate?.()}
-                          aria-current={childActive ? "page" : undefined}
-                          className={cn(
-                            "flex h-10 items-center gap-3 rounded-2xl pe-3 ps-10 text-sm transition-colors duration-300 hover:bg-card/55 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
-                            childActive
-                              ? "font-medium text-accent"
-                              : "text-muted"
-                          )}
-                        >
-                          <child.icon
-                            className="size-4 shrink-0"
-                            aria-hidden
-                          />
-                          <span className="truncate">{child.label}</span>
-                        </Link>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </motion.div>
-            </AccordionPrimitive.Content>
-          </AccordionPrimitive.Item>
-        </AccordionPrimitive.Root>
-      </li>
-    );
-  };
-
-  // Render a flat link item (no children).
-  const renderLink = (item: Extract<NavItem, { href: string }>) => {
+  const renderLink = (item: NavItem) => {
     const active =
-      pathname === item.href || pathname.startsWith(`${item.href}/`);
+      pathname === item.href ||
+      (!EXACT_MATCH_HREFS.has(item.href) &&
+        pathname.startsWith(`${item.href}/`));
+
     const link = (
       <Link
         href={item.href}
@@ -456,9 +248,7 @@ const DashboardNavigation = ({
         className={cn(
           "flex h-11 w-full items-center gap-3 rounded-2xl px-3 text-sm transition-colors duration-300 hover:bg-card/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
           !expanded && "justify-center px-0",
-          active
-            ? "bg-card/70 font-medium text-foreground"
-            : "text-muted"
+          active ? "bg-card/70 font-medium text-foreground" : "text-muted"
         )}
       >
         <item.icon className="size-[1.15rem] shrink-0" aria-hidden />
@@ -471,11 +261,7 @@ const DashboardNavigation = ({
         {expanded ? (
           link
         ) : (
-          <Tooltip
-            content={item.label}
-            side="end"
-            wrapperClassName="w-full"
-          >
+          <Tooltip content={item.label} side="end" wrapperClassName="w-full">
             {link}
           </Tooltip>
         )}
@@ -506,11 +292,7 @@ const DashboardNavigation = ({
             ) : (
               <div aria-hidden className="mx-3 my-3 border-t border-line" />
             ))}
-          <ul className="space-y-1">
-            {group.items.map((item) =>
-              "children" in item ? renderAccordion(item) : renderLink(item)
-            )}
-          </ul>
+          <ul className="space-y-1">{group.items.map(renderLink)}</ul>
         </section>
       ))}
     </nav>
@@ -518,9 +300,9 @@ const DashboardNavigation = ({
 };
 
 /**
- * Remaining AI messages this month, read from the shared usage slice. Renders
+ * Used AI messages this month, read from the shared usage slice. Renders
  * nothing for accounts without a message cap (unlimited) — there is no quota to
- * report. Collapsed sidebar shows just the remaining count with a tooltip.
+ * report. Collapsed sidebar shows just the used count with a tooltip.
  */
 const MessageQuota = ({ expanded }: { expanded: boolean }) => {
   const reduce = useReducedMotion();
@@ -537,11 +319,11 @@ const MessageQuota = ({ expanded }: { expanded: boolean }) => {
   const limit = usage?.monthlyMessageLimit ?? null;
   if (!usage || limit === null) return null;
 
-  const left = usage.messagesLeft ?? Math.max(0, limit - usage.monthMessages);
-  const usedRatio = limit > 0 ? Math.min(1, usage.monthMessages / limit) : 1;
+  const used = Math.min(limit, usage.monthMessages);
+  const usedRatio = limit > 0 ? used / limit : 1;
   const leftRatio = 1 - usedRatio;
 
-  const tone = usage.aiBlocked || left === 0
+  const tone = usage.aiBlocked || used >= limit
     ? { bar: "bg-danger", text: "text-danger" }
     : leftRatio <= 0.25
       ? { bar: "bg-warning", text: "text-warning" }
@@ -549,12 +331,14 @@ const MessageQuota = ({ expanded }: { expanded: boolean }) => {
 
   const summary = usage.aiBlocked
     ? "دستیار این حساب توسط مدیر سایت مسدود شده است."
-    : `${fa(left)} از ${fa(limit)} پیام این ماه باقی مانده است.`;
+    : `${fa(used)} از ${fa(limit)} پیام این ماه مصرف شده است.`;
+  // Short enough to fit inside the sidebar width when shown above the card.
+  const tooltipLabel = usage.aiBlocked ? "دستیار مسدود شده است." : summary;
 
   if (!expanded) {
     return (
       <div className="mt-4 shrink-0">
-        <Tooltip content={summary} side="end" wrapperClassName="w-full">
+        <Tooltip content={tooltipLabel} side="end" wrapperClassName="w-full">
           <div
             role="img"
             aria-label={summary}
@@ -562,7 +346,7 @@ const MessageQuota = ({ expanded }: { expanded: boolean }) => {
           >
             <Gauge className={cn("size-4", tone.text)} aria-hidden />
             <span className={cn("text-[10px] font-bold tabular-nums", tone.text)}>
-              {fa(left)}
+              {fa(used)}
             </span>
           </div>
         </Tooltip>
@@ -570,44 +354,41 @@ const MessageQuota = ({ expanded }: { expanded: boolean }) => {
     );
   }
 
+  // Expanded: one compact line plus the bar. The full explanation lives on the
+  // overview page — the sidebar should not spend three lines of prose on it.
   return (
-    <div className="mt-4 shrink-0 rounded-2xl bg-card/40 p-3">
-      <div className="flex items-center gap-2">
-        <Gauge className={cn("size-4 shrink-0", tone.text)} aria-hidden />
-        <span className="text-xs text-muted">پیام‌های این ماه</span>
-        <span
-          className={cn(
-            "ms-auto text-xs font-bold tabular-nums",
-            tone.text
-          )}
-        >
-          {fa(left)}/{fa(limit)}
-        </span>
-      </div>
-      <div
-        role="progressbar"
-        aria-label="پیام‌های مصرف‌شده این ماه"
-        aria-valuemin={0}
-        aria-valuemax={limit}
-        aria-valuenow={usage.monthMessages}
-        aria-valuetext={summary}
-        className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-line/60"
+    <Tooltip content={tooltipLabel} side="top" wrapperClassName="w-full">
+      <Link
+        href="/dashboard/overview"
+        className="mt-4 block shrink-0 rounded-2xl bg-card/40 p-3 transition-colors duration-300 hover:bg-card/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
       >
-        <motion.div
-          initial={false}
-          animate={{ width: `${Math.max(2, Math.round(usedRatio * 100))}%` }}
-          transition={reduce ? { duration: 0 } : { duration: 0.5, ease: luxe }}
-          className={cn("h-full rounded-full", tone.bar)}
-        />
-      </div>
-      <p className="mt-2 text-[11px] leading-5 text-muted">
-        {usage.aiBlocked
-          ? "دستیار مسدود است؛ با مدیر سایت تماس بگیرید."
-          : left === 0
-            ? "سقف این ماه پر شده؛ برای افزایش با ما تماس بگیرید."
-            : "سهمیه ابتدای هر ماه بازنشانی می‌شود."}
-      </p>
-    </div>
+        <div className="flex items-center gap-2">
+          <Gauge className={cn("size-4 shrink-0", tone.text)} aria-hidden />
+          <span className="text-xs text-muted">پیام‌های این ماه</span>
+          <span
+            className={cn("ms-auto text-xs font-bold tabular-nums", tone.text)}
+          >
+            {fa(used)}/{fa(limit)}
+          </span>
+        </div>
+        <div
+          role="progressbar"
+          aria-label="پیام‌های مصرف‌شده این ماه"
+          aria-valuemin={0}
+          aria-valuemax={limit}
+          aria-valuenow={used}
+          aria-valuetext={summary}
+          className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-line/60"
+        >
+          <motion.div
+            initial={false}
+            animate={{ width: `${Math.max(2, Math.round(usedRatio * 100))}%` }}
+            transition={reduce ? { duration: 0 } : { duration: 0.5, ease: luxe }}
+            className={cn("h-full rounded-full", tone.bar)}
+          />
+        </div>
+      </Link>
+    </Tooltip>
   );
 };
 
@@ -949,7 +730,6 @@ export const DashboardShell = ({
 }) => {
   // UI state stays local; session data comes from the Redux profile slice.
   const [sidebarOpen, setSidebarOpen] = React.useState(true);
-  const [sidebarHovered, setSidebarHovered] = React.useState(false);
   const [desktopProfileMenuOpen, setDesktopProfileMenuOpen] =
     React.useState(false);
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
@@ -978,35 +758,19 @@ export const DashboardShell = ({
   const reduce = useReducedMotion();
   const { toast } = useToast();
 
-  const toggleLabel = sidebarOpen ? "بستن سایدبار" : "باز کردن سایدбар";
+  const toggleLabel = sidebarOpen ? "بستن سایدبار" : "باز کردن سایدبار";
 
   const toggleSidebar = () => {
-    setSidebarOpen((value) => !value);
+    setSidebarOpen((value) => {
+      const next = !value;
+      try {
+        window.localStorage.setItem(SIDEBAR_STATE_KEY, next ? "1" : "0");
+      } catch {
+        // Private mode or a full quota — a lost preference is not worth failing over.
+      }
+      return next;
+    });
     setDesktopProfileMenuOpen(false);
-  };
-
-  const handleDesktopSidebarClick = (
-    event: React.MouseEvent<HTMLElement>
-  ) => {
-    if (event.defaultPrevented) return;
-
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-    if (target.closest(SIDEBAR_INTERACTIVE_SELECTOR)) return;
-
-    toggleSidebar();
-  };
-
-  const handleDesktopSidebarPointerMove = (
-    event: React.PointerEvent<HTMLElement>
-  ) => {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-
-    const showToggle =
-      Boolean(target.closest("[data-sidebar-toggle]")) ||
-      !target.closest(SIDEBAR_INTERACTIVE_SELECTOR);
-    setSidebarHovered(showToggle);
   };
 
   const toggleDesktopProfileMenu = () => {
@@ -1121,6 +885,17 @@ export const DashboardShell = ({
 
   React.useEffect(() => setThemeReady(true), []);
 
+  // Read the persisted sidebar state after mount. Doing it in the initialiser
+  // would desync the server render from the client one.
+  React.useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(SIDEBAR_STATE_KEY);
+      if (stored !== null) setSidebarOpen(stored === "1");
+    } catch {
+      // No storage access — keep the default.
+    }
+  }, []);
+
   React.useEffect(() => {
     setMobileNavOpen(false);
     setMobileProfileMenuOpen(false);
@@ -1146,20 +921,25 @@ export const DashboardShell = ({
     <div className="h-dvh overflow-hidden bg-background xl:flex">
       <motion.aside
         aria-label="سایدبار داشبورد"
-        onClick={handleDesktopSidebarClick}
-        onPointerMove={handleDesktopSidebarPointerMove}
-        onPointerLeave={() => setSidebarHovered(false)}
         animate={{ width: sidebarOpen ? OPEN_W : CLOSED_W }}
         transition={reduce ? { duration: 0 } : { duration: 0.45, ease: luxe }}
         className="sticky top-0 hidden h-dvh shrink-0 flex-col overflow-visible border-e border-line bg-surface/60 p-4 xl:flex"
       >
         <div className="flex items-center gap-2">
-          <Tooltip
-            content={toggleLabel}
-            side="end"
-            delay={500}
-            wrapperClassName="flex-1"
+          <Link
+            href="/dashboard/overview"
+            className={cn(
+              "flex min-h-11 items-center gap-3 rounded-full text-start font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+              sidebarOpen ? "flex-1" : "hidden"
+            )}
           >
+            <Logo variant="icon" size="sm" className="flex-shrink-0" as="span" />
+            <span className="truncate">پشتیبان</span>
+          </Link>
+
+          {/* One toggle, always in the same place. The logo is a link home, so
+              hovering it no longer swaps in a collapse icon. */}
+          <Tooltip content={toggleLabel} side={sidebarOpen ? "bottom" : "end"}>
             <button
               ref={desktopToggleRef}
               type="button"
@@ -1168,37 +948,17 @@ export const DashboardShell = ({
               aria-expanded={sidebarOpen}
               onClick={toggleSidebar}
               className={cn(
-                "flex min-h-11 flex-1 items-center gap-3 rounded-full text-start font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
-                !sidebarOpen && "justify-center"
+                "flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-card/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+                !sidebarOpen && "mx-auto"
               )}
             >
-              {sidebarHovered && !sidebarOpen ? (
-                <TbLayoutSidebarRightExpand
-                  className="size-5 flex-shrink-0"
-                  aria-hidden
-                />
+              {sidebarOpen ? (
+                <TbLayoutSidebarRightCollapse className="size-5" aria-hidden />
               ) : (
-                <Logo variant="icon" size="sm" className="flex-shrink-0" />
+                <TbLayoutSidebarRightExpand className="size-5" aria-hidden />
               )}
-              {sidebarOpen && <span className="truncate">پشتیبان</span>}
             </button>
           </Tooltip>
-
-          {sidebarOpen && (
-            <Tooltip content={toggleLabel} side="bottom">
-              <button
-                type="button"
-                aria-label={toggleLabel}
-                onClick={toggleSidebar}
-                className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-card/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-              >
-                <TbLayoutSidebarRightCollapse
-                  className="size-5"
-                  aria-hidden
-                />
-              </button>
-            </Tooltip>
-          )}
         </div>
 
         <div
@@ -1214,7 +974,6 @@ export const DashboardShell = ({
             isAdmin={isAdmin}
             pathname={pathname}
             onNavigate={() => setDesktopProfileMenuOpen(false)}
-            onRequestExpand={() => setSidebarOpen(true)}
           />
 
           <MessageQuota expanded={sidebarOpen} />

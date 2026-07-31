@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { QaPanel } from "@/components/dashboard/ai-assistance-panel";
+import { QaPanel } from "@/components/dashboard/knowledge/qa-panel";
 
 export const metadata: Metadata = {
   title: "پرسش و پاسخ — پشتیبان",

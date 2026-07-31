@@ -7,7 +7,6 @@ import {
   Bot,
   Command,
   Hash,
-  Link2,
   MessageSquareText,
   Pencil,
   Plus,
@@ -16,6 +15,7 @@ import {
   Workflow,
 } from "lucide-react";
 import { luxe } from "@/components/motion/reveal";
+import { BotRequiredNotice } from "@/components/dashboard/bot-required-notice";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -48,10 +48,7 @@ import {
   type KeywordAutomation,
 } from "@/lib/automations";
 import { fa } from "@/lib/utils";
-import {
-  requestSettingsOpen,
-  TELEGRAM_CONNECTION_CHANGED_EVENT,
-} from "@/lib/settings-events";
+import { TELEGRAM_CONNECTION_CHANGED_EVENT } from "@/lib/settings-events";
 import { Camera, MessageCircle } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
@@ -749,7 +746,7 @@ const AutomationPanelContent = () => {
   const canCreate = status === "succeeded" && Boolean(bot) && !setupRequired;
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div>
       <header className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-black">پیام‌های آماده</h1>
@@ -807,22 +804,7 @@ const AutomationPanelContent = () => {
         )}
 
         {!loading && status === "succeeded" && !bot && (
-          <Alert
-            variant="info"
-            title="ابتدا ربات تلگرام را متصل کنید"
-            description="از منوی حساب وارد تنظیمات و بخش اتصالات شوید. پس از اتصال ربات، می‌توانید اولین پاسخ کلیدواژه‌ای را بسازید."
-          >
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="mt-3"
-              startIcon={<Link2 className="size-4" />}
-              onClick={() => requestSettingsOpen("connections")}
-            >
-              اتصال ربات در تنظیمات
-            </Button>
-          </Alert>
+          <BotRequiredNotice />
         )}
 
         {bot && status === "succeeded" && (

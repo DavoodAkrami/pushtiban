@@ -74,7 +74,18 @@ How to use:
       canvas creation and drag interactions
 - [ ] Add per-message replacement delivery and a customizable back action to
       interactive Telegram flows
-- [ ] Knowledge-base ingestion: upload docs / paste text / crawl site
+- [x] Knowledge-base ingestion at /dashboard/knowledge/sources: paste text,
+      read a .txt/.md/.csv file in the browser, or give a URL the server
+      fetches and strips to text behind an SSRF guard. Sources list with
+      status and chunk counts, delete cascades to chunks, per-source category
+      now written onto every chunk, and the 500-chunk ceiling is shown to the
+      owner instead of only being enforced server-side
+- [x] Knowledge sources are inspectable and editable: expand a source to read
+      the exact chunks the assistant searches, edit or delete any chunk, and
+      rename the source. Editing a chunk re-embeds it, and renaming re-embeds
+      the whole source, because the title is part of every chunk's vector
+- [ ] Knowledge-base ingestion for PDF and Word — needs a parser dependency and
+      a Supabase Storage bucket with its own policies
 - [ ] AI assistant configuration (name, tone, model selection)
 - [x] AI assistant on/off control with Telegram fallback after flows and
       prepared messages
@@ -82,7 +93,13 @@ How to use:
       (assistant settings, business facts, prepared Q&A) like the automation
       section, with the facts and Q&A editors on their own pages under
       /dashboard/ai-assistance/facts and /dashboard/ai-assistance/qa
-- [ ] Chat playground for testing the assistant against the knowledge base
+- [x] Chat playground for testing the assistant against the knowledge base —
+      now a preview pane on /dashboard/assistant backed by /api/ai/preview,
+      which calls the same `generateTelegramAiReply` the webhook does (same
+      gates, thresholds, escalation and provider order) and renders the reply
+      through the Telegram HTML converter. Shows the retrieval inspector per
+      answer and states that a test message costs a real message. The old
+      unauthenticated /ai/rag-test now redirects here
 - [x] RAG retrieval layer (pgvector in Supabase) with an in-app "search
       knowledge" tool: embeddings via OpenAI/Metis, HNSW cosine similarity,
       and a `/ai/rag-test` inspector page showing the chunks the AI fetched
@@ -170,9 +187,17 @@ How to use:
       stop being injected into every prompt; business facts capped at 20 items
       / 1200 characters with a warning in the facts editor
 - [ ] Bot keyboard menu: a bot-wide set of always-visible buttons at the bottom
-      of the Telegram chat, laid out in rows at /dashboard/menu, each button
+      of the Telegram chat, laid out in rows at /dashboard/bot/menu, each button
       wired to an existing flow or prepared reply, plus a per-message control
       in the flow builder to show or hide the menu
+- [x] Dashboard information architecture rebuilt around the customer's message
+      instead of the implementation: the sidebar is six flat destinations in
+      pipeline order (نمای کلی، گفتگوها، ربات تلگرام، اتوماسیون، دستیار، دانش
+      دستیار) with no accordions, sub-pages moved into routed tabs
+      (`PageTabs`), the Telegram bot promoted out of the settings modal onto
+      its own page, and a «مسیر پاسخ» strip on the overview showing the real
+      order the webhook tries — flows → keywords → assistant → human — so the
+      owner can see which page answers a given message
 - [ ] Conversation inbox (live conversations, handoff to human)
 - [ ] Analytics dashboard (response rate, satisfaction, volumes)
 

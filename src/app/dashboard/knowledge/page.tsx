@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { FactsPanel } from "@/components/dashboard/ai-assistance-panel";
+import { FactsPanel } from "@/components/dashboard/knowledge/facts-panel";
 
 export const metadata: Metadata = {
   title: "اطلاعات کسب‌وکار — پشتیبان",

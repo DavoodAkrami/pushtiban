@@ -21,6 +21,11 @@ import {
 } from "lucide-react";
 import { luxe } from "@/components/motion/reveal";
 import {
+  ReplyPipeline,
+  stageCountHint,
+  type PipelineStage,
+} from "@/app/dashboard/overview/reply-pipeline";
+import {
   faNumber,
   faTokens,
   RANGE_HINTS,
@@ -223,7 +228,9 @@ export const OverviewPanel = () => {
         : "ربات تلگرام را وصل کنید",
       description: overview?.telegram.connected
         ? `مشتری‌ها از @${overview.telegram.botUsername} پاسخ می‌گیرند.`
-        : "از منوی حساب → تنظیمات → اتصال‌ها ربات خود را متصل کنید.",
+        : "بدون ربات متصل، هیچ پیامی به دست مشتری نمی‌رسد.",
+      href: "/dashboard/bot",
+      actionLabel: "اتصال ربات",
     },
     {
       id: "assistant",
@@ -231,8 +238,8 @@ export const OverviewPanel = () => {
       icon: ToggleRight,
       title: "دستیار هوشمند را روشن کنید",
       description:
-        "بعد از فلوها و پیام‌های آماده، دستیار به پرسش‌های باقی‌مانده پاسخ می‌دهد.",
-      href: "/dashboard/ai-assistance",
+        "بعد از فلوها و کلیدواژه‌ها، دستیار به پرسش‌های باقی‌مانده پاسخ می‌دهد.",
+      href: "/dashboard/assistant",
       actionLabel: "تنظیمات دستیار",
     },
     {
@@ -244,7 +251,7 @@ export const OverviewPanel = () => {
         (overview?.knowledge.facts ?? 0) > 0
           ? `${fa(overview?.knowledge.facts ?? 0)} مورد اطلاعات ثبت شده است.`
           : "ساعت کاری، شرایط ارسال و هر چیزی که دستیار باید همیشه بداند.",
-      href: "/dashboard/ai-assistance/facts",
+      href: "/dashboard/knowledge",
       actionLabel: "افزودن اطلاعات",
     },
     {
@@ -256,7 +263,7 @@ export const OverviewPanel = () => {
         (overview?.knowledge.qaPairs ?? 0) > 0
           ? `${fa(overview?.knowledge.qaPairs ?? 0)} پرسش و پاسخ ثبت شده است.`
           : "پاسخ آماده برای سؤال‌هایی که مشتری‌ها بیشتر می‌پرسند.",
-      href: "/dashboard/ai-assistance/qa",
+      href: "/dashboard/knowledge/qa",
       actionLabel: "افزودن پرسش",
     },
     {
@@ -265,15 +272,15 @@ export const OverviewPanel = () => {
         (overview?.automation.flows ?? 0) > 0 ||
         (overview?.automation.preparedReplies ?? 0) > 0,
       icon: GitBranch,
-      title: "یک فلو یا پیام آماده بسازید",
+      title: "یک فلو یا کلیدواژه بسازید",
       description:
         (overview?.automation.flows ?? 0) > 0 ||
         (overview?.automation.preparedReplies ?? 0) > 0
           ? `${fa(overview?.automation.flows ?? 0)} فلو و ${fa(
               overview?.automation.preparedReplies ?? 0
-            )} پیام آماده دارید.`
+            )} کلیدواژه دارید.`
           : "پرتکرارترین مسیرها را بدون مصرف توکن پاسخ دهید.",
-      href: "/dashboard/flow",
+      href: "/dashboard/automation",
       actionLabel: "ساخت فلو",
     },
     {
@@ -283,7 +290,7 @@ export const OverviewPanel = () => {
       title: "تلگرام شخصی خود را وصل کنید",
       description:
         "تا وقتی دستیار پاسخی ندارد، پیام مشتری در تلگرام به دست شما برسد.",
-      href: "/dashboard/ai-assistance",
+      href: "/dashboard/bot/admins",
       actionLabel: "اتصال حساب",
     },
   ] satisfies Array<{
@@ -295,6 +302,46 @@ export const OverviewPanel = () => {
     href?: string;
     actionLabel?: string;
   }>;
+  const pipelineStages: PipelineStage[] = [
+    {
+      label: "ربات تلگرام",
+      hint: overview?.telegram.connected
+        ? `@${overview.telegram.botUsername}`
+        : "متصل نیست",
+      href: "/dashboard/bot",
+      icon: Send,
+      active: overview?.telegram.connected ?? false,
+    },
+    {
+      label: "فلوها",
+      hint: stageCountHint(overview?.automation.activeFlows ?? 0, "فعال"),
+      href: "/dashboard/automation",
+      icon: GitBranch,
+      active: (overview?.automation.activeFlows ?? 0) > 0,
+    },
+    {
+      label: "کلیدواژه‌ها",
+      hint: stageCountHint(overview?.automation.preparedReplies ?? 0, "پاسخ"),
+      href: "/dashboard/automation/keywords",
+      icon: MessageSquareText,
+      active: (overview?.automation.preparedReplies ?? 0) > 0,
+    },
+    {
+      label: "دستیار هوشمند",
+      hint: overview?.assistant.enabled ? "روشن" : "خاموش",
+      href: "/dashboard/assistant",
+      icon: Sparkles,
+      active: overview?.assistant.enabled ?? false,
+    },
+    {
+      label: "پشتیبان انسانی",
+      hint: overview?.assistant.handoffEnabled ? "روشن" : "خاموش",
+      href: "/dashboard/inbox",
+      icon: Inbox,
+      active: overview?.assistant.handoffEnabled ?? false,
+    },
+  ];
+
   const pendingSetupSteps = setupSteps.filter((step) => !step.done);
   const showSetup = !setupDismissed && (loading || pendingSetupSteps.length > 0);
 
@@ -316,6 +363,8 @@ export const OverviewPanel = () => {
       </header>
 
       <div className="space-y-8">
+        <ReplyPipeline stages={pipelineStages} loading={loading} />
+
         <AnimatePresence initial={false}>
           {showSetup && (
             <motion.section
@@ -335,7 +384,11 @@ export const OverviewPanel = () => {
                       قدم‌های بعدی برای راه‌اندازی
                     </h2>
                     <p className="mt-1 text-xs leading-6 text-muted">
-                      این کارها را انجام دهید تا دستیار برای پاسخ‌گویی آماده شود.
+                      {loading
+                        ? "در حال بررسی وضعیت راه‌اندازی…"
+                        : `${fa(setupSteps.length - pendingSetupSteps.length)} از ${fa(
+                            setupSteps.length
+                          )} قدم انجام شده — این‌ها باقی مانده است.`}
                     </p>
                   </div>
                 </div>
@@ -353,7 +406,7 @@ export const OverviewPanel = () => {
               </div>
 
               <ul className="mt-5 space-y-2" aria-busy={loading}>
-                {setupSteps.map((step) => (
+                {pendingSetupSteps.map((step) => (
                   <SetupRow key={step.id} {...step} />
                 ))}
               </ul>
@@ -453,7 +506,7 @@ export const OverviewPanel = () => {
             hint="اطلاعات و پرسش‌وپاسخ ثبت‌شده"
             icon={BookOpen}
             loading={loading}
-            href="/dashboard/ai-assistance/facts"
+            href="/dashboard/knowledge"
           />
           <StatCard
             label="فلوهای فعال"
@@ -461,7 +514,7 @@ export const OverviewPanel = () => {
             hint="گفتگوهای خودکار تلگرام"
             icon={GitBranch}
             loading={loading}
-            href="/dashboard/flow"
+            href="/dashboard/automation"
           />
           <StatCard
             label="توکن این ماه"
@@ -533,7 +586,7 @@ export const OverviewPanel = () => {
               نمی‌دهند به هوش مصنوعی سپرده می‌شوند.
             </p>
             <Link
-              href="/dashboard/ai-assistance"
+              href="/dashboard/assistant"
               className={buttonVariants({ className: "mt-6" })}
             >
               رفتن به تنظیمات دستیار

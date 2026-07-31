@@ -20,7 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
-import { KnowledgePageHeader } from "@/components/dashboard/ai-assistance-panel";
+import { DashboardPageHeader } from "@/components/dashboard/page-header";
 import { cn } from "@/lib/utils";
 
 // ---- Types -----------------------------------------------------------------
@@ -166,7 +166,7 @@ export const AiPersonaPanel = ({
 
   return (
     <form onSubmit={save} noValidate>
-      <KnowledgePageHeader
+      <DashboardPageHeader
         title="شخصیت و لحن دستیار"
         description="به دستیار بگویید کسب‌وکار شما چیست و چطور باید حرف بزند؛ این تنظیمات در همهٔ پاسخ‌ها — به‌ویژه معرفی کسب‌وکار — به کار می‌رود."
         icon={Wand2}

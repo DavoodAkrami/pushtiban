@@ -8,7 +8,6 @@ import {
   GitBranch,
   GripVertical,
   LayoutGrid,
-  Link2,
   MessageSquareText,
   Plus,
   Save,
@@ -18,6 +17,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { luxe } from "@/components/motion/reveal";
+import { BotRequiredNotice } from "@/components/dashboard/bot-required-notice";
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Switch } from "@/components/ui/checkbox";
@@ -39,10 +39,7 @@ import {
   type TelegramMenu,
 } from "@/lib/telegram-menu";
 import { fa } from "@/lib/utils";
-import {
-  requestSettingsOpen,
-  TELEGRAM_CONNECTION_CHANGED_EVENT,
-} from "@/lib/settings-events";
+import { TELEGRAM_CONNECTION_CHANGED_EVENT } from "@/lib/settings-events";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { loadAutomations } from "@/store/slices/automations-slice";
 import {
@@ -708,7 +705,7 @@ export const MenuPanel = () => {
   };
 
   return (
-    <div className="mx-auto max-w-6xl">
+    <div>
       <header className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-black">منوی ربات</h1>
@@ -768,22 +765,7 @@ export const MenuPanel = () => {
         )}
 
         {!loading && status === "succeeded" && !connected && (
-          <Alert
-            variant="info"
-            title="ابتدا ربات تلگرام را متصل کنید"
-            description="از منوی حساب وارد تنظیمات و بخش اتصالات شوید. پس از اتصال ربات، می‌توانید منو را بسازید."
-          >
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="mt-3"
-              startIcon={<Link2 className="size-4" />}
-              onClick={() => requestSettingsOpen("connections")}
-            >
-              اتصال ربات در تنظیمات
-            </Button>
-          </Alert>
+          <BotRequiredNotice />
         )}
 
         {loading && (
@@ -845,7 +827,7 @@ export const MenuPanel = () => {
                     برای اجرا نباشد منو کاری نمی‌تواند بکند.
                   </p>
                   <Link
-                    href="/dashboard/flow"
+                    href="/dashboard/automation"
                     className={buttonVariants({ className: "mt-6" })}
                   >
                     ساخت فلو

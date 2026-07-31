@@ -15,6 +15,7 @@ import {
 import {
   retrieveRagContext,
   buildRagSystemPrompt,
+  type RagRetrieval,
 } from "@/lib/ai/rag";
 import {
   DEFAULT_PERSONA,
@@ -235,6 +236,12 @@ export const customerRequestedHuman = (text: string): boolean => {
 export type TelegramAiResult = {
   text: string | null;
   needsHuman: boolean;
+  /**
+   * What retrieval found for this message. The Telegram path ignores it — it is
+   * here so the dashboard preview can show the owner exactly which facts, Q&A
+   * pairs and chunks fed the answer, without paying for a second retrieval.
+   */
+  retrieval?: RagRetrieval | null;
 };
 
 /**
@@ -410,7 +417,7 @@ export const generateTelegramAiReply = async (
           model: provider.model,
           usage,
         });
-        if (text) return { text, needsHuman: false };
+        if (text) return { text, needsHuman: false, retrieval };
       } catch (error) {
         const message =
           error instanceof Error ? error.message.slice(0, 200) : "Unknown error";
@@ -443,14 +450,14 @@ export const generateTelegramAiReply = async (
           model: provider.model,
           usage,
         });
-        if (text) return { text, needsHuman: false };
+        if (text) return { text, needsHuman: false, retrieval };
       } catch {
         // fall through to the next provider
       }
     }
-    if (result) return result;
+    if (result) return { ...result, retrieval };
   }
 
   // No provider succeeded — signal that a human should step in.
-  return { text: null, needsHuman: true };
+  return { text: null, needsHuman: true, retrieval };
 };

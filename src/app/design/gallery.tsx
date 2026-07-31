@@ -50,6 +50,7 @@ import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox, Switch } from "@/components/ui/checkbox";
 import { Tooltip } from "@/components/ui/tooltip";
+import { PageTabs } from "@/components/ui/page-tabs";
 import {
   Skeleton,
   SkeletonBlock,
@@ -593,6 +594,24 @@ function TooltipsDemo() {
   );
 }
 
+const PageTabsDemo = () => (
+  <div className="max-w-2xl space-y-5">
+    <PageTabs
+      ariaLabel="نمونهٔ تب‌های صفحه"
+      items={[
+        { href: "/design", label: "این صفحه", icon: Sparkles },
+        { href: "/dashboard/knowledge", label: "دانش دستیار", icon: Database },
+        { href: "/dashboard/automation", label: "اتوماسیون", icon: Zap },
+      ]}
+    />
+    <p className="text-sm leading-7 text-muted">
+      تب فعال از مسیر صفحه خوانده می‌شود، نه از حالت داخلی؛ بلندترین مسیرِ
+      منطبق برنده است تا وقتی تب اول روی مسیر والد نشسته، تب‌های تودرتو آن را
+      همزمان روشن نکنند.
+    </p>
+  </div>
+);
+
 function AtomsDemo() {
   return (
     <>
@@ -832,6 +851,13 @@ function GalleryInner() {
 
       <Section title="تول‌تیپ" lead="راهنمای کوتاه روی هاور و فوکوس؛ در چهار جهت.">
         <TooltipsDemo />
+      </Section>
+
+      <Section
+        title="تب‌های صفحه"
+        lead="زیرمسیرهای یک بخش داشبورد؛ هر تب یک مسیر واقعی است."
+      >
+        <PageTabsDemo />
       </Section>
 
       <Section

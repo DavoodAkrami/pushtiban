@@ -70,7 +70,13 @@ const ModalContent = React.forwardRef<
               className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm"
             />
           </DialogPrimitive.Overlay>
-          <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto p-5">
+          {/* `grid place-items-center` inside a scroll container clips the top
+              of any dialog taller than the viewport — the overflow is pushed
+              above the scrollable area and cannot be reached. A flex row with
+              `min-h-full` centers short dialogs and scrolls tall ones from
+              their top edge instead. */}
+          <div className="fixed inset-0 z-50 overflow-y-auto overscroll-contain p-5">
+            <div className="flex min-h-full items-center justify-center">
             <DialogPrimitive.Content
               asChild
               forceMount
@@ -103,6 +109,7 @@ const ModalContent = React.forwardRef<
                 </DialogPrimitive.Close>
               </motion.div>
             </DialogPrimitive.Content>
+            </div>
           </div>
         </DialogPrimitive.Portal>
       )}

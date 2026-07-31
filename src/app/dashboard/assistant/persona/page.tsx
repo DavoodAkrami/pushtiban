@@ -74,7 +74,7 @@ const AiPersonaPage = async () => {
     : DEFAULT_DRAFT;
 
   return (
-    <div className="mx-auto max-w-3xl">
+    <>
       <AiPersonaPanel
         initialPersona={initialPersona}
         businessName={profile?.business_name ?? ""}
@@ -87,7 +87,7 @@ const AiPersonaPage = async () => {
             SETUP_ERROR_CODES.has(personaResult.error.code)
         )}
       />
-    </div>
+    </>
   );
 };
 
