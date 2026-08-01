@@ -50,6 +50,7 @@ import {
   type FlowKeyboardAction,
 } from "@/lib/flows";
 import { cn, fa } from "@/lib/utils";
+import { useDashboardTitle } from "@/components/dashboard/title-context";
 import { useAppDispatch } from "@/store/hooks";
 import { updateFlow } from "@/store/slices/flows-slice";
 
@@ -694,6 +695,8 @@ export const FlowBuilder = ({ flow }: { flow: AutomationFlowDetail }) => {
   const { resolvedTheme } = useTheme();
   const reduce = useReducedMotion();
   const { toast } = useToast();
+  // This route's title is the flow's name, which no route manifest can know.
+  useDashboardTitle(flow.name);
   const initialDraft = React.useMemo(() => flowToDraft(flow), [flow]);
   const [nodes, setNodes] = React.useState<DraftNode[]>(initialDraft);
   const initialCanvasNodes = React.useMemo<ConversationCanvasNode[]>(

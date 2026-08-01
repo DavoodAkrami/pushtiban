@@ -4,35 +4,25 @@ import * as React from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { TbLayoutSidebarRightCollapse, TbLayoutSidebarRightExpand } from "react-icons/tb";
 import { useTheme } from "next-themes";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
-  BarChart3,
-  BookOpen,
   Check,
   ChevronDown,
   ChevronsUpDown,
   Gauge,
-  Inbox,
-  LayoutDashboard,
   LogOut,
-  Menu,
   Monitor,
   Moon,
   Palette,
-  Send,
   Settings2,
-  SlidersHorizontal,
-  Sparkles,
-  Store,
   Sun,
-  Workflow,
   X,
-  type LucideIcon,
 } from "lucide-react";
 import { LogoutConfirmationModal } from "@/components/dashboard/logout-confirmation-modal";
 import { SettingsModal } from "@/components/dashboard/settings-modal";
+import { DashboardTopBar } from "@/components/dashboard/top-bar";
+import { DashboardTitleContext } from "@/components/dashboard/title-context";
 import { luxe } from "@/components/motion/reveal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -47,89 +37,23 @@ import {
 import type { SessionProfile } from "@/store/slices/session-slice";
 import { useSessionProfile } from "@/store/use-session";
 import { useBusinessUsage } from "@/store/use-usage";
-
-type NavItem = { id: string; href: string; label: string; icon: LucideIcon };
-
-type NavGroup = {
-  id: string;
-  /** Small section heading shown above the group when the sidebar is expanded. */
-  label?: string;
-  items: NavItem[];
-};
-
-// Hrefs that are also the parent of deeper routes — matched exactly so a child
-// route does not light up its parent as well.
-const EXACT_MATCH_HREFS = new Set(["/dashboard/admin"]);
-
-// Ordered to mirror the journey of a customer message: it arrives on the bot,
-// meets the automation rules, falls through to the assistant, which answers
-// from the knowledge base. The sidebar is the only place that teaches this.
-const NAV_GROUPS: NavGroup[] = [
-  {
-    id: "workspace",
-    items: [
-      {
-        id: "overview",
-        href: "/dashboard/overview",
-        label: "نمای کلی",
-        icon: LayoutDashboard,
-      },
-      { id: "inbox", href: "/dashboard/inbox", label: "گفتگوها", icon: Inbox },
-    ],
-  },
-  {
-    id: "build",
-    items: [
-      { id: "bot", href: "/dashboard/bot", label: "ربات تلگرام", icon: Send },
-      {
-        id: "automation",
-        href: "/dashboard/automation",
-        label: "اتوماسیون",
-        icon: Workflow,
-      },
-      {
-        id: "assistant",
-        href: "/dashboard/assistant",
-        label: "دستیار",
-        icon: Sparkles,
-      },
-      {
-        id: "knowledge",
-        href: "/dashboard/knowledge",
-        label: "دانش دستیار",
-        icon: BookOpen,
-      },
-    ],
-  },
-];
-
-// Appended to NAV_GROUPS only for site admins (profiles.is_admin).
-const ADMIN_NAV_GROUP: NavGroup = {
-  id: "administration",
-  label: "مدیریت",
-  items: [
-    {
-      id: "admin-usage",
-      href: "/dashboard/admin",
-      label: "مصرف و آمار",
-      icon: BarChart3,
-    },
-    {
-      id: "admin-businesses",
-      href: "/dashboard/admin/businesses",
-      label: "کسب‌وکارها",
-      icon: Store,
-    },
-    {
-      id: "admin-settings",
-      href: "/dashboard/admin/settings",
-      label: "تنظیمات هوش مصنوعی",
-      icon: SlidersHorizontal,
-    },
-  ],
-};
+import {
+  ADMIN_NAV_GROUP,
+  EXACT_MATCH_HREFS,
+  NAV_GROUPS,
+  resolveRoute,
+  type NavItem,
+} from "@/lib/dashboard/navigation";
 
 const SIDEBAR_STATE_KEY = "pushtiban:sidebar-open";
+
+/**
+ * How far the content must scroll before the top bar takes over the title, in
+ * pixels — roughly the tab strip plus the page header. Below it the page's own
+ * h1 is on screen and the bar stays quiet; past it the bar is the only place
+ * the title still exists.
+ */
+const TITLE_REVEAL_OFFSET = 160;
 
 const OPEN_W = 264;
 const CLOSED_W = 76;
@@ -453,9 +377,12 @@ const AccountSection = ({
             className="overflow-hidden"
           >
             <div className="space-y-1 pb-2">
+              {/* Called with no argument on purpose: the handler takes an
+                  optional section, and passing it straight to onClick would
+                  hand it the click event as that section. */}
               <button
                 type="button"
-                onClick={onOpenSettings}
+                onClick={() => onOpenSettings()}
                 className="flex h-11 w-full items-center gap-3 rounded-2xl px-3 text-sm text-muted transition-colors duration-300 hover:bg-card/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
               >
                 <Settings2 className="size-4 shrink-0" aria-hidden />
@@ -554,43 +481,6 @@ const AccountSection = ({
         )}
       </AnimatePresence>
     </div>
-  );
-};
-
-const MobileHeader = ({
-  businessName,
-  triggerRef,
-}: {
-  businessName: string;
-  triggerRef: React.Ref<HTMLButtonElement>;
-}) => {
-  const displayName = businessName.trim() || "کسب‌وکار من";
-
-  return (
-    <header className="sticky top-0 z-40 grid h-16 grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center border-b border-line bg-background/90 px-4 backdrop-blur-xl xl:hidden">
-      <DialogPrimitive.Trigger asChild>
-        <button
-          ref={triggerRef}
-          type="button"
-          aria-label="باز کردن منوی داشبورد"
-          className="flex size-11 items-center justify-center rounded-2xl text-muted transition-colors hover:bg-card/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-        >
-          <Menu className="size-5" aria-hidden />
-        </button>
-      </DialogPrimitive.Trigger>
-
-<span className="flex min-w-0 items-center justify-center gap-2.5 font-bold">
-          <Logo variant="full" size="md" />
-        </span>
-
-      <span
-        title={displayName}
-        aria-hidden
-        className="flex size-9 items-center justify-center justify-self-end rounded-full bg-accent/15 text-sm font-bold text-accent"
-      >
-        {displayName.charAt(0)}
-      </span>
-    </header>
   );
 };
 
@@ -730,6 +620,8 @@ export const DashboardShell = ({
 }) => {
   // UI state stays local; session data comes from the Redux profile slice.
   const [sidebarOpen, setSidebarOpen] = React.useState(true);
+  const [titleRevealed, setTitleRevealed] = React.useState(false);
+  const [overrideTitle, setOverrideTitle] = React.useState<string | null>(null);
   const [desktopProfileMenuOpen, setDesktopProfileMenuOpen] =
     React.useState(false);
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
@@ -752,13 +644,14 @@ export const DashboardShell = ({
   const mobileAccountTriggerRef = React.useRef<HTMLButtonElement>(null);
   const mobileMenuTriggerRef = React.useRef<HTMLButtonElement>(null);
   const pageScrollRef = React.useRef<HTMLDivElement>(null);
+  const titleSentinelRef = React.useRef<HTMLDivElement>(null);
   const profile = useSessionProfile();
   const pathname = usePathname();
   const router = useRouter();
   const reduce = useReducedMotion();
   const { toast } = useToast();
 
-  const toggleLabel = sidebarOpen ? "بستن سایدبار" : "باز کردن سایدبار";
+  const route = resolveRoute(pathname);
 
   const toggleSidebar = () => {
     setSidebarOpen((value) => {
@@ -771,6 +664,16 @@ export const DashboardShell = ({
       return next;
     });
     setDesktopProfileMenuOpen(false);
+  };
+
+  // While collapsed the whole rail expands it, so the narrow strip is not a
+  // pixel hunt for one 36px button — but never at the cost of a real control,
+  // so clicks that land on a link, button or field are left to it.
+  const expandFromRailClick = (event: React.MouseEvent<HTMLElement>) => {
+    if (sidebarOpen) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("a, button, input, label, [role='button']")) return;
+    toggleSidebar();
   };
 
   const toggleDesktopProfileMenu = () => {
@@ -900,8 +803,29 @@ export const DashboardShell = ({
     setMobileNavOpen(false);
     setMobileProfileMenuOpen(false);
     setDesktopProfileMenuOpen(false);
+    // A new route starts at the top, so the bar starts quiet again. Setting it
+    // here rather than waiting for the observer avoids a frame of stale title.
+    setTitleRevealed(false);
     pageScrollRef.current?.scrollTo({ top: 0 });
   }, [pathname]);
+
+  // The page scrolls inside pageScrollRef, not the window, so the observer has
+  // to be rooted there — a default-root observer would never fire. The sentinel
+  // is a zero-layout band at the top of the content: while any of it is in
+  // view the page's own heading is still on screen and the bar shows only the
+  // breadcrumb.
+  React.useEffect(() => {
+    const sentinel = titleSentinelRef.current;
+    const root = pageScrollRef.current;
+    if (!sentinel || !root) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => setTitleRevealed(!entry.isIntersecting),
+      { root, threshold: 0 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, []);
 
   React.useEffect(() => {
     const desktopQuery = window.matchMedia("(min-width: 1280px)");
@@ -923,43 +847,27 @@ export const DashboardShell = ({
         aria-label="سایدبار داشبورد"
         animate={{ width: sidebarOpen ? OPEN_W : CLOSED_W }}
         transition={reduce ? { duration: 0 } : { duration: 0.45, ease: luxe }}
-        className="sticky top-0 hidden h-dvh shrink-0 flex-col overflow-visible border-e border-line bg-surface/60 p-4 xl:flex"
+        onClick={expandFromRailClick}
+        className={cn(
+          "sticky top-0 hidden h-dvh shrink-0 flex-col overflow-visible border-e border-line bg-surface/60 p-4 xl:flex",
+          // RTL: the rail sits on the right, so it widens westward.
+          !sidebarOpen && "cursor-w-resize"
+        )}
       >
-        <div className="flex items-center gap-2">
-          <Link
-            href="/dashboard/overview"
-            className={cn(
-              "flex min-h-11 items-center gap-3 rounded-full text-start font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
-              sidebarOpen ? "flex-1" : "hidden"
-            )}
-          >
-            <Logo variant="icon" size="sm" className="flex-shrink-0" as="span" />
-            <span className="truncate">پشتیبان</span>
-          </Link>
-
-          {/* One toggle, always in the same place. The logo is a link home, so
-              hovering it no longer swaps in a collapse icon. */}
-          <Tooltip content={toggleLabel} side={sidebarOpen ? "bottom" : "end"}>
-            <button
-              ref={desktopToggleRef}
-              type="button"
-              data-sidebar-toggle
-              aria-label={toggleLabel}
-              aria-expanded={sidebarOpen}
-              onClick={toggleSidebar}
-              className={cn(
-                "flex size-9 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-card/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
-                !sidebarOpen && "mx-auto"
-              )}
-            >
-              {sidebarOpen ? (
-                <TbLayoutSidebarRightCollapse className="size-5" aria-hidden />
-              ) : (
-                <TbLayoutSidebarRightExpand className="size-5" aria-hidden />
-              )}
-            </button>
-          </Tooltip>
-        </div>
+        {/* The collapse toggle now lives in the top bar, so the rail's header
+            is purely the brand — and a link home at either width. Clicking
+            anywhere else on a collapsed rail still expands it. */}
+        <Link
+          href="/dashboard/overview"
+          aria-label="پشتیبان — نمای کلی"
+          className={cn(
+            "flex min-h-11 items-center gap-3 rounded-full text-start font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+            !sidebarOpen && "justify-center"
+          )}
+        >
+          <Logo variant="icon" size="sm" className="flex-shrink-0" as="span" />
+          {sidebarOpen && <span className="truncate">پشتیبان</span>}
+        </Link>
 
         <div
           className={cn(
@@ -1002,9 +910,20 @@ export const DashboardShell = ({
           open={mobileNavOpen}
           onOpenChange={changeMobileNavigation}
         >
-          <MobileHeader
+          <DashboardTopBar
             businessName={currentBusinessName}
-            triggerRef={mobileMenuTriggerRef}
+            isAdmin={isAdmin}
+            profile={profile}
+            section={route?.section ?? null}
+            title={overrideTitle ?? route?.title ?? null}
+            titleRevealed={titleRevealed}
+            sidebarOpen={sidebarOpen}
+            themeReady={themeReady}
+            onToggleSidebar={toggleSidebar}
+            onOpenSettings={openSettings}
+            onRequestSignOut={openSignOutConfirmation}
+            sidebarToggleRef={desktopToggleRef}
+            mobileMenuTriggerRef={mobileMenuTriggerRef}
           />
           <MobileNavigationDrawer
             accountTriggerRef={mobileAccountTriggerRef}
@@ -1025,8 +944,19 @@ export const DashboardShell = ({
           />
         </DialogPrimitive.Root>
 
-        <main className="min-h-[calc(100dvh-4rem)] min-w-0 p-4 sm:p-6 md:p-8 xl:min-h-dvh xl:p-10">
-          {children}
+        <main className="relative min-h-[calc(100dvh-3.5rem)] min-w-0 p-4 sm:p-6 md:p-8 xl:p-10">
+          {/* Zero-layout band the title observer watches. Absolutely
+              positioned so it costs no space and no page has to know it is
+              here — see TITLE_REVEAL_OFFSET. */}
+          <div
+            ref={titleSentinelRef}
+            aria-hidden
+            className="pointer-events-none absolute inset-x-0 top-0"
+            style={{ height: TITLE_REVEAL_OFFSET }}
+          />
+          <DashboardTitleContext.Provider value={setOverrideTitle}>
+            {children}
+          </DashboardTitleContext.Provider>
         </main>
       </div>
 

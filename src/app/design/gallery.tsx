@@ -51,6 +51,7 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox, Switch } from "@/components/ui/checkbox";
 import { Tooltip } from "@/components/ui/tooltip";
 import { PageTabs } from "@/components/ui/page-tabs";
+import { CommandPalette } from "@/components/ui/command-palette";
 import {
   Skeleton,
   SkeletonBlock,
@@ -165,6 +166,83 @@ function Row({
 }
 
 /* --------------------------------- demos ---------------------------------- */
+
+const CommandPaletteDemo = () => {
+  const [open, setOpen] = React.useState(false);
+  const [lastRun, setLastRun] = React.useState<string | null>(null);
+
+  const run = (label: string) => () => setLastRun(label);
+
+  const groups = [
+    {
+      id: "navigate",
+      label: "رفتن به",
+      items: [
+        {
+          id: "demo-overview",
+          label: "نمای کلی",
+          icon: LineChart,
+          keywords: ["داشبورد", "آمار"],
+          onSelect: run("نمای کلی"),
+        },
+        {
+          id: "demo-knowledge",
+          label: "دانش دستیار",
+          description: "اطلاعات، پرسش و پاسخ، فایل‌ها",
+          icon: BrainCircuit,
+          keywords: ["فکت", "منبع"],
+          onSelect: run("دانش دستیار"),
+        },
+        {
+          id: "demo-bot",
+          label: "ربات تلگرام",
+          icon: Send,
+          keywords: ["اتصال", "توکن"],
+          onSelect: run("ربات تلگرام"),
+        },
+      ],
+    },
+    {
+      id: "actions",
+      label: "کارها",
+      items: [
+        {
+          id: "demo-settings",
+          label: "تنظیمات حساب",
+          icon: Settings,
+          onSelect: run("تنظیمات حساب"),
+        },
+        {
+          id: "demo-new-source",
+          label: "افزودن منبع دانش",
+          icon: Plus,
+          shortcut: "N",
+          onSelect: run("افزودن منبع دانش"),
+        },
+      ],
+    },
+  ];
+
+  return (
+    <>
+      <Row label="باز کردن">
+        <Button startIcon={<Search className="size-4" />} onClick={() => setOpen(true)}>
+          باز کردن پالت
+        </Button>
+        {lastRun && (
+          <Badge variant="muted">آخرین انتخاب: {lastRun}</Badge>
+        )}
+      </Row>
+      <CommandPalette
+        open={open}
+        onOpenChange={setOpen}
+        groups={groups}
+        placeholder="بگردید یا دستوری را اجرا کنید…"
+        emptyState="چیزی با این عبارت پیدا نشد."
+      />
+    </>
+  );
+};
 
 function ButtonsDemo() {
   const [loading, setLoading] = React.useState(false);
@@ -858,6 +936,13 @@ function GalleryInner() {
         lead="زیرمسیرهای یک بخش داشبورد؛ هر تب یک مسیر واقعی است."
       >
         <PageTabsDemo />
+      </Section>
+
+      <Section
+        title="پالت دستورها"
+        lead="جستجوی صفحه‌ها و اجرای دستورها با صفحه‌کلید. با ⌘K یا Ctrl+K باز می‌شود؛ کلیدهای بالا و پایین بین نتیجه‌ها و Enter برای انتخاب. جستجو «ی» و «ك» عربی و ارقام فارسی را هم می‌فهمد."
+      >
+        <CommandPaletteDemo />
       </Section>
 
       <Section

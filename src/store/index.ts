@@ -1,6 +1,7 @@
 import { configureStore } from "@reduxjs/toolkit";
 import automationsReducer from "./slices/automations-slice";
 import flowsReducer from "./slices/flows-slice";
+import inboxReducer from "./slices/inbox-slice";
 import sessionReducer from "./slices/session-slice";
 import telegramMenuReducer from "./slices/telegram-menu-slice";
 import usageReducer from "./slices/usage-slice";
@@ -11,6 +12,7 @@ export const makeStore = () =>
     reducer: {
       automations: automationsReducer,
       flows: flowsReducer,
+      inbox: inboxReducer,
       session: sessionReducer,
       telegramMenu: telegramMenuReducer,
       usage: usageReducer,

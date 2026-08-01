@@ -21,6 +21,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
+import { useInboxCount } from "@/store/use-inbox-count";
 import { cn, fa } from "@/lib/utils";
 
 type Conversation = {
@@ -92,6 +93,7 @@ export const InboxPanel = ({
 }: InboxPanelProps) => {
   const reduce = useReducedMotion() ?? false;
   const { toast } = useToast();
+  const { refresh: refreshInboxCount } = useInboxCount();
   const [conversations, setConversations] =
     React.useState<Conversation[]>(initialConversations);
   const [loading, setLoading] = React.useState(false);
@@ -189,6 +191,8 @@ export const InboxPanel = ({
         );
       });
       if (statusFilter === "open") setSelectedId(null);
+      // One fewer conversation waiting — keep the top bar's badge honest.
+      void refreshInboxCount();
       toast({ title: "پاسخ ارسال شد", variant: "success" });
     } catch (error) {
       toast({
@@ -211,6 +215,8 @@ export const InboxPanel = ({
       if (!res.ok) throw new Error();
       setConversations((prev) => prev.filter((c) => c.id !== conversationId));
       if (selectedId === conversationId) setSelectedId(null);
+      // Closing a conversation also changes the open count — refresh the badge.
+      void refreshInboxCount();
       toast({ title: "گفتگو بسته شد", variant: "success" });
     } catch {
       toast({ title: "بستن گفتگو ناموفق بود", variant: "error" });

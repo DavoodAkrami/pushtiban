@@ -198,6 +198,12 @@ How to use:
       its own page, and a «مسیر پاسخ» strip on the overview showing the real
       order the webhook tries — flows → keywords → assistant → human — so the
       owner can see which page answers a given message
+- [ ] Dashboard top bar on every route: the section breadcrumb plus the page
+      title revealed only once the page's own heading has scrolled away (so the
+      title is never on screen twice), a ⌘K command palette over every
+      destination and account action with Persian-aware matching, a badge
+      counting open conversations, and the sidebar toggle and an account menu
+      promoted out of the rail
 - [ ] Conversation inbox (live conversations, handoff to human)
 - [ ] Analytics dashboard (response rate, satisfaction, volumes)
 

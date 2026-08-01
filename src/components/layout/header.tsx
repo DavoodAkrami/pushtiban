@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   motion,
@@ -69,12 +71,13 @@ export function Header() {
             : "border border-transparent bg-transparent"
         )}
       >
-        <a
-          href="#"
+        <Link
+          href="/"
           className="flex items-center gap-2.5 font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 rounded-full"
+          aria-label="پشتیبان - بازگشت به صفحه اصلی"
         >
-          <Logo variant="full" size="md" />
-        </a>
+          <Logo variant="full" size="md" as="span" />
+        </Link>
 
         <ul className="hidden items-center gap-1 md:flex">
           {NAV_ITEMS.map((item) => (

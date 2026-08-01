@@ -80,7 +80,14 @@ export const SettingsModal = ({
 
   React.useEffect(() => {
     if (!open) return;
-    setActiveSection(initialSection);
+    // Profile is the landing section: an unknown value would render a modal
+    // with a section list and an empty pane, which is never what a caller
+    // meant to ask for.
+    setActiveSection(
+      SECTIONS.some((section) => section.id === initialSection)
+        ? initialSection
+        : "profile"
+    );
     const nextFullName = fullName.trim();
     const nextBusinessName = businessName.trim();
     const nextBusinessCategory = businessCategory.trim();
