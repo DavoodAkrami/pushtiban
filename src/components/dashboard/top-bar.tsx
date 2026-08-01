@@ -146,6 +146,16 @@ const AccountMenu = ({
   const itemClass =
     "flex h-10 cursor-pointer items-center gap-3 rounded-2xl px-3 text-sm text-muted outline-none transition-colors data-[highlighted]:bg-card/70 data-[highlighted]:text-foreground";
 
+  const handleSelectSettings = () => {
+    setOpen(false);
+    window.requestAnimationFrame(() => onOpenSettings());
+  };
+
+  const handleSelectSignOut = () => {
+    setOpen(false);
+    window.requestAnimationFrame(() => onRequestSignOut());
+  };
+
   return (
     <DropdownMenuPrimitive.Root open={open} onOpenChange={setOpen} dir="rtl">
       <DropdownMenuPrimitive.Trigger asChild>
@@ -196,7 +206,7 @@ const AccountMenu = ({
 
                 <DropdownMenuPrimitive.Item
                   className={itemClass}
-                  onSelect={() => onOpenSettings()}
+                  onSelect={handleSelectSettings}
                 >
                   <Settings2 className="size-4 shrink-0" aria-hidden />
                   <span>تنظیمات</span>
@@ -232,7 +242,7 @@ const AccountMenu = ({
 
                 <DropdownMenuPrimitive.Item
                   className={itemClass}
-                  onSelect={onRequestSignOut}
+                  onSelect={handleSelectSignOut}
                 >
                   <LogOut className="size-4 shrink-0" aria-hidden />
                   <span>خروج از حساب</span>
