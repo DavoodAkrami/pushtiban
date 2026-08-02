@@ -199,11 +199,15 @@ How to use:
       order the webhook tries — flows → keywords → assistant → human — so the
       owner can see which page answers a given message
 - [ ] Dashboard top bar on every route: the section breadcrumb plus the page
-      title revealed only once the page's own heading has scrolled away (so the
-      title is never on screen twice), a ⌘K command palette over every
-      destination and account action with Persian-aware matching, a badge
+      title, handed over at the moment the page's own `h1` slides under the bar
+      — the heading itself is what the observer watches, so the title is never
+      on screen twice and never missing from both — a ⌘K command palette over
+      every destination and account action with Persian-aware matching, a badge
       counting open conversations, and the sidebar toggle and an account menu
-      promoted out of the rail
+      promoted out of the rail. The bar is borderless and unfrosted while the
+      page is at rest, taking its line and its glass only once content passes
+      underneath; below `sm`, where there is no room for the section link, the
+      title stays put instead of waiting for the scroll
 - [ ] Conversation inbox (live conversations, handoff to human)
 - [ ] Analytics dashboard (response rate, satisfaction, volumes)
 

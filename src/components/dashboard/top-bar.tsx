@@ -17,12 +17,9 @@ import {
   Inbox,
   LogOut,
   Menu,
-  Monitor,
-  Moon,
   Palette,
   Search,
   Settings2,
-  Sun,
 } from "lucide-react";
 import {
   CommandPalette,
@@ -30,12 +27,13 @@ import {
 } from "@/components/ui/command-palette";
 import { Tooltip } from "@/components/ui/tooltip";
 import { luxe } from "@/components/motion/reveal";
-import { fa } from "@/lib/utils";
+import { cn, fa } from "@/lib/utils";
 import {
   DASHBOARD_ROUTES,
   type DashboardRoute,
   type RouteSection,
 } from "@/lib/dashboard/navigation";
+import { THEME_OPTIONS } from "@/lib/dashboard/theme";
 import type { SettingsSection } from "@/lib/settings-events";
 import type { SessionProfile } from "@/store/slices/session-slice";
 import { useInboxCount } from "@/store/use-inbox-count";
@@ -48,14 +46,20 @@ import { useInboxCount } from "@/store/use-inbox-count";
 // handlers are the shell's, so there is one implementation behind both.
 // ---------------------------------------------------------------------------
 
-const THEME_OPTIONS = [
-  { value: "light", label: "روشن", icon: Sun },
-  { value: "dark", label: "تاریک", icon: Moon },
-  { value: "system", label: "سیستم", icon: Monitor },
-] as const;
-
 /** Badges stop counting at this point — past it the number stops being news. */
 const MAX_BADGE_COUNT = 99;
+
+/**
+ * Below this width the section link has no room, which would leave the bar with
+ * no label at all — so the title stops waiting for the scroll and stays put.
+ */
+const COMPACT_QUERY = "(max-width: 639px)";
+
+/**
+ * How long the open-conversation count is trusted before the bar re-counts it.
+ * Navigating between two knowledge tabs is not news about the inbox.
+ */
+const INBOX_COUNT_TTL = 60_000;
 
 export type DashboardTopBarProps = {
   businessName: string;
@@ -64,8 +68,10 @@ export type DashboardTopBarProps = {
   section: RouteSection | null;
   /** Page title for the current route, already resolved by the shell. */
   title: string | null;
-  /** True once the page's own heading has scrolled out of the content area. */
+  /** True once the page's own heading has slid under the bar. */
   titleRevealed: boolean;
+  /** True once anything at all has scrolled under the bar. */
+  scrolled: boolean;
   sidebarOpen: boolean;
   themeReady: boolean;
   onToggleSidebar: () => void;
@@ -84,39 +90,71 @@ const Breadcrumb = ({
   titleRevealed,
 }: Pick<DashboardTopBarProps, "section" | "title" | "titleRevealed">) => {
   const reduce = useReducedMotion();
+  const [compact, setCompact] = React.useState(false);
+
+  // Resolved after mount for the same reason the ⌘K badge is: a media query
+  // read during render would make the server and the client disagree.
+  React.useEffect(() => {
+    const query = window.matchMedia(COMPACT_QUERY);
+    const sync = () => setCompact(query.matches);
+
+    sync();
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
+
+  // Wide: the page's own heading is on screen, so the bar stays quiet until it
+  // leaves. Narrow: there is no section link to fall back on, so the title is
+  // the only thing naming the page and it never hides.
+  const showTitle = Boolean(title) && (compact || titleRevealed);
 
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
-      {section && (
-        <>
-          <Link
-            href={section.href}
-            className="hidden shrink-0 truncate rounded-full text-muted transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:block"
-          >
-            {section.label}
-          </Link>
-          {/* RTL: the trail runs right to left, so the chevron points left. */}
-          <ChevronLeft
-            aria-hidden
-            className="hidden size-3.5 shrink-0 text-muted/60 sm:block"
-          />
-        </>
-      )}
-
-      <AnimatePresence initial={false}>
-        {titleRevealed && title && (
-          <motion.span
-            initial={reduce ? { opacity: 0 } : { opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={reduce ? { opacity: 0 } : { opacity: 0, y: -4 }}
-            transition={{ duration: reduce ? 0 : 0.2, ease: luxe }}
-            className="min-w-0 truncate font-medium"
-          >
-            {title}
-          </motion.span>
+    <nav
+      aria-label="مسیر صفحه"
+      className="flex min-w-0 flex-1 items-center text-sm"
+    >
+      <ol className="flex min-w-0 items-center gap-1.5">
+        {section && (
+          <li className="hidden min-w-0 shrink-0 sm:block">
+            <Link
+              href={section.href}
+              className="block truncate rounded-full text-muted transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+            >
+              {section.label}
+            </Link>
+          </li>
         )}
-      </AnimatePresence>
-    </div>
+
+        {/* The whole crumb comes and goes, rather than an <li> that empties:
+            a list item with nothing in it is still an item to a screen
+            reader. */}
+        <AnimatePresence initial={false}>
+          {showTitle && (
+            <motion.li
+              initial={reduce ? { opacity: 0 } : { opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={reduce ? { opacity: 0 } : { opacity: 0, y: -4 }}
+              transition={{ duration: reduce ? 0 : 0.2, ease: luxe }}
+              className="flex min-w-0 items-center gap-1.5"
+            >
+              {/* RTL: the trail runs right to left, so the chevron points
+                  left. It travels with the title rather than the section — a
+                  separator with nothing after it reads as a broken trail,
+                  which is what the bar showed until the title scrolled in. */}
+              {section && (
+                <ChevronLeft
+                  aria-hidden
+                  className="hidden size-3.5 shrink-0 text-muted/60 sm:block"
+                />
+              )}
+              <span aria-current="page" className="min-w-0 truncate font-medium">
+                {title}
+              </span>
+            </motion.li>
+          )}
+        </AnimatePresence>
+      </ol>
+    </nav>
   );
 };
 
@@ -261,16 +299,28 @@ const AccountMenu = ({
 const InboxBadge = () => {
   const pathname = usePathname();
   const { openCount, refresh } = useInboxCount();
+  const lastCountedAt = React.useRef(0);
+  const wasOnInbox = React.useRef(false);
 
   // Answering or closing a conversation happens on the inbox page, so leaving
-  // it is the moment the count is most likely stale.
+  // it is the moment the count is most likely stale — that one re-counts
+  // immediately. Every other navigation only re-counts a number old enough to
+  // distrust, so walking through a section's tabs is not a request per tab.
   React.useEffect(() => {
+    const onInbox = pathname.startsWith("/dashboard/inbox");
+    const leftInbox = wasOnInbox.current && !onInbox;
+    wasOnInbox.current = onInbox;
+
+    const now = Date.now();
+    if (!leftInbox && now - lastCountedAt.current < INBOX_COUNT_TTL) return;
+
+    lastCountedAt.current = now;
     void refresh();
   }, [pathname, refresh]);
 
   const count = typeof openCount === "number" ? openCount : 0;
   const label =
-    count > 0 ? `گفتگوها — ${fa(count)} گفتگوی باز` : "گفتگوها";
+    count > 0 ? `صندوق پیام‌ها — ${fa(count)} گفتگوی باز` : "صندوق پیام‌ها";
 
   return (
     <Tooltip content={label} side="bottom">
@@ -302,6 +352,7 @@ export const DashboardTopBar = ({
   section,
   title,
   titleRevealed,
+  scrolled,
   sidebarOpen,
   themeReady,
   onToggleSidebar,
@@ -427,7 +478,19 @@ export const DashboardTopBar = ({
 
   return (
     <>
-      <header className="sticky top-0 z-40 flex h-14 items-center gap-2 border-b border-line bg-background/90 px-3 backdrop-blur-xl sm:px-4">
+      {/* At the top of a page the bar is part of the page: no line, no glass,
+          nothing to separate it from content it is not yet overlapping. The
+          border and the frosting arrive together, the moment content starts
+          passing underneath. The transparent border is always in the box so the
+          arrival costs no layout shift. */}
+      <header
+        className={cn(
+          "sticky top-0 z-40 flex h-14 items-center gap-2 border-b px-3 backdrop-blur-xl transition-colors duration-300 sm:px-4",
+          scrolled
+            ? "border-line bg-background/85"
+            : "border-transparent bg-background"
+        )}
+      >
         {/* Below xl the drawer trigger; at xl the sidebar collapse control,
             which used to live inside the rail itself. */}
         <DialogPrimitive.Trigger asChild>
@@ -459,8 +522,9 @@ export const DashboardTopBar = ({
           </button>
         </Tooltip>
 
-        <div aria-hidden className="h-5 w-px shrink-0 bg-line" />
-
+        {/* No rule between the toggle and the trail — the button's own padding
+            already separates them, and Notion does not draw a line it can get
+            away without. */}
         <Breadcrumb
           section={section}
           title={title}

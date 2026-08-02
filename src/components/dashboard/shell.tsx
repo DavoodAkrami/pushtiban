@@ -12,11 +12,8 @@ import {
   ChevronsUpDown,
   Gauge,
   LogOut,
-  Monitor,
-  Moon,
   Palette,
   Settings2,
-  Sun,
   X,
 } from "lucide-react";
 import { LogoutConfirmationModal } from "@/components/dashboard/logout-confirmation-modal";
@@ -44,25 +41,29 @@ import {
   resolveRoute,
   type NavItem,
 } from "@/lib/dashboard/navigation";
+import { THEME_OPTIONS } from "@/lib/dashboard/theme";
 
 const SIDEBAR_STATE_KEY = "pushtiban:sidebar-open";
 
 /**
- * How far the content must scroll before the top bar takes over the title, in
- * pixels — roughly the tab strip plus the page header. Below it the page's own
- * h1 is on screen and the bar stays quiet; past it the bar is the only place
- * the title still exists.
+ * Height of the top bar (h-14). The bar is sticky *inside* the scroll
+ * container, so it overlaps the content beneath it — an IntersectionObserver
+ * rooted there would call a heading "visible" while the bar sits on top of it.
+ * Shrinking the root by exactly the bar's height makes both handoffs below fire
+ * on what the reader can actually see.
+ */
+const BAR_HEIGHT = 56;
+const UNDER_BAR_MARGIN = `-${BAR_HEIGHT}px 0px 0px 0px`;
+
+/**
+ * Fallback for the title handoff on a page with no h1 of its own: how far it
+ * must scroll before the bar takes over. A real heading is measured rather than
+ * guessed — this only stands in until (or unless) one exists.
  */
 const TITLE_REVEAL_OFFSET = 160;
 
 const OPEN_W = 264;
 const CLOSED_W = 76;
-
-const THEME_OPTIONS = [
-  { value: "light", label: "روشن", icon: Sun },
-  { value: "dark", label: "تاریک", icon: Moon },
-  { value: "system", label: "سیستم", icon: Monitor },
-] as const;
 
 type AccountSectionProps = {
   actionsId: string;
@@ -621,6 +622,7 @@ export const DashboardShell = ({
   // UI state stays local; session data comes from the Redux profile slice.
   const [sidebarOpen, setSidebarOpen] = React.useState(true);
   const [titleRevealed, setTitleRevealed] = React.useState(false);
+  const [scrolled, setScrolled] = React.useState(false);
   const [overrideTitle, setOverrideTitle] = React.useState<string | null>(null);
   const [desktopProfileMenuOpen, setDesktopProfileMenuOpen] =
     React.useState(false);
@@ -644,6 +646,8 @@ export const DashboardShell = ({
   const mobileAccountTriggerRef = React.useRef<HTMLButtonElement>(null);
   const mobileMenuTriggerRef = React.useRef<HTMLButtonElement>(null);
   const pageScrollRef = React.useRef<HTMLDivElement>(null);
+  const mainRef = React.useRef<HTMLElement>(null);
+  const scrollSentinelRef = React.useRef<HTMLDivElement>(null);
   const titleSentinelRef = React.useRef<HTMLDivElement>(null);
   const profile = useSessionProfile();
   const pathname = usePathname();
@@ -809,23 +813,67 @@ export const DashboardShell = ({
     pageScrollRef.current?.scrollTo({ top: 0 });
   }, [pathname]);
 
-  // The page scrolls inside pageScrollRef, not the window, so the observer has
-  // to be rooted there — a default-root observer would never fire. The sentinel
-  // is a zero-layout band at the top of the content: while any of it is in
-  // view the page's own heading is still on screen and the bar shows only the
-  // breadcrumb.
+  // Has anything at all passed under the bar? That is the whole question, and
+  // the answer is what turns the bar's border and frosting on. The page scrolls
+  // inside pageScrollRef, not the window, so both observers here are rooted
+  // there — a default-root observer would never fire.
   React.useEffect(() => {
-    const sentinel = titleSentinelRef.current;
     const root = pageScrollRef.current;
-    if (!sentinel || !root) return;
+    const sentinel = scrollSentinelRef.current;
+    if (!root || !sentinel) return;
 
     const observer = new IntersectionObserver(
-      ([entry]) => setTitleRevealed(!entry.isIntersecting),
-      { root, threshold: 0 }
+      ([entry]) => setScrolled(!entry.isIntersecting),
+      { root, rootMargin: UNDER_BAR_MARGIN, threshold: 0 }
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, []);
+
+  // The bar's title stands in for the page's own h1, so the h1 itself decides
+  // when the bar takes over: the handoff lands exactly as the heading slides
+  // under the bar, with no scroll band where the title is in neither place.
+  //
+  // A panel that fetches before it renders has no h1 on its first frame, so a
+  // MutationObserver waits for one and the fixed band stands in meanwhile. It
+  // stops watching as soon as a heading turns up — the flow builder's canvas
+  // mutates its subtree constantly and is not worth re-querying over.
+  React.useEffect(() => {
+    const root = pageScrollRef.current;
+    const main = mainRef.current;
+    if (!root || !main) return;
+
+    let target: Element | null = null;
+    const observer = new IntersectionObserver(
+      ([entry]) => setTitleRevealed(!entry.isIntersecting),
+      { root, rootMargin: UNDER_BAR_MARGIN, threshold: 0 }
+    );
+
+    const watch = (next: Element | null) => {
+      if (!next || next === target) return;
+      if (target) observer.unobserve(target);
+      target = next;
+      observer.observe(next);
+    };
+
+    const mutations = new MutationObserver(() => {
+      const heading = main.querySelector("h1");
+      if (!heading) return;
+      watch(heading);
+      mutations.disconnect();
+    });
+
+    watch(titleSentinelRef.current);
+
+    const heading = main.querySelector("h1");
+    if (heading) watch(heading);
+    else mutations.observe(main, { childList: true, subtree: true });
+
+    return () => {
+      mutations.disconnect();
+      observer.disconnect();
+    };
+  }, [pathname]);
 
   React.useEffect(() => {
     const desktopQuery = window.matchMedia("(min-width: 1280px)");
@@ -917,6 +965,7 @@ export const DashboardShell = ({
             section={route?.section ?? null}
             title={overrideTitle ?? route?.title ?? null}
             titleRevealed={titleRevealed}
+            scrolled={scrolled}
             sidebarOpen={sidebarOpen}
             themeReady={themeReady}
             onToggleSidebar={toggleSidebar}
@@ -944,10 +993,23 @@ export const DashboardShell = ({
           />
         </DialogPrimitive.Root>
 
-        <main className="relative min-h-[calc(100dvh-3.5rem)] min-w-0 p-4 sm:p-6 md:p-8 xl:p-10">
-          {/* Zero-layout band the title observer watches. Absolutely
-              positioned so it costs no space and no page has to know it is
-              here — see TITLE_REVEAL_OFFSET. */}
+        <main
+          ref={mainRef}
+          className="relative min-h-[calc(100dvh-3.5rem)] min-w-0 p-4 sm:p-6 md:p-8 xl:p-10"
+        >
+          {/* Both bands are absolutely positioned so they cost no space and no
+              page has to know they are here. The first is the very top of the
+              content — the moment it goes under the bar, the bar gains its
+              border. The second is the title fallback for pages with no h1,
+              see TITLE_REVEAL_OFFSET. */}
+          {/* A few pixels rather than one: a 1px band sits exactly on the
+              observer's boundary at rest, where sub-pixel rounding can flicker
+              the border on and off. */}
+          <div
+            ref={scrollSentinelRef}
+            aria-hidden
+            className="pointer-events-none absolute inset-x-0 top-0 h-1"
+          />
           <div
             ref={titleSentinelRef}
             aria-hidden

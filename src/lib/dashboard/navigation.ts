@@ -117,7 +117,11 @@ export type RouteSection = { label: string; href: string };
 
 export type DashboardRoute = {
   href: string;
-  /** Mirrors the page's own h1, so the top bar never contradicts the page. */
+  /**
+   * The page's own h1, verbatim — the bar shows this once the heading scrolls
+   * away, so anything else makes the bar contradict the page it is labelling.
+   * Sidebar and tab labels are free to be shorter; this one is not.
+   */
   title: string;
   /** Parent section, omitted when the page is a section in its own right. */
   section?: RouteSection;
@@ -161,9 +165,18 @@ export const DASHBOARD_ROUTES: DashboardRoute[] = [
   },
   {
     href: "/dashboard/inbox",
-    title: "گفتگوها",
+    title: "صندوق پیام‌ها",
     icon: Inbox,
-    keywords: ["صندوق", "پیام", "مشتری", "پشتیبانی", "ارجاع", "inbox", "chat"],
+    keywords: [
+      "گفتگو",
+      "صندوق",
+      "پیام",
+      "مشتری",
+      "پشتیبانی",
+      "ارجاع",
+      "inbox",
+      "chat",
+    ],
   },
 
   {
@@ -197,9 +210,12 @@ export const DASHBOARD_ROUTES: DashboardRoute[] = [
   },
   {
     href: "/dashboard/automation/keywords",
-    title: "کلیدواژه‌ها و فرمان‌ها",
+    title: "پیام‌های آماده",
     section: AUTOMATION,
     icon: MessageSquareText,
+    // The tab strip calls this «کلیدواژه‌ها و فرمان‌ها» while the page's own
+    // heading says «پیام‌های آماده»; the bar follows the heading, and the tab's
+    // wording stays searchable through these.
     keywords: ["کلیدواژه", "فرمان", "پیام آماده", "keyword", "command"],
   },
 
@@ -222,7 +238,7 @@ export const DASHBOARD_ROUTES: DashboardRoute[] = [
   },
   {
     href: "/dashboard/assistant/persona",
-    title: "شخصیت و لحن",
+    title: "شخصیت و لحن دستیار",
     section: ASSISTANT,
     icon: Wand2,
     keywords: ["پرسونا", "لحن", "معرفی", "دستورالعمل", "persona", "tone"],
@@ -230,14 +246,14 @@ export const DASHBOARD_ROUTES: DashboardRoute[] = [
 
   {
     href: "/dashboard/knowledge",
-    title: "اطلاعات",
+    title: "اطلاعات کسب‌وکار",
     section: KNOWLEDGE,
     icon: BookOpen,
     keywords: ["دانش", "فکت", "نکته", "facts"],
   },
   {
     href: "/dashboard/knowledge/qa",
-    title: "پرسش و پاسخ",
+    title: "پرسش و پاسخ آماده",
     section: KNOWLEDGE,
     icon: HelpCircle,
     keywords: ["سوال", "جواب", "qa", "faq"],
