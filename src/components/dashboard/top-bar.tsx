@@ -504,7 +504,10 @@ export const DashboardTopBar = ({
           </button>
         </DialogPrimitive.Trigger>
 
-        <Tooltip content={toggleLabel} side="bottom">
+        {/* Logical side: `end` is the left in RTL, so the hint opens into the
+            empty run of the bar rather than down over the page — the same
+            direction the collapsed rail's own tooltips point. */}
+        <Tooltip content={toggleLabel} side="end">
           <button
             ref={sidebarToggleRef}
             type="button"
