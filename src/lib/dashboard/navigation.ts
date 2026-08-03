@@ -17,8 +17,9 @@ import {
   Users,
   Wand2,
   Workflow,
-  type LucideIcon,
 } from "lucide-react";
+import { TbBrandInstagram } from "react-icons/tb";
+import type { AppIcon } from "@/components/ui/icon";
 
 // ---------------------------------------------------------------------------
 // The dashboard's routes, declared once. Three consumers read this module: the
@@ -31,7 +32,7 @@ export type NavItem = {
   id: string;
   href: string;
   label: string;
-  icon: LucideIcon;
+  icon: AppIcon;
 };
 
 export type NavGroup = {
@@ -45,9 +46,11 @@ export type NavGroup = {
 // route does not light up its parent as well.
 export const EXACT_MATCH_HREFS = new Set(["/dashboard/admin"]);
 
-// Ordered to mirror the journey of a customer message: it arrives on the bot,
+// Ordered to mirror the journey of a customer message: it arrives on a channel,
 // meets the automation rules, falls through to the assistant, which answers
 // from the knowledge base. The sidebar is the only place that teaches this.
+// Channels are grouped under a heading so a second and third one read as more
+// of the same thing rather than as unrelated destinations.
 export const NAV_GROUPS: NavGroup[] = [
   {
     id: "workspace",
@@ -62,9 +65,21 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    id: "build",
+    id: "channels",
+    label: "کانال‌ها",
     items: [
       { id: "bot", href: "/dashboard/bot", label: "ربات تلگرام", icon: Send },
+      {
+        id: "instagram",
+        href: "/dashboard/instagram",
+        label: "اینستاگرام",
+        icon: TbBrandInstagram,
+      },
+    ],
+  },
+  {
+    id: "build",
+    items: [
       {
         id: "automation",
         href: "/dashboard/automation",
@@ -125,7 +140,7 @@ export type DashboardRoute = {
   title: string;
   /** Parent section, omitted when the page is a section in its own right. */
   section?: RouteSection;
-  icon: LucideIcon;
+  icon: AppIcon;
   /** Extra terms the command palette should match on beyond the title. */
   keywords?: string[];
   adminOnly?: boolean;
@@ -199,6 +214,20 @@ export const DASHBOARD_ROUTES: DashboardRoute[] = [
     section: BOT,
     icon: LayoutGrid,
     keywords: ["دکمه", "کیبورد", "منو", "menu", "keyboard"],
+  },
+
+  {
+    href: "/dashboard/instagram",
+    title: "اتصال اینستاگرام",
+    icon: TbBrandInstagram,
+    keywords: [
+      "اینستاگرام",
+      "دایرکت",
+      "حساب تجاری",
+      "اتصال",
+      "instagram",
+      "direct",
+    ],
   },
 
   {

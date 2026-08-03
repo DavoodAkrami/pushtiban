@@ -1,6 +1,5 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -54,8 +53,20 @@ const tileVariants = cva(
   }
 );
 
+/**
+ * Any icon component that renders an SVG from these props — Lucide and
+ * react-icons both fit. Lucide covers almost everything, but brand marks left
+ * the library at v1, so channels like Instagram come from react-icons/tb.
+ */
+export type AppIcon = React.ComponentType<{
+  className?: string;
+  "aria-hidden"?: boolean;
+  "aria-label"?: string;
+  role?: string;
+}>;
+
 export interface IconProps extends VariantProps<typeof iconVariants> {
-  icon: LucideIcon;
+  icon: AppIcon;
   /** Wraps the icon in a soft rounded tile. */
   tile?: boolean;
   /** Accessible name; omit for decorative icons (default aria-hidden). */

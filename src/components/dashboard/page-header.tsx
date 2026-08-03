@@ -1,6 +1,6 @@
-import { Loader2, type LucideIcon } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Icon } from "@/components/ui/icon";
+import { Icon, type AppIcon } from "@/components/ui/icon";
 import { fa } from "@/lib/utils";
 
 // Shared heading for a dashboard page. Sections that own several routes render
@@ -10,7 +10,7 @@ import { fa } from "@/lib/utils";
 type DashboardPageHeaderProps = {
   title: string;
   description: string;
-  icon: LucideIcon;
+  icon: AppIcon;
   count?: number;
   loading?: boolean;
   action?: React.ReactNode;

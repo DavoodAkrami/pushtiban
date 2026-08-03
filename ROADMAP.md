@@ -216,7 +216,11 @@ How to use:
 - [ ] Billing & plans (activate pricing section)
 - [ ] Team members & roles
 - [ ] Widget embed for websites
-- [ ] Multi-channel: WhatsApp, Instagram
+- [x] Instagram account connection (Business Login OAuth, connect/disconnect
+      from onboarding, settings and /dashboard/instagram)
+- [ ] Instagram DMs: webhook ingestion, automations and assistant replies
+- [ ] WhatsApp — blocked: Meta's WhatsApp Business Platform does not serve Iran,
+      and the restriction is enforced on the phone number, not the location
 - [ ] Public API
 
 ## Backlog (unscoped ideas)

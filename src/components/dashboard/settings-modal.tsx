@@ -2,7 +2,9 @@
 
 import * as React from "react";
 import { Building2, Link2, Mail, Send, UserRound } from "lucide-react";
+import { TbBrandInstagram } from "react-icons/tb";
 import { ConnectionFlow } from "@/components/dashboard/bot/connection-flow";
+import { InstagramConnectionFlow } from "@/components/dashboard/instagram/connection-flow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, type SelectOption } from "@/components/ui/select";
@@ -47,6 +49,28 @@ const SECTIONS: { id: SettingsSection; label: string; icon: React.ElementType }[
   { id: "profile", label: "پروفایل", icon: UserRound },
   { id: "business", label: "اطلاعات کسب‌وکار", icon: Building2 },
   { id: "connections", label: "اتصالات", icon: Link2 },
+];
+
+// Ordered the way a business adopts them: Telegram carries the automations and
+// the bot menu today, Instagram is connection-only until DM handling ships.
+const CHANNELS: {
+  id: "telegram" | "instagram";
+  label: string;
+  description: string;
+  icon: React.ElementType;
+}[] = [
+  {
+    id: "telegram",
+    label: "تلگرام",
+    description: "اتصال ربات پیام‌رسان تلگرام",
+    icon: Send,
+  },
+  {
+    id: "instagram",
+    label: "اینستاگرام",
+    description: "اتصال حساب تجاری برای پاسخ به دایرکت‌ها",
+    icon: TbBrandInstagram,
+  },
 ];
 
 export const SettingsModal = ({
@@ -496,24 +520,37 @@ export const SettingsModal = ({
                       اتصالات
                     </h2>
                     <p className="mt-1.5 text-sm leading-7 text-muted">
-                      کانال‌های پشتیبانی خود را به پشتیبان متصل کنید.
+                      کانال‌های پشتیبانی خود را به پشتیبان متصل کنید. هر کانال
+                      جداگانه وصل می‌شود و بقیه را متوقف نمی‌کند.
                     </p>
                   </header>
 
-                  <div className="mt-7 rounded-3xl border border-line bg-surface/35 p-5 sm:p-6">
-                    <div className="mb-5 flex items-center gap-3">
-                      <span className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-accent/10 text-accent">
-                        <Send className="size-5" aria-hidden />
-                      </span>
-                      <div>
-                        <p className="text-sm font-bold">تلگرام</p>
-                        <p className="text-xs text-muted">
-                          اتصال ربات پیام‌رسان تلگرام
-                        </p>
-                      </div>
-                    </div>
+                  <div className="mt-7 space-y-5">
+                    {CHANNELS.map((channel) => (
+                      <section
+                        key={channel.id}
+                        aria-label={channel.label}
+                        className="rounded-3xl border border-line bg-surface/35 p-5 sm:p-6"
+                      >
+                        <div className="mb-5 flex items-center gap-3">
+                          <span className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-accent/10 text-accent">
+                            <channel.icon className="size-5" aria-hidden />
+                          </span>
+                          <div>
+                            <p className="text-sm font-bold">{channel.label}</p>
+                            <p className="text-xs text-muted">
+                              {channel.description}
+                            </p>
+                          </div>
+                        </div>
 
-                    <ConnectionFlow />
+                        {channel.id === "telegram" ? (
+                          <ConnectionFlow />
+                        ) : (
+                          <InstagramConnectionFlow returnTo="settings" />
+                        )}
+                      </section>
+                    ))}
                   </div>
                 </div>
               </div>

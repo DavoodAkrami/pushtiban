@@ -31,6 +31,10 @@ import {
   SETTINGS_OPEN_EVENT,
   type SettingsSection,
 } from "@/lib/settings-events";
+import {
+  instagramErrorMessage,
+  INSTAGRAM_CONNECTED_MESSAGE,
+} from "@/lib/instagram/messages";
 import type { SessionProfile } from "@/store/slices/session-slice";
 import { useSessionProfile } from "@/store/use-session";
 import { useBusinessUsage } from "@/store/use-usage";
@@ -717,6 +721,44 @@ export const DashboardShell = ({
     return () =>
       window.removeEventListener(SETTINGS_OPEN_EVENT, handleSettingsRequest);
   }, []);
+
+  // Connecting Instagram leaves the app for Meta's consent screen, so the
+  // outcome comes back in the query string rather than in React state. Report
+  // it once, reopen whatever the owner had open, then strip the query so a
+  // refresh does not repeat the toast.
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const outcome = params.get("instagram");
+    const section = params.get("settings");
+    if (!outcome && !section) return;
+
+    if (section === "connections") {
+      window.requestAnimationFrame(() => {
+        setSettingsSection("connections");
+        setSettingsOpen(true);
+      });
+    }
+
+    // "cancelled" stays silent: declining on Instagram's screen is a choice,
+    // not something to apologise for.
+    if (outcome === "connected") {
+      toast({ ...INSTAGRAM_CONNECTED_MESSAGE, variant: "success" });
+    } else if (outcome === "error") {
+      toast({
+        ...instagramErrorMessage(params.get("reason")),
+        variant: "error",
+      });
+    }
+
+    params.delete("instagram");
+    params.delete("reason");
+    params.delete("settings");
+    const query = params.toString();
+    router.replace(
+      `${window.location.pathname}${query ? `?${query}` : ""}`,
+      { scroll: false }
+    );
+  }, [router, toast]);
 
   const openSignOutConfirmation = () => {
     const openedFromMobile = mobileNavOpen;

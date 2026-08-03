@@ -23,6 +23,7 @@ import {
   Sparkles,
   User,
 } from "lucide-react";
+import { TbBrandInstagram } from "react-icons/tb";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -32,6 +33,10 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { luxe } from "@/components/motion/reveal";
 import { BUSINESS_CATEGORIES } from "@/lib/business-categories";
+import {
+  instagramErrorMessage,
+  type InstagramOutcomeMessage,
+} from "@/lib/instagram/messages";
 import { cn, fa } from "@/lib/utils";
 import { Logo } from "@/components/ui/brand/logo";
 
@@ -41,8 +46,13 @@ export type BotIdentity = {
   username: string;
 };
 
+export type InstagramIdentity = {
+  username: string;
+  name: string;
+};
+
 type StepId =
-  | "telegram"
+  | "channels"
   | "botfather"
   | "create"
   | "token"
@@ -56,19 +66,38 @@ type StepDefinition = {
   shortTitle: string;
 };
 
-const CONNECT_STEPS: StepDefinition[] = [
-  { id: "telegram", shortTitle: "اتصال تلگرام" },
+const CHANNELS_STEP: StepDefinition = {
+  id: "channels",
+  shortTitle: "اتصال کانال‌ها",
+};
+const DEMO_STEP: StepDefinition = { id: "demo", shortTitle: "نمایش یک سفارش" };
+const PROFILE_STEP: StepDefinition = {
+  id: "profile",
+  shortTitle: "معرفی کسب‌وکار",
+};
+
+// The Telegram guide is the only branch deep enough to need its own steps, so
+// the rail only grows them while the owner is actually inside it.
+const TELEGRAM_GUIDE_STEPS: StepDefinition[] = [
   { id: "botfather", shortTitle: "باز کردن BotFather" },
   { id: "create", shortTitle: "ساخت ربات" },
   { id: "token", shortTitle: "تأیید اتصال" },
-  { id: "demo", shortTitle: "نمایش یک سفارش" },
-  { id: "profile", shortTitle: "معرفی کسب‌وکار" },
 ];
 
-const SKIP_STEPS: StepDefinition[] = [
-  { id: "telegram", shortTitle: "اتصال تلگرام" },
-  { id: "profile", shortTitle: "معرفی کسب‌وکار" },
+const CONNECT_STEPS: StepDefinition[] = [
+  CHANNELS_STEP,
+  ...TELEGRAM_GUIDE_STEPS,
+  DEMO_STEP,
+  PROFILE_STEP,
 ];
+
+const CHANNEL_STEPS: StepDefinition[] = [
+  CHANNELS_STEP,
+  DEMO_STEP,
+  PROFILE_STEP,
+];
+
+const SKIP_STEPS: StepDefinition[] = [CHANNELS_STEP, PROFILE_STEP];
 
 const PRODUCTS = [
   { name: "تی‌شرت کلاسیک مشکی", price: 790_000 },
@@ -353,11 +382,68 @@ const ChatDemo = ({ botName }: { botName: string }) => {
 const guideItemClass =
   "flex gap-3 rounded-2xl border border-line bg-background/35 p-4";
 
+/**
+ * One channel on the opening step. Connected and empty share a shape so the
+ * pair of cards keeps the same height and the grid does not jump when one of
+ * them comes back from an OAuth round trip.
+ */
+const ChannelCard = ({
+  icon,
+  label,
+  description,
+  connectedHandle,
+  connectedName,
+  action,
+}: {
+  icon: React.ComponentProps<typeof Icon>["icon"];
+  label: string;
+  description: string;
+  connectedHandle: string | null;
+  connectedName?: string;
+  action: React.ReactNode;
+}) => (
+  <div
+    className={cn(
+      "flex flex-col rounded-3xl border p-5 transition-colors",
+      connectedHandle
+        ? "border-success/25 bg-success/10"
+        : "border-line bg-background/35"
+    )}
+  >
+    <div className="flex items-start justify-between gap-3">
+      <Icon icon={icon} tile size="sm" tone={connectedHandle ? "success" : "accent"} />
+      {connectedHandle && (
+        <Badge variant="success" dot className="shrink-0">
+          متصل
+        </Badge>
+      )}
+    </div>
+
+    <p className="mt-4 text-sm font-bold">{label}</p>
+    <p className="mt-1.5 min-h-10 text-xs leading-6 text-muted">
+      {connectedHandle ? connectedName : description}
+    </p>
+
+    {connectedHandle && (
+      <p dir="ltr" className="mt-1 truncate text-start text-xs text-success">
+        {connectedHandle}
+      </p>
+    )}
+
+    <div className="mt-4">{action}</div>
+  </div>
+);
+
 export const OnboardingClient = ({
   initialBot,
+  initialInstagram,
+  initialInstagramError,
   initialProfile,
 }: {
   initialBot: BotIdentity | null;
+  initialInstagram: InstagramIdentity | null;
+  /** `reason` from a failed Instagram callback, read server-side from the URL. */
+  initialInstagramError: string | null;
   initialProfile: {
     fullName: string;
     businessName: string;
@@ -370,12 +456,24 @@ export const OnboardingClient = ({
   const firstRender = React.useRef(true);
 
   const [flow, setFlow] = React.useState<Flow>(
-    initialBot ? "connect" : "undecided"
+    initialBot || initialInstagram ? "connect" : "undecided"
   );
-  const [step, setStep] = React.useState<StepId>("telegram");
+  const [step, setStep] = React.useState<StepId>("channels");
   const [direction, setDirection] = React.useState<1 | -1>(1);
   const [token, setToken] = React.useState("");
   const [bot, setBot] = React.useState<BotIdentity | null>(initialBot);
+  const [instagram] = React.useState<InstagramIdentity | null>(
+    initialInstagram
+  );
+  const [instagramError, setInstagramError] =
+    React.useState<InstagramOutcomeMessage | null>(
+      initialInstagramError
+        ? instagramErrorMessage(initialInstagramError)
+        : null
+    );
+  // Only true once the owner has actually walked the BotFather guide, so the
+  // demo screen's back button never reveals steps they skipped past.
+  const [usedTelegramGuide, setUsedTelegramGuide] = React.useState(false);
   const [tokenError, setTokenError] = React.useState<string | null>(null);
   const [connecting, setConnecting] = React.useState(false);
   const [fullName, setFullName] = React.useState(initialProfile.fullName);
@@ -391,7 +489,21 @@ export const OnboardingClient = ({
   const [profileError, setProfileError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
 
-  const steps = flow === "skip" ? SKIP_STEPS : CONNECT_STEPS;
+  const hasChannel = Boolean(bot) || Boolean(instagram);
+  // The demo is voiced by whichever channel the owner just connected; Telegram
+  // wins when both are present because it is the one that answers today.
+  const assistantName = bot?.name ?? instagram?.name ?? "پشتیبان";
+
+  // The rail shows only the steps this owner will actually walk: two when they
+  // skip, three when a channel is connected without the Telegram guide, and the
+  // full six once they have opened it. It keys off usedTelegramGuide rather
+  // than the current step so the list does not shrink under them on the way
+  // from the token screen to the demo.
+  const steps = usedTelegramGuide
+    ? CONNECT_STEPS
+    : flow === "skip" || !hasChannel
+      ? SKIP_STEPS
+      : CHANNEL_STEPS;
   const currentIndex = Math.max(
     0,
     steps.findIndex((item) => item.id === step)
@@ -405,30 +517,57 @@ export const OnboardingClient = ({
     headingRef.current?.focus({ preventScroll: true });
   }, [step]);
 
+  // Instagram's consent screen sends the browser back here with the outcome in
+  // the query string, which the server component has already turned into
+  // `initialInstagramError`. All that is left is to drop the query so a refresh
+  // does not resurrect a message the owner dismissed. A success needs no
+  // message: the card itself flips to connected.
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("instagram")) return;
+
+    params.delete("instagram");
+    params.delete("reason");
+    const query = params.toString();
+    router.replace(`/onboarding${query ? `?${query}` : ""}`, { scroll: false });
+  }, [router]);
+
   const goTo = (nextStep: StepId, nextDirection: 1 | -1 = 1) => {
     setDirection(nextDirection);
     setTokenError(null);
     setProfileError(null);
+    // Landing back on the chooser puts the Telegram guide behind them again, so
+    // the rail stops advertising steps that are no longer on the path.
+    if (nextStep === "channels") setUsedTelegramGuide(false);
     setStep(nextStep);
   };
 
   const startTelegramGuide = () => {
     setFlow("connect");
-    goTo(bot ? "demo" : "botfather");
+    setUsedTelegramGuide(true);
+    goTo("botfather");
   };
 
-  const skipTelegram = () => {
-    setFlow("skip");
-    goTo("profile");
+  const continueFromChannels = () => {
+    if (!hasChannel) {
+      setFlow("skip");
+      goTo("profile");
+      return;
+    }
+    setFlow("connect");
+    goTo("demo");
   };
 
   const goBack = () => {
     const previous: Partial<Record<StepId, StepId>> = {
-      botfather: "telegram",
+      botfather: "channels",
       create: "botfather",
       token: "create",
-      demo: bot && initialBot ? "telegram" : "token",
-      profile: flow === "skip" ? "telegram" : "demo",
+      // Reached the demo straight from the channel cards when the Telegram
+      // guide was never opened — going back to the token screen would show a
+      // step the owner has not seen.
+      demo: usedTelegramGuide ? "token" : "channels",
+      profile: hasChannel ? "demo" : "channels",
     };
     const target = previous[step];
     if (target) goTo(target, -1);
@@ -500,7 +639,7 @@ export const OnboardingClient = ({
           fullName: cleanFullName,
           businessName: cleanBusinessName,
           businessCategory,
-          telegramSkipped: flow === "skip" && !bot,
+          telegramSkipped: !hasChannel,
         }),
       });
       const data = (await response.json()) as { error?: string };
@@ -615,67 +754,91 @@ export const OnboardingClient = ({
             </div>
 
             <AnimatePresence mode="wait" initial={false}>
-              {step === "telegram" && (
-                <Slide key="telegram" direction={direction} className="mx-auto flex min-h-[34rem] max-w-xl flex-col justify-center py-4 text-center">
-                  <Icon
-                    icon={Send}
-                    tile
-                    size="xl"
-                    tone={bot ? "success" : "accent"}
-                    label="تلگرام"
-                    className="mx-auto"
-                  />
-                  <p className="mt-6 text-xs font-medium text-accent">
-                    کانال اول پشتیبانی
-                  </p>
-                  <h1
-                    ref={headingRef}
-                    tabIndex={-1}
-                    className="mt-3 text-balance text-2xl font-black leading-10 outline-none sm:text-3xl"
-                  >
-                    {bot
-                      ? `ربات «${bot.name}» آماده ادامه است`
-                      : "پشتیبان را به ربات تلگرام‌تان وصل کنید"}
-                  </h1>
-                  <p className="mx-auto mt-4 max-w-lg text-sm leading-8 text-muted">
-                    {bot
-                      ? `اتصال @${bot.username} قبلاً تأیید شده است. حالا ببینید چطور یک سؤال ساده را به سفارش تبدیل می‌کند.`
-                      : "مشتری‌ها همان‌جا که پیام می‌دهند پاسخ می‌گیرند؛ راه‌اندازی را قدم‌به‌قدم و بدون تنظیم فنی انجام می‌دهیم."}
-                  </p>
+              {step === "channels" && (
+                <Slide key="channels" direction={direction} className="mx-auto flex min-h-[34rem] max-w-2xl flex-col justify-center py-4">
+                  <div className="text-center">
+                    <p className="text-xs font-medium text-accent">
+                      کانال‌های پشتیبانی
+                    </p>
+                    <h1
+                      ref={headingRef}
+                      tabIndex={-1}
+                      className="mt-3 text-balance text-2xl font-black leading-10 outline-none sm:text-3xl"
+                    >
+                      مشتری‌ها از کجا به شما پیام می‌دهند؟
+                    </h1>
+                    <p className="mx-auto mt-4 max-w-lg text-sm leading-8 text-muted">
+                      هر کانالی را که استفاده می‌کنید وصل کنید. لازم نیست همه را
+                      همین حالا وصل کنید — بقیه بعداً از داشبورد اضافه می‌شوند.
+                    </p>
+                  </div>
 
-                  {bot && (
-                    <Badge variant="success" dot className="mx-auto mt-5" dir="ltr">
-                      @{bot.username}
-                    </Badge>
+                  {instagramError && (
+                    <Alert
+                      variant="error"
+                      title={instagramError.title}
+                      description={instagramError.description}
+                      onDismiss={() => setInstagramError(null)}
+                      className="mt-6"
+                    />
                   )}
 
-                  <div className="mx-auto mt-8 w-full max-w-sm space-y-3">
+                  <div className="mt-8 grid gap-4 sm:grid-cols-2">
+                    <ChannelCard
+                      icon={Send}
+                      label="تلگرام"
+                      description="پاسخ خودکار به پیام‌های ربات تلگرام"
+                      connectedHandle={bot ? `@${bot.username}` : null}
+                      connectedName={bot?.name}
+                      action={
+                        <Button
+                          variant={bot ? "outline" : "primary"}
+                          size="sm"
+                          className="w-full"
+                          onClick={startTelegramGuide}
+                        >
+                          {bot ? "اتصال ربات دیگر" : "اتصال ربات تلگرام"}
+                        </Button>
+                      }
+                    />
+
+                    <ChannelCard
+                      icon={TbBrandInstagram}
+                      label="اینستاگرام"
+                      description="پاسخ به دایرکت‌های حساب تجاری"
+                      connectedHandle={
+                        instagram ? `@${instagram.username}` : null
+                      }
+                      connectedName={instagram?.name}
+                      action={
+                        <a
+                          href="/api/instagram/connect?return=onboarding"
+                          className={buttonVariants({
+                            variant: instagram ? "outline" : "primary",
+                            size: "sm",
+                            className: "w-full",
+                          })}
+                        >
+                          {instagram ? "اتصال حساب دیگر" : "اتصال حساب اینستاگرام"}
+                        </a>
+                      }
+                    />
+                  </div>
+
+                  <div className="mx-auto mt-8 w-full max-w-sm text-center">
                     <Button
                       size="lg"
                       className="w-full"
-                      startIcon={bot ? <Sparkles className="size-4" /> : <Send className="size-4" />}
-                      onClick={startTelegramGuide}
+                      endIcon={<ArrowLeft className="size-4" />}
+                      onClick={continueFromChannels}
                     >
-                      {bot
-                        ? "دیدن نحوه پاسخ‌گویی"
-                        : "اتصال پشتیبان به ربات تلگرام"}
+                      ادامه
                     </Button>
-                    {bot ? (
-                      <Button
-                        variant="link"
-                        size="sm"
-                        onClick={() => {
-                          setFlow("connect");
-                          goTo("botfather");
-                        }}
-                      >
-                        اتصال یک ربات دیگر
-                      </Button>
-                    ) : (
-                      <Button variant="link" size="sm" onClick={skipTelegram}>
-                        فعلاً رد می‌کنم
-                      </Button>
-                    )}
+                    <p className="mt-3 text-[11px] leading-6 text-muted">
+                      {hasChannel
+                        ? "می‌توانید بعداً کانال‌های دیگر را از داشبورد اضافه کنید."
+                        : "بدون اتصال هم می‌توانید ادامه دهید و بعداً از داشبورد وصل کنید."}
+                    </p>
                   </div>
                 </Slide>
               )}
@@ -840,7 +1003,7 @@ export const OnboardingClient = ({
                 </Slide>
               )}
 
-              {step === "demo" && bot && (
+              {step === "demo" && hasChannel && (
                 <Slide key="demo" direction={direction} className="py-1">
                   <div className="mb-5 flex items-start justify-between gap-4">
                     <div>
@@ -849,13 +1012,13 @@ export const OnboardingClient = ({
                         از سؤال مشتری تا ثبت سفارش
                       </h1>
                       <p className="mt-2 text-sm leading-7 text-muted">
-                        ببینید {bot.name} چطور نیاز مشتری را می‌فهمد و مسیر خرید را کامل می‌کند.
+                        ببینید {assistantName} چطور نیاز مشتری را می‌فهمد و مسیر خرید را کامل می‌کند.
                       </p>
                     </div>
                     <Icon icon={Shirt} tile size="md" tone="accent" className="hidden shrink-0 sm:inline-flex" />
                   </div>
 
-                  <ChatDemo botName={bot.name} />
+                  <ChatDemo botName={assistantName} />
 
                   <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:items-center">
                     <Button variant="ghost" onClick={goBack} startIcon={<ArrowRight className="size-4" />}>
@@ -935,10 +1098,10 @@ export const OnboardingClient = ({
                       required
                     />
 
-                    {flow === "skip" && (
+                    {!hasChannel && (
                       <Alert
-                        title="تلگرام را بعداً وصل کنید"
-                        description="هر زمان آماده بودید، اتصال ربات از داخل داشبورد در دسترس خواهد بود."
+                        title="کانال‌ها را بعداً وصل کنید"
+                        description="هر زمان آماده بودید، اتصال تلگرام و اینستاگرام از داخل داشبورد در دسترس است."
                       />
                     )}
 
@@ -958,7 +1121,7 @@ export const OnboardingClient = ({
         </div>
 
         <p className="mt-5 text-center text-xs leading-6 text-muted">
-          برای اتصال ربات به مشکل خوردید؟ فعلاً رد کنید؛ بعداً از داشبورد ادامه می‌دهید.
+          اتصال کانال‌ها اختیاری است؛ می‌توانید ادامه دهید و بعداً از داشبورد وصل کنید.
         </p>
       </motion.div>
     </main>
