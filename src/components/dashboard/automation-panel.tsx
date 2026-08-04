@@ -580,22 +580,10 @@ const AutomationPanelContent = () => {
   );
   const [busyRuleId, setBusyRuleId] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState(false);
+  const [instagramConnected, setInstagramConnected] = React.useState(false);
 
-const AutomationPanelContent = () => {
-  const dispatch = useAppDispatch();
-  const { toast } = useToast();
-  const { bot, error, items, setupRequired, status } = useAppSelector(
-    (state) => state.automations
-  );
-  const [editorOpen, setEditorOpen] = React.useState(false);
-  const [editingRule, setEditingRule] = React.useState<KeywordAutomation | null>(
-    null
-  );
-  const [deletingRule, setDeletingRule] = React.useState<KeywordAutomation | null>(
-    null
-  );
-  const [busyRuleId, setBusyRuleId] = React.useState<string | null>(null);
-  const [deleting, setDeleting] = React.useState(false);
+  const activeChannel = useActiveChannel("telegram");
+  const showInstagram = activeChannel === "instagram";
 
   React.useEffect(() => {
     void dispatch(loadAutomations());
@@ -613,6 +601,24 @@ const AutomationPanelContent = () => {
         refreshConnection
       );
   }, [dispatch]);
+
+  React.useEffect(() => {
+    const loadInstagramStatus = async () => {
+      try {
+        const response = await fetch("/api/instagram/status", {
+          cache: "no-store",
+        });
+        if (response.ok) {
+          const data = await response.json();
+          setInstagramConnected(Boolean(data.account));
+        }
+      } catch {
+        // Leaves the chip disconnected; safe default.
+      }
+    };
+
+    void loadInstagramStatus();
+  }, []);
 
   const openCreate = () => {
     setEditingRule(null);
@@ -739,10 +745,25 @@ const AutomationPanelContent = () => {
         </Button>
       </header>
 
-      <ChannelTabs />
+      <ChannelTabs
+        active={activeChannel}
+        availability={{
+          telegram: { connected: Boolean(bot) },
+          instagram: { connected: instagramConnected },
+        }}
+      />
 
-      <div className="mt-8 space-y-5">
-        {setupRequired && (
+      {showInstagram && (!setupRequired || instagramConnected) ? (
+        <div className="mt-8">
+          <InstagramRulesPanel
+            emptyTitle="هیچ قانونی برای اینستاگرام وجود ندارد"
+            emptyDescription="قانون جدیدی بسازید تا وقتی مشتریان در دایرکت یا کامنت شما پیام می‌فرستند، به‌صورت خودکار پاسخ دهید."
+            scope="dm_keyword"
+          />
+        </div>
+      ) : (
+        <div className="mt-8 space-y-5">
+          {setupRequired && (
           <Alert
             variant="warning"
             title="راه‌اندازی اتوماسیون کامل نشده است"
@@ -864,7 +885,8 @@ const AutomationPanelContent = () => {
             </div>
           </section>
         )}
-      </div>
+        </div>
+      )}
 
       <RuleEditorModal
         automation={editingRule}
