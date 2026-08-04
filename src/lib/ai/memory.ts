@@ -5,7 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 // ---------------------------------------------------------------------------
 // Short-term chat memory.
 //
-// A Telegram chat is a SESSION: while the customer keeps messaging (gaps under
+// A conversation is a SESSION: while the customer keeps messaging (gaps under
 // SESSION_WINDOW_MS) the recent turns travel with each request, so the model
 // can resolve follow-ups and knows it has already introduced itself. After a
 // gap longer than the window the chat is cold — the next message starts fresh
@@ -17,9 +17,48 @@ import { createAdminClient } from "@/lib/supabase/admin";
 //
 // Every read and write FAILS OPEN: a missing table or an unreachable database
 // costs the conversation its memory, never its reply.
+//
+// Two channels, two tables, one code path. telegram_chat_sessions is keyed by a
+// numeric chat_id, instagram_chat_sessions by a text sender_id (an IGSID is a
+// 17-digit opaque identifier, not a number). They stay separate tables so each
+// keeps its `on delete cascade` from its own connection table — the same
+// reasoning that gave Instagram its own connections table rather than a generic
+// one. The window, the caps and the fail-open behaviour are identical.
 // ---------------------------------------------------------------------------
 
 export type ChatTurn = { role: "user" | "assistant"; text: string };
+
+export type MemoryChannel = "telegram" | "instagram";
+
+type ChannelTable = {
+  table: string;
+  connectionColumn: string;
+  chatColumn: string;
+};
+
+const CHANNEL_TABLES: Record<MemoryChannel, ChannelTable> = {
+  telegram: {
+    table: "telegram_chat_sessions",
+    connectionColumn: "telegram_connection_id",
+    chatColumn: "chat_id",
+  },
+  instagram: {
+    table: "instagram_chat_sessions",
+    connectionColumn: "instagram_connection_id",
+    chatColumn: "sender_id",
+  },
+};
+
+/**
+ * Which customer, on which connection, on which channel. `chatId` is a number
+ * for Telegram and a string for Instagram; both are passed straight through to
+ * their own column, never converted.
+ */
+export type ChatKey = {
+  channel?: MemoryChannel;
+  connectionId: string;
+  chatId: number | string;
+};
 
 export type ChatSession = {
   /** Recent turns, oldest first. Empty for a new session. */
@@ -83,12 +122,12 @@ const withinPromptBudget = (turns: StoredTurn[]): ChatTurn[] => {
  * chat has been quiet for longer than the window.
  */
 export const loadChatSession = async ({
+  channel = "telegram",
   connectionId,
   chatId,
-}: {
-  connectionId: string;
-  chatId: number;
-}): Promise<ChatSession> => {
+}: ChatKey): Promise<ChatSession> => {
+  const { table, connectionColumn, chatColumn } = CHANNEL_TABLES[channel];
+
   try {
     const now = Date.now();
     const cutoff = now - SESSION_WINDOW_MS;
@@ -99,10 +138,10 @@ export const loadChatSession = async ({
     // the window even if a turn carries a bad timestamp. The per-turn filter
     // then trims the surviving row to the last 30 minutes.
     const { data } = await admin
-      .from("telegram_chat_sessions")
+      .from(table)
       .select("turns")
-      .eq("telegram_connection_id", connectionId)
-      .eq("chat_id", chatId)
+      .eq(connectionColumn, connectionId)
+      .eq(chatColumn, chatId)
       .gte("last_seen_at", new Date(cutoff).toISOString())
       .maybeSingle();
 
@@ -124,16 +163,15 @@ export const loadChatSession = async ({
  * already has their answer by the time this runs.
  */
 export const recordChatTurns = async ({
+  channel = "telegram",
   connectionId,
   chatId,
   turns,
-}: {
-  connectionId: string;
-  chatId: number;
-  turns: ChatTurn[];
-}): Promise<void> => {
+}: ChatKey & { turns: ChatTurn[] }): Promise<void> => {
   const additions = turns.filter((turn) => turn.text.trim());
   if (!additions.length) return;
+
+  const { table, connectionColumn, chatColumn } = CHANNEL_TABLES[channel];
 
   try {
     const admin = createAdminClient();
@@ -145,10 +183,10 @@ export const recordChatTurns = async ({
     // `last_seen_at` gate as the read — a cold row is not merged into, it is
     // overwritten, so a new session never inherits the old one's turns.
     const { data } = await admin
-      .from("telegram_chat_sessions")
+      .from(table)
       .select("turns")
-      .eq("telegram_connection_id", connectionId)
-      .eq("chat_id", chatId)
+      .eq(connectionColumn, connectionId)
+      .eq(chatColumn, chatId)
       .gte("last_seen_at", new Date(cutoff).toISOString())
       .maybeSingle();
 
@@ -166,14 +204,14 @@ export const recordChatTurns = async ({
       })),
     ].slice(-STORED_MAX_TURNS);
 
-    await admin.from("telegram_chat_sessions").upsert(
+    await admin.from(table).upsert(
       {
-        telegram_connection_id: connectionId,
-        chat_id: chatId,
+        [connectionColumn]: connectionId,
+        [chatColumn]: chatId,
         turns: next,
         last_seen_at: new Date(now).toISOString(),
       },
-      { onConflict: "telegram_connection_id,chat_id" }
+      { onConflict: `${connectionColumn},${chatColumn}` }
     );
   } catch {
     // Memory is an optimization; never let it break the conversation.

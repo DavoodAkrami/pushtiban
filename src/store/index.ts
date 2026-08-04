@@ -2,6 +2,7 @@ import { configureStore } from "@reduxjs/toolkit";
 import automationsReducer from "./slices/automations-slice";
 import flowsReducer from "./slices/flows-slice";
 import inboxReducer from "./slices/inbox-slice";
+import instagramAutomationsReducer from "./slices/instagram-automations-slice";
 import sessionReducer from "./slices/session-slice";
 import telegramMenuReducer from "./slices/telegram-menu-slice";
 import usageReducer from "./slices/usage-slice";
@@ -13,6 +14,7 @@ export const makeStore = () =>
       automations: automationsReducer,
       flows: flowsReducer,
       inbox: inboxReducer,
+      instagramAutomations: instagramAutomationsReducer,
       session: sessionReducer,
       telegramMenu: telegramMenuReducer,
       usage: usageReducer,

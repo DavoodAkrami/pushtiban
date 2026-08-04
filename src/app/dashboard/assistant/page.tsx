@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Bot } from "lucide-react";
 import { AssistantPanel } from "@/components/dashboard/assistant-panel";
 import { DashboardPageHeader } from "@/components/dashboard/page-header";
-import { isTelegramAiConfigured } from "@/lib/ai/telegram-assistant";
+import { isAssistantAiConfigured } from "@/lib/ai/assistant";
 import { createClient } from "@/lib/supabase/server";
 
 export const metadata: Metadata = {
@@ -38,7 +38,7 @@ const AssistantPage = async () => {
           settingsResult.data?.human_handoff_enabled === true
         }
         loadError={Boolean(settingsResult.error)}
-        providerConfigured={isTelegramAiConfigured()}
+        providerConfigured={isAssistantAiConfigured()}
         setupRequired={Boolean(
           settingsResult.error &&
             SETUP_ERROR_CODES.has(settingsResult.error.code)

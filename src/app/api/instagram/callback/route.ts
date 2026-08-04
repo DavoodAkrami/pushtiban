@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { encryptSecret } from "@/lib/crypto/secret-box";
+import { activateInstagramWebhook } from "@/lib/instagram/webhook";
 import {
   exchangeCodeForToken,
   exchangeForLongLivedToken,
@@ -93,28 +94,42 @@ export const GET = async (request: NextRequest) => {
     const profile = await fetchProfile(token.accessToken);
 
     const admin = createAdminClient();
-    const { error } = await admin.from("instagram_connections").upsert(
-      {
-        user_id: user.id,
-        instagram_user_id: profile.userId,
-        username: profile.username,
-        account_name: profile.name,
-        profile_picture_url: profile.profilePictureUrl,
-        account_type: profile.accountType,
-        token_ciphertext: encryptSecret(token.accessToken),
-        token_expires_at: token.expiresAt.toISOString(),
-        scopes: permissions,
-        status: "verified",
-        connected_at: new Date().toISOString(),
-      },
-      { onConflict: "user_id" }
-    );
+    const { data: saved, error } = await admin
+      .from("instagram_connections")
+      .upsert(
+        {
+          user_id: user.id,
+          instagram_user_id: profile.userId,
+          username: profile.username,
+          account_name: profile.name,
+          profile_picture_url: profile.profilePictureUrl,
+          account_type: profile.accountType,
+          token_ciphertext: encryptSecret(token.accessToken),
+          token_expires_at: token.expiresAt.toISOString(),
+          scopes: permissions,
+          status: "verified",
+          connected_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id" }
+      )
+      .select("id")
+      .single();
 
     if (error) {
       // 23505 on instagram_user_id: the account is already serving another
       // business, which is a different problem from a failed write.
       return finish("error", error.code === "23505" ? "taken" : "save_failed");
     }
+
+    // Subscribe the account to the webhook fields we handle. A connection that
+    // skips this is authorized but deaf — no comment or direct message is ever
+    // delivered. Failure is not fatal here: the row is saved with status
+    // 'error' and the dashboard offers a retry, which beats losing the token
+    // over a transient Meta hiccup.
+    await activateInstagramWebhook({
+      connectionId: (saved as { id: string }).id,
+      userId: user.id,
+    });
 
     return finish("connected");
   } catch (error) {

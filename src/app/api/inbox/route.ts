@@ -1,12 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
 import {
   recordOwnerReply,
   closeConversation,
+  deliverConversationReply,
+  type SupportChannel,
   type SupportConversationRow,
 } from "@/lib/ai/inbox";
-import { decryptTelegramToken } from "@/lib/telegram/token-crypto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,6 +17,7 @@ const jsonError = (error: string, status: number, setupRequired = false) =>
 
 type ConversationView = {
   id: string;
+  channel: SupportChannel;
   customerDisplayName: string | null;
   customerUsername: string | null;
   lastCustomerMessageText: string | null;
@@ -42,7 +43,7 @@ export const GET = async (request: NextRequest) => {
   let query = supabase
     .from("support_conversations")
     .select(
-      "id, customer_display_name, customer_username, last_customer_message_text, last_customer_message_at, status, queued_reason, created_at"
+      "id, channel, customer_display_name, customer_username, last_customer_message_text, last_customer_message_at, status, queued_reason, created_at"
     )
     .eq("user_id", user.id)
     .order("last_customer_message_at", { ascending: false, nullsFirst: false })
@@ -65,6 +66,9 @@ export const GET = async (request: NextRequest) => {
 
   const conversations: ConversationView[] = rows.map((row) => ({
     id: row.id,
+    // Defaulted rather than assumed: rows written before channel-inbox.sql ran
+    // have no channel column, and every one of those is Telegram.
+    channel: row.channel ?? "telegram",
     customerDisplayName: row.customer_display_name,
     customerUsername: row.customer_username,
     lastCustomerMessageText: row.last_customer_message_text,
@@ -100,56 +104,27 @@ export const POST = async (request: NextRequest) => {
   // Verify the conversation belongs to this user (RLS also enforces).
   const { data: conv } = await supabase
     .from("support_conversations")
-    .select("id, telegram_connection_id, customer_telegram_id")
+    .select("*")
     .eq("id", conversationId)
     .eq("user_id", user.id)
     .maybeSingle();
   if (!conv) return jsonError("گفتگو پیدا نشد.", 404);
 
-  const conversation = conv as {
-    id: string;
-    telegram_connection_id: string;
-    customer_telegram_id: number;
-  };
+  const conversation = conv as SupportConversationRow;
 
-  // Deliver the reply to the customer via the bot.
-  const admin = createAdminClient();
-  const { data: connection } = await admin
-    .from("telegram_connections")
-    .select("token_ciphertext")
-    .eq("id", conversation.telegram_connection_id)
-    .maybeSingle();
-  const tokenRow = connection as { token_ciphertext: string } | null;
-  if (!tokenRow) return jsonError("ربات پیدا نشد.", 500);
-
-  let token = "";
-  try {
-    token = decryptTelegramToken(tokenRow.token_ciphertext);
-  } catch {
-    return jsonError("ارسال پاسخ ناموفق بود؛ توکن ربات قابل خواندن نیست.", 500);
+  // Delivery follows the channel the customer is on — Telegram's bot API or
+  // Instagram's messaging API with the human-agent tag.
+  const delivered = await deliverConversationReply({ conversation, text });
+  if (!delivered) {
+    return jsonError(
+      conversation.channel === "instagram"
+        ? "ارسال پاسخ به اینستاگرام انجام نشد؛ ممکن است مهلت ۷ روزهٔ پاسخ‌گویی تمام شده باشد."
+        : "ارسال پاسخ به تلگرام ناموفق بود.",
+      502
+    );
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8_000);
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: conversation.customer_telegram_id,
-        text: `پاسخ پشتیبان:\n\n${text}`,
-      }),
-      signal: controller.signal,
-      cache: "no-store",
-    });
-    if (!res.ok) return jsonError("ارسال پاسخ به تلگرام ناموفق بود.", 502);
-  } catch {
-    return jsonError("ارسال پاسخ به تلگرام ناموفق بود.", 502);
-  } finally {
-    clearTimeout(timeout);
-  }
-
-  // Only mark the conversation answered after Telegram accepted the reply.
+  // Only mark the conversation answered after the channel accepted the reply.
   await recordOwnerReply({ conversationId, replyText: text });
 
   return NextResponse.json({ ok: true });

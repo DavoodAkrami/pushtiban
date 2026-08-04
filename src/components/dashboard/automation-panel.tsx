@@ -49,8 +49,9 @@ import {
 } from "@/lib/automations";
 import { fa } from "@/lib/utils";
 import { TELEGRAM_CONNECTION_CHANGED_EVENT } from "@/lib/settings-events";
-import { Camera, MessageCircle } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
+import { ChannelTabs, useActiveChannel } from "@/components/dashboard/channel-tabs";
+import { InstagramRulesPanel } from "@/components/dashboard/instagram/rules-panel";
 import {
   createAutomation,
   deleteAutomation,
@@ -564,49 +565,21 @@ const RuleCard = ({
   );
 };
 
-// Channel selector — Telegram is live; others reserved for future services.
-const channels = [
-  { id: "telegram", label: "تلگرام", icon: Send, available: true },
-  { id: "instagram", label: "اینستاگرام", icon: Camera, available: false },
-  { id: "whatsapp", label: "واتساپ", icon: MessageCircle, available: false },
-] as const;
-
-const ChannelTabs = () => {
-  const [active, setActive] = React.useState<string>("telegram");
-
-  return (
-    <div className="mt-6 flex flex-wrap gap-2" role="tablist" aria-label="کانال‌ها">
-      {channels.map((channel) => {
-        const isActive = active === channel.id;
-        return (
-          <button
-            key={channel.id}
-            type="button"
-            role="tab"
-            aria-selected={isActive}
-            disabled={!channel.available}
-            onClick={() => channel.available && setActive(channel.id)}
-            className={`group flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition-colors ${
-              isActive
-                ? "border-accent/40 bg-accent/10 text-accent"
-                : channel.available
-                  ? "border-line bg-surface/40 text-foreground hover:bg-surface/70"
-                  : "cursor-not-allowed border-line bg-surface/20 text-muted"
-            }`}
-          >
-            <channel.icon className="size-4" aria-hidden />
-            {channel.label}
-            {!channel.available && (
-              <Badge variant="muted" className="ms-1">
-                به‌زودی
-              </Badge>
-            )}
-          </button>
-        );
-      })}
-    </div>
+const AutomationPanelContent = () => {
+  const dispatch = useAppDispatch();
+  const { toast } = useToast();
+  const { bot, error, items, setupRequired, status } = useAppSelector(
+    (state) => state.automations
   );
-};
+  const [editorOpen, setEditorOpen] = React.useState(false);
+  const [editingRule, setEditingRule] = React.useState<KeywordAutomation | null>(
+    null
+  );
+  const [deletingRule, setDeletingRule] = React.useState<KeywordAutomation | null>(
+    null
+  );
+  const [busyRuleId, setBusyRuleId] = React.useState<string | null>(null);
+  const [deleting, setDeleting] = React.useState(false);
 
 const AutomationPanelContent = () => {
   const dispatch = useAppDispatch();

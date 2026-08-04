@@ -6,13 +6,15 @@ import {
   type AutomationTriggerType,
 } from "@/lib/automations";
 import {
-  generateTelegramAiReply,
+  generateAssistantReply,
   customerRequestedHuman,
-} from "@/lib/ai/telegram-assistant";
+} from "@/lib/ai/assistant";
 import {
   upsertConversationForCustomer,
   recordOwnerReply,
+  deliverConversationReply,
   dismissConversation,
+  getConversation,
   setPendingOwnerReply,
   consumePendingOwnerReply,
   listNotificationRecipients,
@@ -885,19 +887,29 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
         adminTelegramId: senderId,
       });
       if (pendingConvId) {
-        // Record the owner's reply and deliver it to the customer via the bot.
-        const { conversation } = await recordOwnerReply({
-          conversationId: pendingConvId,
-          replyText: text,
-          senderTelegramId: senderId,
-        });
-        await sendToCustomer({
-          chat_id: conversation.customer_telegram_id,
-          text: `پاسخ پشتیبان:\n\n${text}`,
-        });
+        // The customer may be on Instagram: a business with both channels
+        // escalates its Instagram threads through this same bot, so delivery
+        // has to follow the conversation rather than assume Telegram.
+        const conversation = await getConversation(pendingConvId);
+        const delivered = conversation
+          ? await deliverConversationReply({ conversation, text })
+          : false;
+
+        // Recorded only once the customer actually has it, so the dashboard
+        // never shows a thread as answered when the send failed.
+        if (delivered) {
+          await recordOwnerReply({
+            conversationId: pendingConvId,
+            replyText: text,
+            senderTelegramId: senderId,
+          });
+        }
+
         await telegramPost(token, "sendMessage", {
           chat_id: chatId,
-          text: "✅ پاسخ شما برای مشتری ارسال شد.",
+          text: delivered
+            ? "✅ پاسخ شما برای مشتری ارسال شد."
+            : "❌ ارسال پاسخ انجام نشد. اگر مشتری در اینستاگرام است، ممکن است مهلت پاسخ‌گویی تمام شده باشد.",
         });
         return NextResponse.json({ ok: true });
       }
@@ -1064,9 +1076,10 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
   // acts when handoff is enabled; otherwise it falls through to a normal reply.
   if (handoffEnabled && customerRequestedHuman(text)) {
     const conversation = await upsertConversationForCustomer({
+      channel: "telegram",
       connectionId: connection.id,
       userId: connection.user_id,
-      customerTelegramId: senderId ?? chatId,
+      customerExternalId: String(senderId ?? chatId),
       customerUsername: senderUsername,
       customerDisplayName: senderFirstName,
       messageText: text,
@@ -1092,7 +1105,8 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
     chatId,
     token,
     task: () =>
-      generateTelegramAiReply(text, connection.user_id, {
+      generateAssistantReply(text, connection.user_id, {
+        channel: "telegram",
         handoffEnabled,
         history: session.turns,
       }),
@@ -1130,9 +1144,10 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
       return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
     }
     const conversation = await upsertConversationForCustomer({
+      channel: "telegram",
       connectionId: connection.id,
       userId: connection.user_id,
-      customerTelegramId: senderId ?? chatId,
+      customerExternalId: String(senderId ?? chatId),
       customerUsername: senderUsername,
       customerDisplayName: senderFirstName,
       messageText: text,

@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { generateTelegramAiReply } from "@/lib/ai/telegram-assistant";
+import { generateAssistantReply } from "@/lib/ai/assistant";
 import { markdownToTelegramHtml } from "@/lib/telegram/format";
 import type { ChatTurn } from "@/lib/ai/memory";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 // ---------------------------------------------------------------------------
 // The assistant preview on /dashboard/assistant.
 //
-// This deliberately calls `generateTelegramAiReply` — the exact function the
+// This deliberately calls `generateAssistantReply` — the exact function the
 // Telegram webhook uses — rather than reimplementing the pipeline. Everything
 // the customer would get, the owner gets: the same persona, retrieval,
 // thresholds from ai_global_settings, escalation tool, provider order, usage
@@ -114,7 +114,7 @@ export const POST = async (request: NextRequest) => {
 
   const handoffEnabled = settings?.human_handoff_enabled === true;
 
-  const result = await generateTelegramAiReply(question, user.id, {
+  const result = await generateAssistantReply(question, user.id, {
     handoffEnabled,
     history: parseHistory(body.history),
   });

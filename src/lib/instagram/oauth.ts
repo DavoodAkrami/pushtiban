@@ -20,14 +20,30 @@ const GRAPH_VERSION = "v23.0";
 const REQUEST_TIMEOUT_MS = 8_000;
 
 // instagram_business_basic is what keeps a long-lived token refreshable, so it
-// is not optional even though this phase only reads the profile.
-// instagram_business_manage_messages is requested now rather than when DM
-// handling ships, so businesses are not sent through a second consent screen
-// later.
+// is not optional even though the connection itself only reads the profile.
+// The other two are what the automations need: messages to answer a direct
+// message or send a private reply, comments to read comments and post public
+// replies under them.
 export const INSTAGRAM_SCOPES = [
   "instagram_business_basic",
   "instagram_business_manage_messages",
+  "instagram_business_manage_comments",
 ] as const;
+
+/** Granted scope required by everything on the comment side of the channel. */
+export const COMMENT_SCOPE = "instagram_business_manage_comments";
+
+/**
+ * Whether a stored connection was granted the comment permission.
+ *
+ * Accounts connected before comment automation shipped consented to a shorter
+ * list, and their token simply will not work for comments — Meta rejects the
+ * call rather than degrading. The `scopes` column exists so the dashboard can
+ * say "reconnect to turn comments on" instead of showing a rule that quietly
+ * never fires.
+ */
+export const hasCommentScope = (scopes: string | null | undefined) =>
+  (scopes ?? "").split(/[\s,]+/).includes(COMMENT_SCOPE);
 
 export type InstagramProfile = {
   userId: string;
