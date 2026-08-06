@@ -38,15 +38,15 @@ import { Select, type SelectOption } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import {
-  FLOW_BUTTON_LABEL_MAX_LENGTH,
   FLOW_BACK_BUTTON_LABEL_MAX_LENGTH,
-  FLOW_BUTTONS_PER_NODE_MAX,
   DEFAULT_FLOW_BACK_BUTTON_LABEL,
   DEFAULT_FLOW_KEYBOARD_ACTION,
-  FLOW_NODE_MESSAGE_MAX_LENGTH,
   FLOW_URL_MAX_LENGTH,
+  countRenderedButtons,
+  flowLimits,
   type AutomationFlowDetail,
   type FlowButtonActionType,
+  type FlowChannel,
   type FlowKeyboardAction,
 } from "@/lib/flows";
 import { cn, fa } from "@/lib/utils";
@@ -306,12 +306,14 @@ const nodeTypes = { conversation: ConversationNode };
 
 const ButtonEditor = ({
   button,
+  channel,
   node,
   nodes,
   onChange,
   onRemove,
 }: {
   button: DraftButton;
+  channel: FlowChannel;
   node: DraftNode;
   nodes: DraftNode[];
   onChange: (button: DraftButton) => void;
@@ -337,7 +339,7 @@ const ButtonEditor = ({
           onChange={(event) =>
             onChange({ ...button, label: event.target.value })
           }
-          maxLength={FLOW_BUTTON_LABEL_MAX_LENGTH}
+          maxLength={flowLimits(channel).buttonLabelMaxLength}
           className="min-w-0 flex-1"
         />
         <button
@@ -397,18 +399,26 @@ const ButtonEditor = ({
 };
 
 const NodeInspector = ({
+  channel,
   node,
   nodes,
   onChange,
   onRemove,
 }: {
+  channel: FlowChannel;
   node: DraftNode;
   nodes: DraftNode[];
   onChange: (node: DraftNode) => void;
   onRemove: () => void;
 }) => {
+  const limits = flowLimits(channel);
+  // On Instagram the back button is one of the three buttons Meta allows, so it
+  // is counted here rather than being a free extra row like Telegram's.
+  const buttonsSpent = countRenderedButtons(channel, node);
+  const buttonsFull = buttonsSpent >= limits.buttonsPerNodeMax;
+
   const addButton = () => {
-    if (node.buttons.length >= FLOW_BUTTONS_PER_NODE_MAX) return;
+    if (buttonsFull) return;
     onChange({
       ...node,
       buttons: [
@@ -479,7 +489,12 @@ const NodeInspector = ({
           onChange={(event) =>
             onChange({ ...node, messageText: event.target.value })
           }
-          maxLength={FLOW_NODE_MESSAGE_MAX_LENGTH}
+          maxLength={limits.messageMaxLength}
+          hint={
+            channel === "instagram"
+              ? "اینستاگرام روی پیام دکمه‌دار حداکثر ۶۴۰ نویسه را نمایش می‌دهد."
+              : undefined
+          }
           showCount
           rows={6}
         />
@@ -499,35 +514,43 @@ const NodeInspector = ({
           </p>
 
           <div className="mt-4 space-y-4">
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <label
-                  htmlFor={`flow-node-replace-${node.localId}`}
-                  className="text-sm font-medium"
-                >
-                  جایگزینی همین پیام
-                </label>
-                <p
-                  id={`flow-node-replace-description-${node.localId}`}
-                  className="mt-1 text-xs leading-5 text-muted"
-                >
-                  با انتخاب دکمه، متن فعلی به پیام مقصد تبدیل می‌شود.
-                </p>
+            {/* Instagram cannot rewrite a message it has already sent, so the
+                option is absent there rather than present and inert. */}
+            {limits.supportsReplace && (
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <label
+                    htmlFor={`flow-node-replace-${node.localId}`}
+                    className="text-sm font-medium"
+                  >
+                    جایگزینی همین پیام
+                  </label>
+                  <p
+                    id={`flow-node-replace-description-${node.localId}`}
+                    className="mt-1 text-xs leading-5 text-muted"
+                  >
+                    با انتخاب دکمه، متن فعلی به پیام مقصد تبدیل می‌شود.
+                  </p>
+                </div>
+                <Switch
+                  id={`flow-node-replace-${node.localId}`}
+                  checked={node.replaceOnButtonClick}
+                  onChange={(event) =>
+                    onChange({
+                      ...node,
+                      replaceOnButtonClick: event.target.checked,
+                    })
+                  }
+                  aria-describedby={`flow-node-replace-description-${node.localId}`}
+                />
               </div>
-              <Switch
-                id={`flow-node-replace-${node.localId}`}
-                checked={node.replaceOnButtonClick}
-                onChange={(event) =>
-                  onChange({
-                    ...node,
-                    replaceOnButtonClick: event.target.checked,
-                  })
-                }
-                aria-describedby={`flow-node-replace-description-${node.localId}`}
-              />
-            </div>
+            )}
 
-            <div className="border-t border-line pt-4">
+            <div
+              className={
+                limits.supportsReplace ? "border-t border-line pt-4" : ""
+              }
+            >
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
                   <label
@@ -540,7 +563,9 @@ const NodeInspector = ({
                     id={`flow-node-back-description-${node.localId}`}
                     className="mt-1 text-xs leading-5 text-muted"
                   >
-                    وقتی کاربر از پیام دیگری به اینجا برسد، می‌تواند برگردد.
+                    {channel === "instagram"
+                      ? "وقتی مشتری از پیام دیگری به اینجا برسد، می‌تواند برگردد. در اینستاگرام این دکمه یکی از سه دکمهٔ پیام است."
+                      : "وقتی کاربر از پیام دیگری به اینجا برسد، می‌تواند برگردد."}
                   </p>
                 </div>
                 <Switch
@@ -565,32 +590,40 @@ const NodeInspector = ({
                   onChange={(event) =>
                     onChange({ ...node, backButtonLabel: event.target.value })
                   }
-                  maxLength={FLOW_BACK_BUTTON_LABEL_MAX_LENGTH}
+                  maxLength={Math.min(
+                    FLOW_BACK_BUTTON_LABEL_MAX_LENGTH,
+                    limits.buttonLabelMaxLength
+                  )}
                   className="mt-3"
                 />
               )}
             </div>
 
-            <div className="border-t border-line pt-4">
-              <Select
-                id={`flow-node-keyboard-${node.localId}`}
-                label="منوی ربات"
-                options={keyboardActionOptions}
-                value={node.keyboardAction}
-                onChange={(value) =>
-                  onChange({
-                    ...node,
-                    keyboardAction: value as FlowKeyboardAction,
-                  })
-                }
-                disabled={keyboardLocked}
-                hint={
-                  keyboardLocked
-                    ? keyboardLockReason
-                    : "منوی دکمه‌ای پایین صفحهٔ چت را در این پیام نشان بدهید یا بردارید."
-                }
-              />
-            </div>
+            {/* There is no bot-wide keyboard on Instagram for a message to
+                show or take away; the DM menu is account-wide and lives on
+                its own page. */}
+            {limits.supportsKeyboardAction && (
+              <div className="border-t border-line pt-4">
+                <Select
+                  id={`flow-node-keyboard-${node.localId}`}
+                  label="منوی ربات"
+                  options={keyboardActionOptions}
+                  value={node.keyboardAction}
+                  onChange={(value) =>
+                    onChange({
+                      ...node,
+                      keyboardAction: value as FlowKeyboardAction,
+                    })
+                  }
+                  disabled={keyboardLocked}
+                  hint={
+                    keyboardLocked
+                      ? keyboardLockReason
+                      : "منوی دکمه‌ای پایین صفحهٔ چت را در این پیام نشان بدهید یا بردارید."
+                  }
+                />
+              </div>
+            )}
           </div>
         </section>
 
@@ -604,7 +637,10 @@ const NodeInspector = ({
                 دکمه‌ها
               </h2>
               <p className="mt-1 text-xs text-muted">
-                {fa(node.buttons.length)} از {fa(FLOW_BUTTONS_PER_NODE_MAX)}
+                {fa(buttonsSpent)} از {fa(limits.buttonsPerNodeMax)}
+                {channel === "instagram" && node.backButtonEnabled
+                  ? " (با دکمهٔ بازگشت)"
+                  : ""}
               </p>
             </div>
             <Button
@@ -612,7 +648,7 @@ const NodeInspector = ({
               size="sm"
               startIcon={<Plus className="size-3.5" />}
               onClick={addButton}
-              disabled={node.buttons.length >= FLOW_BUTTONS_PER_NODE_MAX}
+              disabled={buttonsFull}
             >
               افزودن دکمه
             </Button>
@@ -624,6 +660,7 @@ const NodeInspector = ({
                 <ButtonEditor
                   key={button.localId}
                   button={button}
+                  channel={channel}
                   node={node}
                   nodes={nodes}
                   onChange={(updated) =>
@@ -657,19 +694,32 @@ const NodeInspector = ({
   );
 };
 
-const validateDraft = (nodes: DraftNode[]) => {
+const validateDraft = (nodes: DraftNode[], channel: FlowChannel) => {
   if (nodes.length === 0 || nodes.filter((node) => node.isRoot).length !== 1) {
     return "فلو باید دقیقاً یک پیام شروع داشته باشد.";
   }
 
+  const limits = flowLimits(channel);
+
   for (const node of nodes) {
     if (!node.messageText.trim()) return "متن همه پیام‌ها را بنویسید.";
+    if (node.messageText.trim().length > limits.messageMaxLength) {
+      return `متن پیام‌ها حداکثر ${fa(limits.messageMaxLength)} نویسه است.`;
+    }
     if (node.backButtonEnabled && !node.backButtonLabel.trim()) {
       return "متن دکمه بازگشت را بنویسید.";
+    }
+    if (countRenderedButtons(channel, node) > limits.buttonsPerNodeMax) {
+      return channel === "instagram"
+        ? "اینستاگرام روی هر پیام حداکثر ۳ دکمه نمایش می‌دهد؛ دکمهٔ بازگشت هم یکی از آن‌هاست."
+        : `هر پیام حداکثر ${fa(limits.buttonsPerNodeMax)} دکمه می‌تواند داشته باشد.`;
     }
 
     for (const button of node.buttons) {
       if (!button.label.trim()) return "برای همه دکمه‌ها عنوان بنویسید.";
+      if (button.label.trim().length > limits.buttonLabelMaxLength) {
+        return `عنوان دکمه‌ها حداکثر ${fa(limits.buttonLabelMaxLength)} نویسه است.`;
+      }
       if (button.actionType === "node" && !button.childLocalId) {
         return `پیام مقصد دکمه «${button.label.trim()}» را انتخاب کنید.`;
       }
@@ -690,6 +740,7 @@ const validateDraft = (nodes: DraftNode[]) => {
 };
 
 export const FlowBuilder = ({ flow }: { flow: AutomationFlowDetail }) => {
+  const channel = flow.channel;
   const router = useRouter();
   const dispatch = useAppDispatch();
   const { resolvedTheme } = useTheme();
@@ -827,7 +878,7 @@ export const FlowBuilder = ({ flow }: { flow: AutomationFlowDetail }) => {
   );
 
   const save = async () => {
-    const validationError = validateDraft(nodes);
+    const validationError = validateDraft(nodes, channel);
     if (validationError) {
       toast({ title: "فلو آماده ذخیره نیست", description: validationError, variant: "error" });
       return;
@@ -868,7 +919,9 @@ export const FlowBuilder = ({ flow }: { flow: AutomationFlowDetail }) => {
         <div className="min-w-0">
           <button
             type="button"
-            onClick={() => router.push("/dashboard/automation")}
+            onClick={() =>
+              router.push(`/dashboard/automation?channel=${channel}`)
+            }
             className="flex items-center gap-2 rounded-full text-sm text-muted transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
           >
             <ArrowRight className="size-4" aria-hidden />
@@ -886,6 +939,7 @@ export const FlowBuilder = ({ flow }: { flow: AutomationFlowDetail }) => {
                 {flow.triggerType === "command"
                   ? `فرمان ${flow.triggerKeyword}`
                   : `کلیدواژه «${flow.triggerKeyword}»`}
+                {channel === "instagram" ? " — دایرکت اینستاگرام" : ""}
               </p>
             </div>
           </div>
@@ -966,6 +1020,7 @@ export const FlowBuilder = ({ flow }: { flow: AutomationFlowDetail }) => {
         {selectedNode ? (
           <NodeInspector
             key={selectedNode.localId}
+            channel={channel}
             node={selectedNode}
             nodes={nodes}
             onChange={updateNode}

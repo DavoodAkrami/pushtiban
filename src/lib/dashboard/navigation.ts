@@ -229,6 +229,20 @@ export const DASHBOARD_ROUTES: DashboardRoute[] = [
       "direct",
     ],
   },
+  {
+    href: "/dashboard/instagram/menu",
+    title: "منوی دایرکت",
+    icon: TbBrandInstagram,
+    keywords: [
+      "اینستاگرام",
+      "دایرکت",
+      "منو",
+      "ice breaker",
+      "persistent menu",
+      "instagram",
+      "direct",
+    ],
+  },
 
   {
     href: "/dashboard/automation",

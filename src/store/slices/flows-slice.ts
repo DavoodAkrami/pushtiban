@@ -1,5 +1,9 @@
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
-import type { AutomationFlow, AutomationFlowDetail } from "@/lib/flows";
+import type {
+  AutomationFlow,
+  AutomationFlowDetail,
+  FlowChannel,
+} from "@/lib/flows";
 
 type LoadStatus = "idle" | "loading" | "succeeded" | "failed";
 
@@ -10,6 +14,12 @@ type FlowsState = {
   status: LoadStatus;
   error: string | null;
   setupRequired: boolean;
+  /**
+   * The channel the loaded list belongs to. A panel switching channels reads
+   * this to tell "this channel has no flows" from "the other channel's flows
+   * are still on screen".
+   */
+  channel: FlowChannel | null;
   detail: AutomationFlowDetail | null;
   detailStatus: LoadStatus;
   detailError: string | null;
@@ -35,6 +45,7 @@ const initialState: FlowsState = {
   status: "idle",
   error: null,
   setupRequired: false,
+  channel: null,
   detail: null,
   detailStatus: "idle",
   detailError: null,
@@ -50,14 +61,18 @@ const responseError = async (response: Response): Promise<FlowRequestError> => {
 };
 
 export const loadFlows = createAsyncThunk<
-  { flows: AutomationFlow[] },
-  void,
+  { channel: FlowChannel; flows: AutomationFlow[] },
+  FlowChannel | void,
   { rejectValue: FlowRequestError }
->("flows/load", async (_, { rejectWithValue }) => {
+>("flows/load", async (requested, { rejectWithValue }) => {
+  const channel: FlowChannel = requested || "telegram";
   try {
-    const response = await fetch("/api/flows", { cache: "no-store" });
+    const response = await fetch(`/api/flows?channel=${channel}`, {
+      cache: "no-store",
+    });
     if (!response.ok) return rejectWithValue(await responseError(response));
-    return (await response.json()) as { flows: AutomationFlow[] };
+    const data = (await response.json()) as { flows: AutomationFlow[] };
+    return { channel, flows: data.flows };
   } catch {
     return rejectWithValue({ message: "اتصال برقرار نشد؛ اینترنت را بررسی کنید." });
   }
@@ -79,7 +94,7 @@ export const loadFlowDetail = createAsyncThunk<
 
 export const createFlow = createAsyncThunk<
   CreateFlowResponse,
-  { triggerType: "keyword" | "command"; triggerKeyword: string; name: string; commandDescription?: string; rootMessage: string },
+  { channel: FlowChannel; triggerType: "keyword" | "command"; triggerKeyword: string; name: string; commandDescription?: string; rootMessage: string },
   { rejectValue: FlowRequestError }
 >("flows/create", async (input, { rejectWithValue }) => {
   try {
@@ -142,6 +157,7 @@ const flowsSlice = createSlice({
       .addCase(loadFlows.fulfilled, (state, action) => {
         state.status = "succeeded";
         state.items = action.payload.flows;
+        state.channel = action.payload.channel;
       })
       .addCase(loadFlows.rejected, (state, action) => {
         state.status = "failed";

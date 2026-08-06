@@ -7,14 +7,20 @@ import {
   resolveNotifierBot,
 } from "@/lib/ai/inbox";
 import { loadChatSession, recordChatTurns } from "@/lib/ai/memory";
+import { normalizeKeyword } from "@/lib/automations";
 import { decryptSecret } from "@/lib/crypto/secret-box";
 import {
   replyToComment,
+  sendButtonTemplate,
   sendDirectMessage,
   sendPrivateReply,
   withInstagramTyping,
+  type InstagramTemplateButton,
 } from "@/lib/instagram/api";
 import {
+  buildFlowPayload,
+  FLOW_END_PAYLOAD,
+  parseFlowPayload,
   parseMenuPayload,
   selectMatchingRule,
   type InstagramMatchType,
@@ -187,6 +193,182 @@ const claimEvent = async (
   }
 };
 
+// ---- Flows -----------------------------------------------------------------
+//
+// The same automation_flows tree the Telegram webhook walks, delivered with
+// what Instagram has instead of an inline keyboard: a button template.
+//
+// Three things Telegram does that Instagram cannot, and how each is answered:
+//   - Edit a message in place (`replace_on_button_click`). Instagram cannot, so
+//     every step is a new message; the API stores the flag off for Instagram
+//     flows rather than accepting it and ignoring it here.
+//   - Show or remove a reply keyboard (`keyboard_action`). There is no such
+//     keyboard; the DM menu is account-wide and lives on its own page.
+//   - Carry the trail in a callback query. A postback is all we get, so the
+//     node we came from travels inside the payload.
+
+type FlowButtonRow = {
+  label: string;
+  action_type: "node" | "url" | "end";
+  next_node_id: string | null;
+  url: string | null;
+  position: number;
+};
+
+type FlowNodeRow = {
+  id: string;
+  flow_id: string;
+  message_text: string;
+  back_button_enabled: boolean;
+  back_button_label: string;
+  automation_flow_buttons: FlowButtonRow[];
+};
+
+const FLOW_NODE_SELECT = `
+  id, flow_id, message_text, back_button_enabled, back_button_label,
+  automation_flow_buttons:automation_flow_buttons!automation_flow_buttons_node_id_fkey (
+    label, action_type, next_node_id, url, position
+  )
+`;
+
+/**
+ * Turn a node's buttons into Instagram's three.
+ *
+ * The order is the owner's, and the back button comes last — it is the one the
+ * customer looks for when the others are not what they wanted. Meta takes the
+ * first three and rejects nothing, so a node authored within the limit (which
+ * the editor and the API both enforce) arrives whole.
+ */
+const buildFlowButtons = (
+  node: FlowNodeRow,
+  previousNodeId?: string | null
+): InstagramTemplateButton[] => {
+  const buttons: InstagramTemplateButton[] = [];
+
+  for (const button of [...(node.automation_flow_buttons ?? [])].sort(
+    (first, second) => first.position - second.position
+  )) {
+    if (button.action_type === "url" && button.url) {
+      buttons.push({ type: "web_url", title: button.label, url: button.url });
+    } else if (button.action_type === "node" && button.next_node_id) {
+      buttons.push({
+        type: "postback",
+        title: button.label,
+        payload: buildFlowPayload(button.next_node_id, node.id),
+      });
+    } else if (button.action_type === "end") {
+      buttons.push({
+        type: "postback",
+        title: button.label,
+        payload: FLOW_END_PAYLOAD,
+      });
+    }
+  }
+
+  if (node.back_button_enabled && previousNodeId) {
+    buttons.push({
+      type: "postback",
+      title: node.back_button_label,
+      payload: buildFlowPayload(previousNodeId, node.id),
+    });
+  }
+
+  return buttons;
+};
+
+const deliverFlowNode = async ({
+  connection,
+  node,
+  previousNodeId,
+  recipientId,
+  token,
+}: {
+  connection: Connection;
+  node: FlowNodeRow;
+  previousNodeId?: string | null;
+  recipientId: string;
+  token: string;
+}) => {
+  const buttons = buildFlowButtons(node, previousNodeId);
+  const igUserId = connection.instagram_user_id;
+
+  return buttons.length
+    ? sendButtonTemplate({
+        buttons,
+        igUserId,
+        recipientId,
+        text: node.message_text,
+        token,
+      })
+    : sendDirectMessage({
+        igUserId,
+        recipientId,
+        text: node.message_text,
+        token,
+      });
+};
+
+/**
+ * The flow a plain message starts, or null.
+ *
+ * Matching is exact on the normalized keyword, exactly as on Telegram: a flow
+ * on «سلام» that fired on every message containing a greeting would swallow the
+ * assistant, and the owner has keyword rules for the looser case.
+ */
+const findFlowRootNode = async (
+  connectionId: string,
+  text: string
+): Promise<FlowNodeRow | null> => {
+  const keywordNormalized = normalizeKeyword(text);
+  if (!keywordNormalized) return null;
+
+  const admin = createAdminClient();
+  const { data: flow } = await admin
+    .from("automation_flows")
+    .select("id")
+    .eq("instagram_connection_id", connectionId)
+    .eq("trigger_keyword_normalized", keywordNormalized)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (!flow) return null;
+
+  const { data } = await admin
+    .from("automation_flow_nodes")
+    .select(FLOW_NODE_SELECT)
+    .eq("flow_id", (flow as { id: string }).id)
+    .eq("is_root", true)
+    .maybeSingle();
+
+  return (data as FlowNodeRow | null) ?? null;
+};
+
+/**
+ * The node behind a tapped flow button.
+ *
+ * The join is the authorization: a payload is a string the customer's client
+ * sent back to us, so the node is only ever loaded when its flow belongs to
+ * this connection. Without it a crafted postback could read any business's
+ * flow.
+ */
+const loadFlowNode = async (
+  connectionId: string,
+  nodeId: string
+): Promise<FlowNodeRow | null> => {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("automation_flow_nodes")
+    .select(
+      `${FLOW_NODE_SELECT}, automation_flows!inner(instagram_connection_id, is_active)`
+    )
+    .eq("id", nodeId)
+    .eq("automation_flows.instagram_connection_id", connectionId)
+    .eq("automation_flows.is_active", true)
+    .maybeSingle();
+
+  return (data as FlowNodeRow | null) ?? null;
+};
+
 // ---- Rule lookup -----------------------------------------------------------
 
 const loadRules = async (
@@ -264,6 +446,25 @@ const handleMessaging = async ({
       return;
     }
 
+    // A flow button. `end` closes the path with nothing further to send, the
+    // same silence Telegram's flow_end callback leaves behind.
+    if (payload === FLOW_END_PAYLOAD) return;
+
+    const flowStep = parseFlowPayload(payload);
+    if (flowStep) {
+      const node = await loadFlowNode(connection.id, flowStep.targetNodeId);
+      if (node) {
+        await deliverFlowNode({
+          connection,
+          node,
+          previousNodeId: flowStep.sourceNodeId,
+          recipientId: senderId,
+          token,
+        });
+      }
+      return;
+    }
+
     const itemId = parseMenuPayload(payload);
     if (!itemId) return;
 
@@ -319,6 +520,21 @@ const handleMessaging = async ({
     // through to keywords and the assistant. A bare mention has nothing to fall
     // through with.
     if (isStoryMention && !text) return;
+  }
+
+  // ---- Flows --------------------------------------------------------------
+  // Before prepared replies and before the assistant, which is the order the
+  // Telegram webhook uses and the order the «مسیر پاسخ» strip on the overview
+  // promises: flows → keywords → assistant → human.
+  const flowRoot = await findFlowRootNode(connection.id, text);
+  if (flowRoot) {
+    await deliverFlowNode({
+      connection,
+      node: flowRoot,
+      recipientId: senderId,
+      token,
+    });
+    return;
   }
 
   // ---- Keyword rules ------------------------------------------------------

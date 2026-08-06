@@ -22,7 +22,18 @@ export const ICE_BREAKERS_MAX_COUNT = 4;
 /** Persistent menu entries we allow; Meta's own ceiling is higher but unusable. */
 export const DM_MENU_MAX_COUNT = 5;
 
+/** An ice breaker question, as Meta stores it. */
 export const MENU_TITLE_MAX_LENGTH = 80;
+
+/**
+ * A persistent menu entry's label. Meta truncates these at 30 characters when
+ * the profile is pushed, so the editor stops there too — a label the owner can
+ * see in full is the point of the menu.
+ */
+export const DM_MENU_TITLE_MAX_LENGTH = 30;
+
+export const menuTitleMaxLength = (kind: "ice_breaker" | "menu") =>
+  kind === "menu" ? DM_MENU_TITLE_MAX_LENGTH : MENU_TITLE_MAX_LENGTH;
 
 export type InstagramTriggerType =
   | "comment"
@@ -184,3 +195,39 @@ export const parseMenuPayload = (payload: string): string | null =>
   payload.startsWith(MENU_PAYLOAD_PREFIX)
     ? payload.slice(MENU_PAYLOAD_PREFIX.length) || null
     : null;
+
+// ---- Flow payloads ---------------------------------------------------------
+
+const FLOW_PAYLOAD_PREFIX = "pushtiban_flow:";
+
+/** A flow button whose only job is to close the path. */
+export const FLOW_END_PAYLOAD = "pushtiban_flow_end";
+
+/**
+ * The payload behind a flow button.
+ *
+ * It carries the node being opened *and* the node it was opened from, because
+ * that is the only way the next message can offer a back button: Instagram
+ * gives us a postback and nothing else — no message to read, no history to walk
+ * — so the trail has to travel in the payload. The Telegram webhook encodes the
+ * same pair into its callback data, for the same reason.
+ *
+ * Meta allows 1000 characters here, and two UUIDs spend 73.
+ */
+export const buildFlowPayload = (targetNodeId: string, sourceNodeId?: string) =>
+  `${FLOW_PAYLOAD_PREFIX}${targetNodeId}${
+    sourceNodeId ? `:${sourceNodeId}` : ""
+  }`;
+
+export const parseFlowPayload = (
+  payload: string
+): { targetNodeId: string; sourceNodeId: string | null } | null => {
+  if (!payload.startsWith(FLOW_PAYLOAD_PREFIX)) return null;
+
+  const [targetNodeId, sourceNodeId, extra] = payload
+    .slice(FLOW_PAYLOAD_PREFIX.length)
+    .split(":");
+  if (!targetNodeId || extra) return null;
+
+  return { targetNodeId, sourceNodeId: sourceNodeId || null };
+};

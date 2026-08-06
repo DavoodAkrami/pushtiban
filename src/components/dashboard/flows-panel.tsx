@@ -11,8 +11,14 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
+import { TbBrandInstagram } from "react-icons/tb";
 import { luxe } from "@/components/motion/reveal";
 import { BotRequiredNotice } from "@/components/dashboard/bot-required-notice";
+import {
+  ChannelTabs,
+  useActiveChannel,
+} from "@/components/dashboard/channel-tabs";
+import { InstagramRequiredNotice } from "@/components/dashboard/instagram/notices";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,12 +49,13 @@ import {
 } from "@/lib/automations";
 import {
   FLOW_NAME_MAX_LENGTH,
-  FLOW_NODE_MESSAGE_MAX_LENGTH,
+  flowLimits,
   type AutomationFlow,
   type AutomationFlowDetail,
+  type FlowChannel,
 } from "@/lib/flows";
 import { fa } from "@/lib/utils";
-import { TELEGRAM_CONNECTION_CHANGED_EVENT } from "@/lib/settings-events";
+import { CHANNEL_CONNECTION_CHANGED_EVENT } from "@/lib/settings-events";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   createFlow,
@@ -94,11 +101,14 @@ const errorMessage = (error: unknown) => {
 // ─── Flow editor modal ────────────────────────────────────────────────────────
 
 const FlowEditorModal = ({
+  channel,
   flow,
   open,
   onOpenChange,
   onCreated,
 }: {
+  /** The channel a new flow is created on; an edited flow keeps its own. */
+  channel: FlowChannel;
   flow: AutomationFlowDetail | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -106,8 +116,16 @@ const FlowEditorModal = ({
 }) => {
   const dispatch = useAppDispatch();
   const { toast } = useToast();
-  const [triggerType, setTriggerType] = React.useState<"keyword" | "command">("command");
-  const [keyword, setKeyword] = React.useState("/");
+  const flowChannel = flow?.channel ?? channel;
+  const limits = flowLimits(flowChannel);
+  // Instagram has no command menu and no way to type a slash command, so there
+  // is nothing to choose between: every Instagram flow starts on a keyword.
+  const [triggerType, setTriggerType] = React.useState<"keyword" | "command">(
+    limits.supportsCommands ? "command" : "keyword"
+  );
+  const [keyword, setKeyword] = React.useState(
+    limits.supportsCommands ? "/" : ""
+  );
   const [commandDescription, setCommandDescription] = React.useState("");
   const [name, setName] = React.useState("");
   const [rootMessage, setRootMessage] = React.useState("");
@@ -117,15 +135,18 @@ const FlowEditorModal = ({
 
   React.useEffect(() => {
     if (!open) return;
-    setTriggerType(flow?.triggerType ?? "command");
-    setKeyword(flow?.triggerKeyword ?? "/");
+    const fallbackTrigger = limits.supportsCommands ? "command" : "keyword";
+    setTriggerType(flow?.triggerType ?? fallbackTrigger);
+    setKeyword(
+      flow?.triggerKeyword ?? (limits.supportsCommands ? "/" : "")
+    );
     setCommandDescription(flow?.commandDescription ?? "");
     setName(flow?.name ?? "");
     setRootMessage(
       flow?.nodes.find((node) => node.isRoot)?.messageText ?? ""
     );
     setErrors({});
-  }, [flow, open]);
+  }, [flow, limits.supportsCommands, open]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -155,8 +176,8 @@ const FlowEditorModal = ({
       errs.name = "نام فلو حداکثر ۱۰۰ نویسه است.";
 
     if (!rootMessage.trim()) errs.rootMessage = "متن پیام اول را بنویسید.";
-    else if (rootMessage.trim().length > FLOW_NODE_MESSAGE_MAX_LENGTH)
-      errs.rootMessage = "متن پیام حداکثر ۴۰۹۶ نویسه است.";
+    else if (rootMessage.trim().length > limits.messageMaxLength)
+      errs.rootMessage = `متن پیام حداکثر ${fa(limits.messageMaxLength)} نویسه است.`;
 
     if (Object.keys(errs).length > 0) { setErrors(errs); return; }
 
@@ -199,6 +220,7 @@ const FlowEditorModal = ({
 
     const result = await dispatch(
       createFlow({
+        channel: flowChannel,
         triggerType,
         triggerKeyword: cleanedKeyword,
         name: name.trim(),
@@ -228,7 +250,9 @@ const FlowEditorModal = ({
           <ModalDescription>
             {editing
               ? "نام، محرک و پیام شروع این فلو را ویرایش کنید."
-              : "یک مکالمه تعاملی با دکمه و پیام‌های زنجیره‌ای بسازید."}
+              : flowChannel === "instagram"
+                ? "یک مکالمه تعاملی برای دایرکت اینستاگرام بسازید؛ با کلیدواژه شروع می‌شود و هر پیام تا سه دکمه دارد."
+                : "یک مکالمه تعاملی با دکمه و پیام‌های زنجیره‌ای بسازید."}
           </ModalDescription>
         </ModalHeader>
         <form onSubmit={(e) => void submit(e)} noValidate className="flex min-h-0 flex-1 flex-col">
@@ -245,19 +269,21 @@ const FlowEditorModal = ({
               disabled={saving}
               required
             />
-            <Select
-              id="flow-trigger-type"
-              label="نوع محرک"
-              options={triggerOptions}
-              value={triggerType}
-              onChange={(v) => {
-                const t = v as "keyword" | "command";
-                setTriggerType(t);
-                setKeyword(t === "command" ? "/" : "");
-                setErrors({});
-              }}
-              disabled={saving}
-            />
+            {limits.supportsCommands && (
+              <Select
+                id="flow-trigger-type"
+                label="نوع محرک"
+                options={triggerOptions}
+                value={triggerType}
+                onChange={(v) => {
+                  const t = v as "keyword" | "command";
+                  setTriggerType(t);
+                  setKeyword(t === "command" ? "/" : "");
+                  setErrors({});
+                }}
+                disabled={saving}
+              />
+            )}
             <Input
               id="flow-keyword"
               dir="rtl"
@@ -297,12 +323,16 @@ const FlowEditorModal = ({
               id="flow-root-message"
               dir="rtl"
               label="متن پیام اول"
-              hint="این پیام وقتی کاربر محرک را ارسال کند نمایش داده می‌شود."
+              hint={
+                flowChannel === "instagram"
+                  ? "این پیام وقتی مشتری کلیدواژه را در دایرکت بفرستد ارسال می‌شود. اینستاگرام تا ۶۴۰ نویسه را روی پیام دکمه‌دار می‌پذیرد."
+                  : "این پیام وقتی کاربر محرک را ارسال کند نمایش داده می‌شود."
+              }
               placeholder="سلام! چطور می‌تونم کمکت کنم؟"
               value={rootMessage}
               onChange={(e) => { setRootMessage(e.target.value); if (errors.rootMessage) setErrors((p) => ({ ...p, rootMessage: "" })); }}
               error={errors.rootMessage}
-              maxLength={FLOW_NODE_MESSAGE_MAX_LENGTH}
+              maxLength={limits.messageMaxLength}
               showCount
               rows={4}
               disabled={saving}
@@ -468,6 +498,7 @@ export const FlowsPanel = () => {
   const dispatch = useAppDispatch();
   const { toast } = useToast();
   const {
+    channel: loadedChannel,
     detail,
     items,
     status: flowsStatus,
@@ -486,39 +517,85 @@ export const FlowsPanel = () => {
   const [deletingFlow, setDeletingFlow] = React.useState<AutomationFlow | null>(null);
   const [deleting, setDeleting] = React.useState(false);
   const [busyFlowId, setBusyFlowId] = React.useState<string | null>(null);
+  const [instagramUsername, setInstagramUsername] = React.useState<string | null>(
+    null
+  );
+  const [instagramChecked, setInstagramChecked] = React.useState(false);
 
-  const loading =
+  // Which channel's flows are on screen. A search param rather than useState, so
+  // a channel can be linked to and survives a refresh — the same choice the
+  // keyword panel makes.
+  const activeChannel = useActiveChannel("telegram");
+  const isInstagram = activeChannel === "instagram";
+  const instagramConnected = Boolean(instagramUsername);
+  const connected = isInstagram ? instagramConnected : Boolean(bot);
+
+  // The list belongs to the channel it was fetched for. Until the two agree the
+  // panel is still loading, not empty.
+  const listReady = flowsStatus === "succeeded" && loadedChannel === activeChannel;
+  // A failed load is not a pending one: the error alert answers for it, and a
+  // skeleton that never resolves would say nothing.
+  const listPending =
     flowsStatus === "idle" ||
     flowsStatus === "loading" ||
+    (flowsStatus === "succeeded" && loadedChannel !== activeChannel);
+  const loading =
+    listPending ||
     connectionStatus === "idle" ||
-    connectionStatus === "loading";
+    connectionStatus === "loading" ||
+    (isInstagram && !instagramChecked);
   const canCreate =
-    flowsStatus === "succeeded" &&
-    connectionStatus === "succeeded" &&
-    Boolean(bot) &&
+    listReady &&
+    connected &&
     !flowsSetupRequired &&
-    !connectionSetupRequired;
+    (isInstagram || !connectionSetupRequired);
+
+  const refreshInstagram = React.useCallback(async () => {
+    try {
+      const response = await fetch("/api/instagram/status", {
+        cache: "no-store",
+      });
+      if (response.ok) {
+        const data = (await response.json()) as {
+          account?: { username?: string } | null;
+        };
+        setInstagramUsername(data.account?.username ?? null);
+      }
+    } catch {
+      // Leaves the chip disconnected, which is the safe reading of silence.
+    } finally {
+      setInstagramChecked(true);
+    }
+  }, []);
 
   React.useEffect(() => {
-    if (flowsStatus === "idle") void dispatch(loadFlows());
+    void dispatch(loadFlows(activeChannel));
+  }, [activeChannel, dispatch]);
+
+  React.useEffect(() => {
     if (connectionStatus === "idle") void dispatch(loadAutomations());
-  }, [connectionStatus, dispatch, flowsStatus]);
+  }, [connectionStatus, dispatch]);
+
+  React.useEffect(() => {
+    void refreshInstagram();
+  }, [refreshInstagram]);
 
   React.useEffect(() => {
     const refreshConnection = () => {
-      void dispatch(loadFlows());
+      void dispatch(loadFlows(activeChannel));
       void dispatch(loadAutomations());
+      void refreshInstagram();
     };
     window.addEventListener(
-      TELEGRAM_CONNECTION_CHANGED_EVENT,
+      CHANNEL_CONNECTION_CHANGED_EVENT,
       refreshConnection
     );
     return () =>
       window.removeEventListener(
-        TELEGRAM_CONNECTION_CHANGED_EVENT,
+        CHANNEL_CONNECTION_CHANGED_EVENT,
         refreshConnection
       );
-  }, [dispatch]);
+  }, [activeChannel, dispatch, refreshInstagram]);
 
   const openEdit = async (flow: AutomationFlow) => {
     setBusyFlowId(flow.id);
@@ -570,8 +647,9 @@ export const FlowsPanel = () => {
         <div>
           <h1 className="text-2xl font-black">فلوها</h1>
           <p className="mt-2 max-w-2xl text-sm leading-7 text-muted">
-            مکالمه‌های چندمرحله‌ای ربات را روی یک بوم دیداری بسازید و هر دکمه
-            را به پیام بعدی، لینک یا پایان مسیر متصل کنید.
+            {isInstagram
+              ? "مکالمه‌های چندمرحله‌ای دایرکت اینستاگرام را روی یک بوم دیداری بسازید؛ هر پیام تا سه دکمه دارد و هر دکمه به پیام بعدی، لینک یا پایان مسیر می‌رود."
+              : "مکالمه‌های چندمرحله‌ای ربات را روی یک بوم دیداری بسازید و هر دکمه را به پیام بعدی، لینک یا پایان مسیر متصل کنید."}
           </p>
         </div>
         <Button
@@ -585,8 +663,17 @@ export const FlowsPanel = () => {
         </Button>
       </header>
 
+      <ChannelTabs
+        active={activeChannel}
+        className="mt-6"
+        availability={{
+          telegram: { connected: Boolean(bot) },
+          instagram: { connected: instagramConnected },
+        }}
+      />
+
       <div className="mt-8 space-y-5">
-        {(flowsSetupRequired || connectionSetupRequired) && (
+        {(flowsSetupRequired || (!isInstagram && connectionSetupRequired)) && (
           <Alert
             variant="warning"
             title="راه‌اندازی فلوها کامل نشده است"
@@ -601,7 +688,7 @@ export const FlowsPanel = () => {
               variant="link"
               className="mt-2"
               onClick={() => {
-                void dispatch(loadFlows());
+                void dispatch(loadFlows(activeChannel));
                 void dispatch(loadAutomations());
               }}
             >
@@ -620,14 +707,14 @@ export const FlowsPanel = () => {
               type="button"
               variant="link"
               className="mt-2"
-              onClick={() => void dispatch(loadFlows())}
+              onClick={() => void dispatch(loadFlows(activeChannel))}
             >
               تلاش دوباره
             </Button>
           </Alert>
         )}
 
-        {!connectionSetupRequired && connectionStatus === "failed" && (
+        {!isInstagram && !connectionSetupRequired && connectionStatus === "failed" && (
           <Alert
             variant="error"
             title="وضعیت ربات بررسی نشد"
@@ -647,26 +734,35 @@ export const FlowsPanel = () => {
           </Alert>
         )}
 
-        {!loading && connectionStatus === "succeeded" && !bot && (
-          <BotRequiredNotice />
-        )}
+        {!loading &&
+          !connected &&
+          (isInstagram ? <InstagramRequiredNotice /> : <BotRequiredNotice />)}
 
-        {bot && connectionStatus === "succeeded" && (
+        {connected && (
           <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface/30 px-4 py-3 sm:flex-row sm:items-center">
             <span className="flex min-w-0 items-center gap-3">
-              <Icon icon={GitBranch} tile size="xs" tone="accent" />
+              <Icon
+                icon={isInstagram ? TbBrandInstagram : GitBranch}
+                tile
+                size="xs"
+                tone="accent"
+              />
               <span className="min-w-0">
-                <span className="block text-xs text-muted">ربات متصل</span>
+                <span className="block text-xs text-muted">
+                  {isInstagram ? "حساب متصل" : "ربات متصل"}
+                </span>
                 <span
                   dir="ltr"
                   className="block truncate text-start text-sm font-medium"
                 >
-                  @{bot.username}
+                  @{isInstagram ? instagramUsername : bot?.username}
                 </span>
               </span>
             </span>
             <span className="text-xs leading-6 text-muted sm:ms-auto">
-              هر فلو با یک فرمان یا کلیدواژه شروع می‌شود.
+              {isInstagram
+                ? "هر فلو با یک کلیدواژه در دایرکت شروع می‌شود."
+                : "هر فلو با یک فرمان یا کلیدواژه شروع می‌شود."}
             </span>
           </div>
         )}
@@ -691,13 +787,19 @@ export const FlowsPanel = () => {
           </div>
         )}
 
-        {!loading && flowsStatus === "succeeded" && bot && items.length === 0 && (
+        {!loading && listReady && connected && items.length === 0 && (
           <section className="rounded-3xl border border-dashed border-line bg-surface/25 px-6 py-14 text-center">
-            <Icon icon={GitBranch} tile size="lg" tone="accent" />
+            <Icon
+              icon={isInstagram ? TbBrandInstagram : GitBranch}
+              tile
+              size="lg"
+              tone="accent"
+            />
             <h2 className="mt-5 text-lg font-bold">اولین فلو را بسازید</h2>
             <p className="mx-auto mt-2 max-w-lg text-sm leading-7 text-muted">
-              مثلاً فرمان /start را به یک پیام خوش‌آمدگویی وصل کنید و برای هر
-              انتخاب مشتری یک مسیر جدا بسازید.
+              {isInstagram
+                ? "مثلاً کلیدواژهٔ «خرید» را به یک پیام خوش‌آمدگویی با سه دکمه وصل کنید و برای هر انتخاب مشتری یک مسیر جدا بسازید."
+                : "مثلاً فرمان /start را به یک پیام خوش‌آمدگویی وصل کنید و برای هر انتخاب مشتری یک مسیر جدا بسازید."}
             </p>
             <Button
               type="button"
@@ -710,7 +812,7 @@ export const FlowsPanel = () => {
           </section>
         )}
 
-        {!loading && flowsStatus === "succeeded" && items.length > 0 && (
+        {!loading && listReady && items.length > 0 && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted">{fa(items.length)} فلو</span>
@@ -733,12 +835,14 @@ export const FlowsPanel = () => {
       </div>
 
       <FlowEditorModal
+        channel={activeChannel}
         flow={null}
         open={createOpen}
         onOpenChange={setCreateOpen}
         onCreated={(flow) => router.push(`/dashboard/flow/${flow.id}`)}
       />
       <FlowEditorModal
+        channel={activeChannel}
         flow={
           editingFlowId && detail?.id === editingFlowId ? detail : null
         }

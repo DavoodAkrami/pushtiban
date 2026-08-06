@@ -160,6 +160,81 @@ export const sendDirectMessage = async ({
   });
 };
 
+/** One tappable button on a message. Meta allows three per template. */
+export type InstagramTemplateButton =
+  | { type: "postback"; title: string; payload: string }
+  | { type: "web_url"; title: string; url: string };
+
+/** Meta's cap on the text of a button template — lower than a plain message. */
+export const INSTAGRAM_TEMPLATE_TEXT_MAX_LENGTH = 640;
+
+/** Meta's caps on the buttons themselves. */
+export const INSTAGRAM_TEMPLATE_BUTTONS_MAX = 3;
+export const INSTAGRAM_BUTTON_LABEL_MAX_LENGTH = 20;
+
+/**
+ * A message with buttons attached to it — Instagram's nearest thing to
+ * Telegram's inline keyboard, and what a flow message is delivered as.
+ *
+ * Quick replies would have been the other candidate and are the wrong tool
+ * here: they cannot open a URL, and they vanish the moment the customer types
+ * anything, which for a multi-step flow means the path disappears mid-
+ * conversation. Template buttons stay attached to the message they belong to.
+ *
+ * Labels and text are trimmed rather than risked: Meta rejects the *whole*
+ * message when one label is too long, and a flow that silently stops
+ * delivering is worse than one whose button label lost its last two words.
+ */
+export const sendButtonTemplate = async ({
+  buttons,
+  igUserId,
+  recipientId,
+  text,
+  token,
+}: {
+  buttons: InstagramTemplateButton[];
+  igUserId: string;
+  recipientId: string;
+  text: string;
+  token: string;
+}) => {
+  const trimmed = buttons
+    .slice(0, INSTAGRAM_TEMPLATE_BUTTONS_MAX)
+    .map((button) => ({
+      ...button,
+      title: Array.from(button.title)
+        .slice(0, INSTAGRAM_BUTTON_LABEL_MAX_LENGTH)
+        .join(""),
+    }));
+
+  // A template with no buttons is not a template Meta accepts; a plain message
+  // is what the owner meant anyway.
+  if (!trimmed.length) {
+    return sendDirectMessage({ igUserId, recipientId, text, token });
+  }
+
+  return postMessage({
+    body: {
+      recipient: { id: recipientId } as MessageRecipient,
+      message: {
+        attachment: {
+          type: "template",
+          payload: {
+            template_type: "button",
+            text: Array.from(text)
+              .slice(0, INSTAGRAM_TEMPLATE_TEXT_MAX_LENGTH)
+              .join(""),
+            buttons: trimmed,
+          },
+        },
+      },
+    },
+    context: "sendButtonTemplate",
+    igUserId,
+    token,
+  });
+};
+
 /**
  * The private reply to a comment: a DM addressed by comment id rather than by
  * customer, which is what makes comment automation possible at all — the

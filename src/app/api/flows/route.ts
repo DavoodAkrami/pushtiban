@@ -11,9 +11,13 @@ import {
 } from "@/lib/automations";
 import {
   FLOW_NAME_MAX_LENGTH,
-  FLOW_NODE_MESSAGE_MAX_LENGTH,
+  flowConnectionColumn,
+  flowLimits,
+  isFlowChannel,
   type AutomationFlow,
+  type FlowChannel,
 } from "@/lib/flows";
+import { activateInstagramWebhook } from "@/lib/instagram/webhook";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -36,6 +40,7 @@ const hasValidOrigin = (request: NextRequest) => {
 
 type FlowRow = {
   id: string;
+  channel: FlowChannel | null;
   trigger_type: AutomationTriggerType;
   trigger_keyword: string;
   name: string;
@@ -47,6 +52,10 @@ type FlowRow = {
 
 const toFlow = (row: FlowRow): AutomationFlow => ({
   id: row.id,
+  // An absent column means instagram-flows.sql has not run yet; the migration
+  // backfills every existing row to telegram, so reading it that way keeps the
+  // list honest either way.
+  channel: row.channel ?? "telegram",
   triggerType: row.trigger_type,
   triggerKeyword: row.trigger_keyword,
   name: row.name,
@@ -56,27 +65,59 @@ const toFlow = (row: FlowRow): AutomationFlow => ({
   updatedAt: row.updated_at,
 });
 
-export const GET = async () => {
+const FLOW_COLUMNS =
+  "id, channel, trigger_type, trigger_keyword, name, command_description, is_active, created_at, updated_at";
+
+/**
+ * The caller's connection on one channel, or null when they have not connected
+ * it. Never trusts a connection id from the browser — it is always looked up
+ * from the session's user id, the pattern every route in this repo follows.
+ */
+const findConnection = async (
+  admin: ReturnType<typeof createAdminClient>,
+  channel: FlowChannel,
+  userId: string
+) => {
+  const table =
+    channel === "instagram" ? "instagram_connections" : "telegram_connections";
+  const { data, error } = await admin
+    .from(table)
+    .select("id")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  return { error, id: (data as { id: string } | null)?.id ?? null };
+};
+
+const readChannel = (value: unknown): FlowChannel =>
+  isFlowChannel(value) ? value : "telegram";
+
+export const GET = async (request: NextRequest) => {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return jsonError("نشست شما تمام شده؛ دوباره وارد حساب شوید.", 401);
 
+  const channel = readChannel(request.nextUrl.searchParams.get("channel"));
+
   try {
     const admin = createAdminClient();
-    const { data: connection, error: connectionError } = await admin
-      .from("telegram_connections")
-      .select("id")
-      .eq("user_id", user.id)
-      .maybeSingle();
+    const connection = await findConnection(admin, channel, user.id);
 
-    if (connectionError) return jsonError("اطلاعات ربات بارگذاری نشد.", 500);
-    if (!connection) return NextResponse.json({ flows: [] });
+    if (connection.error) {
+      return jsonError(
+        channel === "instagram"
+          ? "اطلاعات اینستاگرام بارگذاری نشد."
+          : "اطلاعات ربات بارگذاری نشد.",
+        500
+      );
+    }
+    if (!connection.id) return NextResponse.json({ channel, flows: [] });
 
     const { data, error } = await admin
       .from("automation_flows")
-      .select("id, trigger_type, trigger_keyword, name, command_description, is_active, created_at, updated_at")
+      .select(FLOW_COLUMNS)
       .eq("user_id", user.id)
-      .eq("telegram_connection_id", connection.id)
+      .eq(flowConnectionColumn(channel), connection.id)
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -88,7 +129,10 @@ export const GET = async () => {
       );
     }
 
-    return NextResponse.json({ flows: (data as FlowRow[]).map(toFlow) });
+    return NextResponse.json({
+      channel,
+      flows: (data as FlowRow[]).map(toFlow),
+    });
   } catch {
     return jsonError("فلوها بارگذاری نشدند.", 500);
   }
@@ -104,7 +148,7 @@ export const POST = async (request: NextRequest) => {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return jsonError("نشست شما تمام شده؛ دوباره وارد حساب شوید.", 401);
 
-  let body: { triggerType?: unknown; triggerKeyword?: unknown; name?: unknown; commandDescription?: unknown; rootMessage?: unknown };
+  let body: { channel?: unknown; triggerType?: unknown; triggerKeyword?: unknown; name?: unknown; commandDescription?: unknown; rootMessage?: unknown };
   try {
     body = (await request.json()) as typeof body;
   } catch {
@@ -115,7 +159,16 @@ export const POST = async (request: NextRequest) => {
     return jsonError("اطلاعات ناقص است.", 400);
   }
 
-  const triggerType: AutomationTriggerType = body.triggerType === "command" ? "command" : "keyword";
+  const channel = readChannel(body.channel);
+  const limits = flowLimits(channel);
+
+  // Instagram has no command menu and no way for a customer to type a slash
+  // command, so a command trigger there is not a smaller feature — it is one
+  // that could never fire.
+  const triggerType: AutomationTriggerType =
+    body.triggerType === "command" && limits.supportsCommands
+      ? "command"
+      : "keyword";
   const triggerKeyword = triggerType === "command"
     ? toTelegramCommandKeyword(body.triggerKeyword)
     : cleanKeyword(body.triggerKeyword);
@@ -133,19 +186,32 @@ export const POST = async (request: NextRequest) => {
     return jsonError("توضیح منوی فرمان باید بین ۱ تا ۲۵۶ نویسه باشد.", 400);
   if (!name || name.length > FLOW_NAME_MAX_LENGTH)
     return jsonError("نام فلو باید بین ۱ تا ۱۰۰ نویسه باشد.", 400);
-  if (!rootMessage || rootMessage.length > FLOW_NODE_MESSAGE_MAX_LENGTH)
-    return jsonError("متن پیام اول باید بین ۱ تا ۴۰۹۶ نویسه باشد.", 400);
+  if (!rootMessage || rootMessage.length > limits.messageMaxLength)
+    return jsonError(
+      channel === "instagram"
+        ? "متن پیام اول باید بین ۱ تا ۶۴۰ نویسه باشد."
+        : "متن پیام اول باید بین ۱ تا ۴۰۹۶ نویسه باشد.",
+      400
+    );
 
   try {
     const admin = createAdminClient();
-    const { data: connection, error: connectionError } = await admin
-      .from("telegram_connections")
-      .select("id")
-      .eq("user_id", user.id)
-      .maybeSingle();
+    const connection = await findConnection(admin, channel, user.id);
 
-    if (connectionError) return jsonError("اطلاعات ربات بررسی نشد.", 500);
-    if (!connection) return jsonError("ابتدا ربات تلگرام را متصل کنید.", 409);
+    if (connection.error)
+      return jsonError(
+        channel === "instagram"
+          ? "اتصال اینستاگرام بررسی نشد."
+          : "اطلاعات ربات بررسی نشد.",
+        500
+      );
+    if (!connection.id)
+      return jsonError(
+        channel === "instagram"
+          ? "ابتدا حساب اینستاگرام را متصل کنید."
+          : "ابتدا ربات تلگرام را متصل کنید.",
+        409
+      );
 
     if (triggerType === "command") {
       const { count, error: countError } = await admin
@@ -164,21 +230,26 @@ export const POST = async (request: NextRequest) => {
       .from("automation_flows")
       .insert({
         user_id: user.id,
-        telegram_connection_id: connection.id,
+        channel,
+        [flowConnectionColumn(channel)]: connection.id,
         trigger_type: triggerType,
         trigger_keyword: triggerKeyword,
         trigger_keyword_normalized: triggerKeywordNormalized,
         name,
         command_description: commandDescription,
       })
-      .select("id, trigger_type, trigger_keyword, name, command_description, is_active, created_at, updated_at")
+      .select(FLOW_COLUMNS)
       .single();
 
     if (flowError) {
       if (flowError.code === "23505") return jsonError("برای این کلیدواژه قبلاً یک فلو ساخته‌اید.", 409);
       const setupRequired = SETUP_ERROR_CODES.has(flowError.code);
       return jsonError(
-        setupRequired ? "راه‌اندازی فلوها هنوز کامل نشده؛ اسکریپت پایگاه داده را اجرا کنید." : "فلو ذخیره نشد.",
+        setupRequired
+          ? channel === "instagram"
+            ? "راه‌اندازی فلوهای اینستاگرام کامل نشده؛ اسکریپت instagram-flows.sql را اجرا کنید."
+            : "راه‌اندازی فلوها هنوز کامل نشده؛ اسکریپت پایگاه داده را اجرا کنید."
+          : "فلو ذخیره نشد.",
         setupRequired ? 503 : 500,
         setupRequired
       );
@@ -194,7 +265,9 @@ export const POST = async (request: NextRequest) => {
     }
 
     const [webhookActive, commandsSynced] = await Promise.all([
-      activateTelegramWebhook({ connectionId: connection.id, requestUrl: request.url, userId: user.id }),
+      channel === "instagram"
+        ? activateInstagramWebhook({ connectionId: connection.id, userId: user.id })
+        : activateTelegramWebhook({ connectionId: connection.id, requestUrl: request.url, userId: user.id }),
       triggerType === "command"
         ? syncTelegramCommandMenu({ connectionId: connection.id, userId: user.id })
         : Promise.resolve(true),

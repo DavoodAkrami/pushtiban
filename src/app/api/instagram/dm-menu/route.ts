@@ -6,7 +6,7 @@ import {
   DM_MENU_MAX_COUNT,
   ICE_BREAKERS_MAX_COUNT,
   INSTAGRAM_REPLY_MAX_LENGTH,
-  MENU_TITLE_MAX_LENGTH,
+  menuTitleMaxLength,
   type InstagramMenuItem,
 } from "@/lib/instagram/automations";
 import {
@@ -123,8 +123,13 @@ const parseItems = (
 
     const title = typeof entry.title === "string" ? entry.title.trim() : "";
     if (!title) return { message: "برای هر دکمه یک عنوان بنویسید." };
-    if (title.length > MENU_TITLE_MAX_LENGTH) {
-      return { message: "عنوان دکمه حداکثر ۸۰ نویسه است." };
+    if (title.length > menuTitleMaxLength(kind)) {
+      return {
+        message:
+          kind === "menu"
+            ? "عنوان گزینهٔ منو حداکثر ۳۰ نویسه است."
+            : "عنوان سوال آماده حداکثر ۸۰ نویسه است.",
+      };
     }
 
     const replyText =

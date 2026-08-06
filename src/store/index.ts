@@ -3,6 +3,7 @@ import automationsReducer from "./slices/automations-slice";
 import flowsReducer from "./slices/flows-slice";
 import inboxReducer from "./slices/inbox-slice";
 import instagramAutomationsReducer from "./slices/instagram-automations-slice";
+import instagramMenuReducer from "./slices/instagram-menu-slice";
 import sessionReducer from "./slices/session-slice";
 import telegramMenuReducer from "./slices/telegram-menu-slice";
 import usageReducer from "./slices/usage-slice";
@@ -15,6 +16,7 @@ export const makeStore = () =>
       flows: flowsReducer,
       inbox: inboxReducer,
       instagramAutomations: instagramAutomationsReducer,
+      instagramMenu: instagramMenuReducer,
       session: sessionReducer,
       telegramMenu: telegramMenuReducer,
       usage: usageReducer,

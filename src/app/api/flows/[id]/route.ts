@@ -10,21 +10,22 @@ import {
   type AutomationTriggerType,
 } from "@/lib/automations";
 import {
-  FLOW_BUTTON_LABEL_MAX_LENGTH,
   FLOW_BACK_BUTTON_LABEL_MAX_LENGTH,
-  FLOW_BUTTONS_PER_NODE_MAX,
   DEFAULT_FLOW_BACK_BUTTON_LABEL,
   DEFAULT_FLOW_KEYBOARD_ACTION,
   FLOW_NAME_MAX_LENGTH,
-  FLOW_NODE_MESSAGE_MAX_LENGTH,
   FLOW_URL_MAX_LENGTH,
+  flowLimits,
+  isFlowChannel,
   isFlowKeyboardAction,
   type AutomationFlowDetail,
   type FlowButton,
   type FlowButtonActionType,
+  type FlowChannel,
   type FlowKeyboardAction,
   type FlowNode,
 } from "@/lib/flows";
+import { activateInstagramWebhook } from "@/lib/instagram/webhook";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -73,6 +74,7 @@ type NodeRow = {
 
 type FlowDetailRow = {
   id: string;
+  channel: FlowChannel | null;
   trigger_type: AutomationTriggerType;
   trigger_keyword: string;
   name: string;
@@ -84,7 +86,7 @@ type FlowDetailRow = {
 };
 
 const FLOW_DETAIL_SELECT = `
-  id, trigger_type, trigger_keyword, name, command_description, is_active, created_at, updated_at,
+  id, channel, trigger_type, trigger_keyword, name, command_description, is_active, created_at, updated_at,
   automation_flow_nodes (
     id, flow_id, message_text, is_root, replace_on_button_click, back_button_enabled, back_button_label,
     keyboard_action,
@@ -121,6 +123,9 @@ const toNode = (row: NodeRow): FlowNode => ({
 
 const toFlowDetail = (row: FlowDetailRow): AutomationFlowDetail => ({
   id: row.id,
+  // Absent until instagram-flows.sql runs; the migration backfills every
+  // existing flow to telegram, which is what a missing column means here too.
+  channel: isFlowChannel(row.channel) ? row.channel : "telegram",
   triggerType: row.trigger_type,
   triggerKeyword: row.trigger_keyword,
   name: row.name,
@@ -205,25 +210,46 @@ export const PATCH = async (request: NextRequest, ctx: RouteContext) => {
     return jsonError("وضعیت فلو معتبر نیست.", 400);
   if (hasNodes && !Array.isArray(body.nodes))
     return jsonError("پیام‌های فلو معتبر نیستند.", 400);
-  if (
-    hasRootMessage &&
-    (typeof body.rootMessage !== "string" ||
-      !body.rootMessage.trim() ||
-      body.rootMessage.trim().length > FLOW_NODE_MESSAGE_MAX_LENGTH)
-  )
-    return jsonError("متن پیام اول نامعتبر است.", 400);
 
   try {
     const admin = createAdminClient();
     const { data: existing, error: readError } = await admin
       .from("automation_flows")
-      .select("id, telegram_connection_id, trigger_type, trigger_keyword, name, command_description, is_active")
+      .select("id, channel, telegram_connection_id, instagram_connection_id, trigger_type, trigger_keyword, name, command_description, is_active")
       .eq("id", params.id)
       .eq("user_id", user.id)
       .maybeSingle();
 
     if (readError) return jsonError("فلو بارگذاری نشد.", 500);
     if (!existing) return jsonError("فلو موردنظر پیدا نشد.", 404);
+
+    // The channel is the flow's own, never the request's: it decides which
+    // account delivers this flow and how much a message may carry, and letting
+    // a PATCH move a flow between channels would strand its nodes at the other
+    // channel's limits.
+    const channel: FlowChannel = isFlowChannel(existing.channel)
+      ? existing.channel
+      : "telegram";
+    const limits = flowLimits(channel);
+    const connectionId: string =
+      channel === "instagram"
+        ? existing.instagram_connection_id
+        : existing.telegram_connection_id;
+    const tooLongMessage =
+      channel === "instagram"
+        ? "متن پیام برای اینستاگرام حداکثر ۶۴۰ نویسه است."
+        : "متن پیام نامعتبر است.";
+
+    if (
+      hasRootMessage &&
+      (typeof body.rootMessage !== "string" ||
+        !body.rootMessage.trim() ||
+        body.rootMessage.trim().length > limits.messageMaxLength)
+    )
+      return jsonError(
+        channel === "instagram" ? tooLongMessage : "متن پیام اول نامعتبر است.",
+        400
+      );
 
     if (hasNodes) {
       const { error: schemaError } = await admin
@@ -242,7 +268,8 @@ export const PATCH = async (request: NextRequest, ctx: RouteContext) => {
 
     const triggerType: AutomationTriggerType =
       typeof body.triggerType === "string" &&
-      (body.triggerType === "keyword" || body.triggerType === "command")
+      (body.triggerType === "keyword" ||
+        (body.triggerType === "command" && limits.supportsCommands))
         ? body.triggerType
         : existing.trigger_type;
 
@@ -289,7 +316,7 @@ export const PATCH = async (request: NextRequest, ctx: RouteContext) => {
         .from("automation_flows")
         .select("id", { count: "exact", head: true })
         .eq("user_id", user.id)
-        .eq("telegram_connection_id", existing.telegram_connection_id)
+        .eq("telegram_connection_id", connectionId)
         .eq("trigger_type", "command")
         .eq("is_active", true)
         .neq("id", existing.id);
@@ -356,9 +383,9 @@ export const PATCH = async (request: NextRequest, ctx: RouteContext) => {
         if (
           typeof node.messageText !== "string" ||
           !node.messageText.trim() ||
-          node.messageText.length > FLOW_NODE_MESSAGE_MAX_LENGTH
+          node.messageText.length > limits.messageMaxLength
         )
-          return jsonError("متن پیام نامعتبر است.", 400);
+          return jsonError(tooLongMessage, 400);
         if (!Array.isArray(node.buttons))
           return jsonError("دکمه‌ها نامعتبر هستند.", 400);
         if (
@@ -377,15 +404,36 @@ export const PATCH = async (request: NextRequest, ctx: RouteContext) => {
           !isFlowKeyboardAction(node.keyboardAction)
         )
           return jsonError("تنظیم منوی ربات برای این پیام معتبر نیست.", 400);
-        if (node.buttons.length > FLOW_BUTTONS_PER_NODE_MAX)
-          return jsonError(`هر پیام حداکثر ${FLOW_BUTTONS_PER_NODE_MAX} دکمه می‌تواند داشته باشد.`, 400);
+        // On Instagram the back button is rendered as an ordinary button —
+        // there is nowhere else to put it — so it spends one of the three.
+        const renderedButtons =
+          node.buttons.length +
+          (channel === "instagram" && node.backButtonEnabled ? 1 : 0);
+        if (renderedButtons > limits.buttonsPerNodeMax)
+          return jsonError(
+            channel === "instagram"
+              ? "اینستاگرام روی هر پیام حداکثر ۳ دکمه نمایش می‌دهد؛ دکمهٔ بازگشت هم یکی از آن‌هاست."
+              : `هر پیام حداکثر ${limits.buttonsPerNodeMax} دکمه می‌تواند داشته باشد.`,
+            400
+          );
+        if (
+          channel === "instagram" &&
+          node.backButtonEnabled &&
+          node.backButtonLabel.trim().length > limits.buttonLabelMaxLength
+        )
+          return jsonError("برچسب دکمه در اینستاگرام حداکثر ۲۰ نویسه است.", 400);
         for (const btn of node.buttons) {
           if (
             typeof btn.label !== "string" ||
             !btn.label.trim() ||
-            btn.label.length > FLOW_BUTTON_LABEL_MAX_LENGTH
+            btn.label.length > limits.buttonLabelMaxLength
           )
-            return jsonError("برچسب دکمه نامعتبر است.", 400);
+            return jsonError(
+              channel === "instagram"
+                ? "برچسب دکمه در اینستاگرام حداکثر ۲۰ نویسه است."
+                : "برچسب دکمه نامعتبر است.",
+              400
+            );
           if (!["node", "url", "end"].includes(btn.actionType))
             return jsonError("نوع عملکرد دکمه نامعتبر است.", 400);
           if (
@@ -411,13 +459,19 @@ export const PATCH = async (request: NextRequest, ctx: RouteContext) => {
             user_id: user.id,
             message_text: n.messageText.trim(),
             is_root: n.isRoot,
-            replace_on_button_click: n.replaceOnButtonClick,
+            // Instagram can neither rewrite a message it has sent nor show a
+            // bot-wide keyboard, so both settings are stored off rather than
+            // stored true and quietly ignored at delivery time.
+            replace_on_button_click:
+              limits.supportsReplace && n.replaceOnButtonClick,
             back_button_enabled: n.backButtonEnabled,
             back_button_label:
               n.backButtonLabel.trim() || DEFAULT_FLOW_BACK_BUTTON_LABEL,
-            keyboard_action: isFlowKeyboardAction(n.keyboardAction)
-              ? n.keyboardAction
-              : DEFAULT_FLOW_KEYBOARD_ACTION,
+            keyboard_action:
+              limits.supportsKeyboardAction &&
+              isFlowKeyboardAction(n.keyboardAction)
+                ? n.keyboardAction
+                : DEFAULT_FLOW_KEYBOARD_ACTION,
           }))
         )
         .select("id");
@@ -460,15 +514,17 @@ export const PATCH = async (request: NextRequest, ctx: RouteContext) => {
 
     const [webhookActive, commandsSynced] = await Promise.all([
       isActive
-        ? activateTelegramWebhook({
-            connectionId: existing.telegram_connection_id,
-            requestUrl: request.url,
-            userId: user.id,
-          })
+        ? channel === "instagram"
+          ? activateInstagramWebhook({ connectionId, userId: user.id })
+          : activateTelegramWebhook({
+              connectionId,
+              requestUrl: request.url,
+              userId: user.id,
+            })
         : Promise.resolve(true),
       existing.trigger_type === "command" || triggerType === "command"
         ? syncTelegramCommandMenu({
-            connectionId: existing.telegram_connection_id,
+            connectionId,
             userId: user.id,
           })
         : Promise.resolve(true),
@@ -521,8 +577,10 @@ export const DELETE = async (request: NextRequest, ctx: RouteContext) => {
     if (error) return jsonError("فلو حذف نشد.", 500);
     if (!data) return jsonError("فلو موردنظر پیدا نشد.", 404);
 
+    // Only a Telegram flow was ever published to a command menu, and only a
+    // Telegram flow has a bot to re-publish it to.
     const commandsSynced =
-      data.trigger_type === "command"
+      data.trigger_type === "command" && data.telegram_connection_id
         ? await syncTelegramCommandMenu({
             connectionId: data.telegram_connection_id,
             userId: user.id,

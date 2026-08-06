@@ -3,13 +3,14 @@
 import * as React from "react";
 import Link from "next/link";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ArrowLeft, Bot, Users, type LucideIcon } from "lucide-react";
+import { ArrowLeft, Bot, Send, Users, type LucideIcon } from "lucide-react";
+import { TbBrandInstagram } from "react-icons/tb";
 import { luxe } from "@/components/motion/reveal";
 import { AssistantPreviewPane } from "@/components/dashboard/assistant/preview-pane";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/checkbox";
-import { Icon } from "@/components/ui/icon";
+import { Icon, type AppIcon } from "@/components/ui/icon";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 
@@ -18,6 +19,12 @@ import { cn } from "@/lib/utils";
 type AssistantPanelProps = {
   initialEnabled: boolean;
   initialHumanHandoff: boolean;
+  initialTelegramEnabled: boolean;
+  initialInstagramEnabled: boolean;
+  /** False until supabase/channel-inbox.sql has added the two columns. */
+  channelSwitchesReady: boolean;
+  telegramConnected: boolean;
+  instagramConnected: boolean;
   loadError: boolean;
   providerConfigured: boolean;
   setupRequired: boolean;
@@ -26,6 +33,8 @@ type AssistantPanelProps = {
 type SettingsResponse = {
   enabled?: boolean;
   humanHandoff?: boolean;
+  telegramEnabled?: boolean;
+  instagramEnabled?: boolean;
   error?: string;
 };
 
@@ -34,6 +43,11 @@ type SettingsResponse = {
 export const AssistantPanel = ({
   initialEnabled,
   initialHumanHandoff,
+  initialTelegramEnabled,
+  initialInstagramEnabled,
+  channelSwitchesReady,
+  telegramConnected,
+  instagramConnected,
   loadError,
   providerConfigured,
   setupRequired,
@@ -44,6 +58,15 @@ export const AssistantPanel = ({
   const [saving, setSaving] = React.useState(false);
   const [humanHandoff, setHumanHandoff] = React.useState(initialHumanHandoff);
   const [savingHandoff, setSavingHandoff] = React.useState(false);
+  const [telegramEnabled, setTelegramEnabled] = React.useState(
+    initialTelegramEnabled
+  );
+  const [instagramEnabled, setInstagramEnabled] = React.useState(
+    initialInstagramEnabled
+  );
+  const [savingChannel, setSavingChannel] = React.useState<
+    "telegram" | "instagram" | null
+  >(null);
 
   // The assistant on/off toggle also needs a configured provider; the handoff
   // toggle only routes to humans, so it needs neither a provider nor anything
@@ -89,6 +112,60 @@ export const AssistantPanel = ({
       });
     } finally {
       setSaving(false);
+    }
+  };
+
+  /**
+   * One channel's switch. The master toggle decides whether the assistant runs
+   * at all; these decide where it answers, so turning one off leaves the flows
+   * and prepared replies on that channel working exactly as they were.
+   */
+  const updateChannel = async (
+    channel: "telegram" | "instagram",
+    next: boolean
+  ) => {
+    const isTelegram = channel === "telegram";
+    const setLocal = isTelegram ? setTelegramEnabled : setInstagramEnabled;
+    const previous = isTelegram ? telegramEnabled : instagramEnabled;
+    const label = isTelegram ? "تلگرام" : "اینستاگرام";
+
+    setLocal(next);
+    setSavingChannel(channel);
+
+    try {
+      const response = await fetch("/api/ai/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          isTelegram ? { telegramEnabled: next } : { instagramEnabled: next }
+        ),
+      });
+      const result = (await response.json().catch(() => ({}))) as SettingsResponse;
+      const saved = isTelegram ? result.telegramEnabled : result.instagramEnabled;
+
+      if (!response.ok || typeof saved !== "boolean") {
+        throw new Error(result.error || "تنظیم کانال ذخیره نشد؛ دوباره تلاش کنید.");
+      }
+
+      setLocal(saved);
+      toast({
+        title: saved
+          ? `پاسخ‌گویی دستیار در ${label} روشن شد`
+          : `پاسخ‌گویی دستیار در ${label} خاموش شد`,
+        description: saved
+          ? `پیام‌های بی‌پاسخ ${label} به دستیار سپرده می‌شوند.`
+          : `پیام‌های ${label} دیگر به دستیار نمی‌رسند؛ فلوها و کلیدواژه‌ها سر جای خود می‌مانند.`,
+        variant: "success",
+      });
+    } catch (error) {
+      setLocal(previous);
+      toast({
+        title: "تغییر تنظیم ذخیره نشد",
+        description: error instanceof Error ? error.message : "دوباره تلاش کنید.",
+        variant: "error",
+      });
+    } finally {
+      setSavingChannel(null);
     }
   };
 
@@ -183,6 +260,44 @@ export const AssistantPanel = ({
             transition={{ duration: reduce ? 0 : 0.3, ease: luxe }}
             className="space-y-4"
           >
+            {/* Where the assistant answers. Only connected channels appear:
+                a switch for a channel the business has not connected would be
+                a setting with nothing to apply it to. */}
+            {channelSwitchesReady && (telegramConnected || instagramConnected) && (
+              <section className="rounded-3xl border border-line bg-surface/40 p-5 sm:p-6">
+                <h2 className="font-bold">کانال‌های پاسخ‌گویی</h2>
+                <p className="mt-2 max-w-xl text-sm leading-7 text-muted">
+                  مشخص کنید دستیار روی کدام کانال‌ها جواب بدهد. خاموش کردن یک
+                  کانال، فلوها و پاسخ‌های آمادهٔ همان کانال را متوقف نمی‌کند.
+                </p>
+
+                <div className="mt-4 space-y-3">
+                  {telegramConnected && (
+                    <ChannelSwitch
+                      icon={Send}
+                      title="تلگرام"
+                      description="پیام‌های عادی ربات تلگرام که فلو یا کلیدواژه‌ای جوابشان نداده."
+                      enabled={telegramEnabled}
+                      disabled={savingChannel !== null || handoffUnavailable}
+                      saving={savingChannel === "telegram"}
+                      onToggle={(next) => void updateChannel("telegram", next)}
+                    />
+                  )}
+                  {instagramConnected && (
+                    <ChannelSwitch
+                      icon={TbBrandInstagram}
+                      title="اینستاگرام"
+                      description="دایرکت‌های مشتری که فلو، کلیدواژه یا قانون استوری جوابشان نداده."
+                      enabled={instagramEnabled}
+                      disabled={savingChannel !== null || handoffUnavailable}
+                      saving={savingChannel === "instagram"}
+                      onToggle={(next) => void updateChannel("instagram", next)}
+                    />
+                  )}
+                </div>
+              </section>
+            )}
+
             <ToggleCard
               icon={Users}
               title="ارجاع به پشتیبان انسانی"
@@ -236,6 +351,52 @@ export const AssistantPanel = ({
     </div>
   );
 };
+
+// ---- One channel's row ----------------------------------------------------
+
+const ChannelSwitch = ({
+  icon,
+  title,
+  description,
+  enabled,
+  disabled,
+  saving,
+  onToggle,
+}: {
+  icon: AppIcon;
+  title: string;
+  description: string;
+  enabled: boolean;
+  disabled: boolean;
+  saving: boolean;
+  onToggle: (next: boolean) => void;
+}) => (
+  <div className="flex items-start gap-3 rounded-2xl border border-line bg-background/45 p-4">
+    <Icon
+      icon={icon}
+      tile
+      size="sm"
+      tone={enabled ? "accent" : "muted"}
+      className="shrink-0"
+    />
+    <div className="min-w-0 flex-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-bold">{title}</h3>
+        <Badge variant={enabled ? "success" : "muted"} dot>
+          {enabled ? "روشن" : "خاموش"}
+        </Badge>
+      </div>
+      <p className="mt-1 text-xs leading-6 text-muted">{description}</p>
+    </div>
+    <Switch
+      checked={enabled}
+      disabled={disabled}
+      aria-label={`پاسخ‌گویی دستیار در ${title}`}
+      aria-busy={saving}
+      onChange={(event) => onToggle(event.target.checked)}
+    />
+  </div>
+);
 
 // ---- Reusable setting toggle card -----------------------------------------
 
