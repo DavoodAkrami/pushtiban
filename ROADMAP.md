@@ -218,7 +218,18 @@ How to use:
 - [ ] Widget embed for websites
 - [x] Instagram account connection (Business Login OAuth, connect/disconnect
       from onboarding, settings and /dashboard/instagram)
-- [ ] Instagram DMs: webhook ingestion, automations and assistant replies
+- [x] Instagram DMs: webhook ingestion, comment → private DM automations,
+      story mention/reply automations, DM keyword automations, AI assistant
+      replies (with per-channel on/off switch under the master toggle), human
+      handoff via quick-reply chips, escalation mirrored to owner's Telegram
+      bot, 30-minute chat memory in `instagram_chat_sessions`, idempotency
+      via `instagram_processed_events`
+- [x] Instagram flows: interactive multi-step DM conversations triggered by a
+      keyword, delivered as button templates (up to 3 buttons, 640 chars),
+      postback navigation between nodes, back button as a regular button —
+      the same visual flow builder used for Telegram with Instagram-aware
+      limits and channel chips on /dashboard/automation; DM ice breakers and
+      persistent menu editor at /dashboard/instagram/menu
 - [ ] WhatsApp — blocked: Meta's WhatsApp Business Platform does not serve Iran,
       and the restriction is enforced on the phone number, not the location
 - [ ] Public API

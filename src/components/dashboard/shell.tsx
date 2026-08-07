@@ -181,7 +181,16 @@ const DashboardNavigation = ({
         )}
       >
         <item.icon className="size-[1.15rem] shrink-0" aria-hidden />
-        {expanded && <span className="truncate">{item.label}</span>}
+        {expanded && (
+          <>
+            <span className="min-w-0 flex-1 truncate">{item.label}</span>
+            {item.comingSoon && (
+              <span className="shrink-0 rounded-full bg-surface px-2 py-0.5 text-[10px] font-medium text-muted">
+                به‌زودی
+              </span>
+            )}
+          </>
+        )}
       </Link>
     );
 

@@ -4,6 +4,19 @@ import { Alert } from "@/components/ui/alert";
 import { buttonVariants } from "@/components/ui/button";
 
 /**
+ * Shown at the top of every Instagram feature page while the app is pending
+ * Meta App Review. Remove this component and its usages once Meta grants the
+ * `instagram_manage_messages` and `instagram_manage_comments` permissions.
+ */
+export const InstagramComingSoonNotice = () => (
+  <Alert
+    variant="info"
+    title="در انتظار تأیید متا — به‌زودی"
+    description="ویژگی‌های اینستاگرام (دایرکت، کامنت و فلو) نیاز به تأیید برنامه از طرف متا (Meta App Review) دارند. پس از تأیید، تمام این بخش‌ها برای کسب‌وکار شما فعال می‌شوند."
+  />
+);
+
+/**
  * Shown by every Instagram page that cannot do anything until the account is
  * connected. The Instagram counterpart of BotRequiredNotice.
  */

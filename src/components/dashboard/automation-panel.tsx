@@ -749,7 +749,7 @@ const AutomationPanelContent = () => {
         active={activeChannel}
         availability={{
           telegram: { connected: Boolean(bot) },
-          instagram: { connected: instagramConnected },
+          instagram: { supported: false },
         }}
       />
 

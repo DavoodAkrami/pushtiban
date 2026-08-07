@@ -49,25 +49,42 @@ in `CLAUDE.md`).
 
 ### Where it runs
 
-- **Production:** the Telegram webhook, `src/app/api/telegram/webhook/[botId]/route.ts`.
+The assistant is a fallback that only speaks after every structured response has
+declined the message. The pipeline is the same on every channel:
+**flows → keyword rules → assistant → human handoff**.
+
+- **Telegram — production:** `src/app/api/telegram/webhook/[botId]/route.ts`.
   A plain text message reaches the AI only after flows, menu buttons and keyword
-  automations have all declined it — the AI is the fallback, never the first
-  responder. Slash commands never reach it.
+  automations have all declined it. Slash commands never reach it.
+
+- **Instagram — production:** `src/app/api/instagram/webhook/route.ts`.
+  Structured handling runs first: a postback checks for a flow step or menu tap,
+  a plain DM checks for a matching flow keyword and then a `dm_keyword`
+  automation. Only what remains reaches the assistant.
+  Two gates in addition to the master switch: `ai_assistant_settings.instagram_enabled`
+  (owner, defaults true) and the platform kill switch in `ai_global_settings`.
+  Memory lives in `instagram_chat_sessions`; the 30-minute session window, the
+  turn cap (4 / 600 chars) and the fail-open behaviour are identical to Telegram.
+  The model writes Markdown; Instagram renders none of it, so the reply is
+  flattened to plain text with `markdownToPlainText` (`src/lib/instagram/format.ts`)
+  before sending.
+  Human handoff offers two quick-reply chips (`بله، بفرست` / `نه، مشکلی نیست`);
+  escalated conversations are mirrored to the owner's Telegram bot when one is
+  connected, and are always available in `/dashboard/inbox`.
+
 - **Preview:** the pane on `/dashboard/assistant`
   (`src/app/api/ai/preview/route.ts`). It does **not** reimplement the pipeline —
-  it calls `generateTelegramAiReply`, the same function the webhook calls, so
+  it calls `generateAssistantReply`, the same function both webhooks call, so
   the persona, retrieval, `ai_global_settings` thresholds, escalation tool,
   provider order and usage logging are identical by construction. It adds the
-  owner's `is_enabled` check (which the webhook applies itself, outside that
-  function) and converts the reply with `markdownToTelegramHtml`, so the owner
-  sees the customer's real formatting.
+  owner's `is_enabled` check and converts the reply with `markdownToTelegramHtml`
+  so the owner sees the customer's real formatting.
 
-  Two honest divergences: history is held in the browser and passed back per
-  request rather than read from `telegram_chat_sessions` (a preview is not a
-  chat with a real `chat_id`), and an escalation is *reported* as a badge rather
-  than opening a conversation. **A preview message costs a real message** off
-  the monthly cap — it is a real completion — so the pane states this up front,
-  shows the remaining count, and refreshes the sidebar quota after every reply.
+  Two honest divergences: history is held in the browser rather than read from
+  `telegram_chat_sessions`, and an escalation is *reported* as a badge rather than
+  opening a conversation. **A preview message costs a real message** off the
+  monthly cap — it is a real completion — so the pane states this up front, shows
+  the remaining count, and refreshes the sidebar quota after every reply.
 
 - **Deprecated:** `/ai/rag-test` now redirects to `/dashboard/assistant`. It sat
   outside `src/proxy.ts`'s matcher, let the caller pick the provider and model
@@ -166,7 +183,11 @@ exclusively through `createAdminClient()`. Granting them to `anon` would let
 anyone holding the public key read any business's knowledge base by passing its
 user id.
 
-**3. Memory** — `src/lib/ai/memory.ts`, table `telegram_chat_sessions`
+**3. Memory** — `src/lib/ai/memory.ts`, tables `telegram_chat_sessions` and `instagram_chat_sessions`
+
+A chat is a **session**. The same 30-minute window and the same turn-cap apply
+on every channel — the implementation is one function parametrised by the
+channel, writing to the table that belongs to it.
 
 A chat is a **session**. While the customer keeps messaging with gaps under
 **30 minutes**, recent turns travel with each request. After a longer gap the
@@ -226,9 +247,13 @@ The prompt is deliberately lean, and changes should keep it that way:
 `supabase/knowledge.sql` (the `category` column, `match_knowledge_qa` and
 `match_knowledge_chunks_filtered`) ·
 `supabase/ai-persona.sql` (persona columns) · `supabase/ai-memory.sql`
-(chat sessions) · `supabase/rag-security.sql` (match-function grants) ·
+(Telegram chat sessions) · `supabase/rag-security.sql` (match-function grants) ·
 `supabase/inbox.sql` (handoff) · `supabase/admin.sql` (global settings, usage
-logs).
+logs) · `supabase/channel-inbox.sql` (channel column on conversations,
+`telegram_enabled` / `instagram_enabled` on `ai_assistant_settings`) ·
+`supabase/instagram-automations.sql` (Instagram chat sessions, idempotency
+table) · `supabase/instagram-flows.sql` (channel column on `automation_flows`,
+Instagram-specific node/button limit triggers).
 
 ## Notes
 

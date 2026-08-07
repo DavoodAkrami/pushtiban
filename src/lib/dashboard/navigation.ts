@@ -33,6 +33,12 @@ export type NavItem = {
   href: string;
   label: string;
   icon: AppIcon;
+  /**
+   * When true a «به‌زودی» chip appears beside the label. The link still works
+   * (owners can browse the page and read what is coming), but the badge signals
+   * the feature is not yet operational.
+   */
+  comingSoon?: boolean;
 };
 
 export type NavGroup = {
@@ -74,6 +80,9 @@ export const NAV_GROUPS: NavGroup[] = [
         href: "/dashboard/instagram",
         label: "اینستاگرام",
         icon: TbBrandInstagram,
+        // Pending Meta App Review: messaging permissions are not yet approved
+        // for general use. Remove comingSoon once Meta grants the app.
+        comingSoon: true,
       },
     ],
   },

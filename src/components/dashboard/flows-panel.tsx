@@ -668,7 +668,7 @@ export const FlowsPanel = () => {
         className="mt-6"
         availability={{
           telegram: { connected: Boolean(bot) },
-          instagram: { connected: instagramConnected },
+          instagram: { supported: false },
         }}
       />
 

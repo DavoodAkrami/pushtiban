@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { InstagramComingSoonNotice } from "@/components/dashboard/instagram/notices";
 import { InstagramCommentsPanel } from "@/components/dashboard/instagram/comments-panel";
 
 export const metadata: Metadata = {
@@ -7,9 +8,13 @@ export const metadata: Metadata = {
     "پاسخ خودکار به کامنت‌های اینستاگرام و تعامل‌های استوری، به‌صورت دایرکت.",
 };
 
-// The channel chips read ?channel=, which makes this page request-dependent.
 export const dynamic = "force-dynamic";
 
-const InstagramCommentsPage = () => <InstagramCommentsPanel />;
+const InstagramCommentsPage = () => (
+  <div className="space-y-5">
+    <InstagramComingSoonNotice />
+    <InstagramCommentsPanel />
+  </div>
+);
 
 export default InstagramCommentsPage;
