@@ -2,7 +2,10 @@
 
 import * as React from "react";
 import { motion, useReducedMotion } from "framer-motion";
+import { ChartArea, ChartColumn, type LucideIcon } from "lucide-react";
 import { luxe } from "@/components/motion/reveal";
+import { Tooltip } from "@/components/ui/tooltip";
+import type { ChartProps } from "@/components/ui/chart";
 import { cn, fa } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -65,19 +68,32 @@ export const faNumber = (value: number): string =>
   fa(value.toLocaleString("en-US").replace(/,/g, "٬"));
 
 // ---------------------------------------------------------------------------
-// Range switcher — a segmented control with a shared sliding indicator.
+// Segmented controls — a pill radiogroup with a sliding indicator, shared by
+// the range switcher and the chart-type switcher above every usage chart.
 // ---------------------------------------------------------------------------
 
-export const UsageRangeTabs = ({
+type Segment<T extends string> = {
+  value: T;
+  /** Visible text; omit for icon-only segments. */
+  label?: string;
+  icon?: LucideIcon;
+  /** Accessible name, and the tooltip text when there is no visible label. */
+  name?: string;
+};
+
+const SegmentedTabs = <T extends string>({
+  options,
   value,
   onChange,
-  label = "بازه زمانی نمودار",
+  label,
   disabled = false,
   className,
 }: {
-  value: UsageRange;
-  onChange: (range: UsageRange) => void;
-  label?: string;
+  options: ReadonlyArray<Segment<T>>;
+  value: T;
+  onChange: (value: T) => void;
+  /** Describes the group for screen readers. */
+  label: string;
   disabled?: boolean;
   className?: string;
 }) => {
@@ -93,36 +109,108 @@ export const UsageRangeTabs = ({
         className
       )}
     >
-      {RANGE_OPTIONS.map((option) => {
+      {options.map((option) => {
         const selected = option.value === value;
-        return (
+        const segment = (
           <button
             key={option.value}
             type="button"
             role="radio"
             aria-checked={selected}
+            aria-label={option.label ? undefined : option.name}
             disabled={disabled}
             onClick={() => onChange(option.value)}
             className={cn(
-              "relative flex h-8 min-w-16 items-center justify-center rounded-full px-3 text-xs transition-colors duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:opacity-50",
-              selected ? "font-medium text-foreground" : "text-muted hover:text-foreground"
+              "relative flex h-8 items-center justify-center rounded-full transition-colors duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:opacity-50",
+              option.label ? "min-w-16 px-3 text-xs" : "w-9",
+              selected
+                ? "font-medium text-foreground"
+                : "text-muted hover:text-foreground"
             )}
           >
             {selected && (
               <motion.span
-                layoutId={`${groupId}-usage-range`}
+                layoutId={`${groupId}-segment`}
                 aria-hidden
                 className="absolute inset-0 rounded-full bg-card"
                 transition={reduce ? { duration: 0 } : { duration: 0.3, ease: luxe }}
               />
             )}
-            <span className="relative">{option.label}</span>
+            {option.icon && (
+              <option.icon className="relative size-4" aria-hidden />
+            )}
+            {option.label && <span className="relative">{option.label}</span>}
           </button>
+        );
+
+        // Icon-only segments name themselves with a tooltip; labelled ones read
+        // for themselves and would only repeat the label on hover.
+        if (option.label || !option.name) return segment;
+        return (
+          <Tooltip key={option.value} content={option.name} side="bottom">
+            {segment}
+          </Tooltip>
         );
       })}
     </div>
   );
 };
+
+/** Week / month / year switcher for a usage chart. */
+export const UsageRangeTabs = ({
+  value,
+  onChange,
+  label = "بازه زمانی نمودار",
+  disabled = false,
+  className,
+}: {
+  value: UsageRange;
+  onChange: (range: UsageRange) => void;
+  label?: string;
+  disabled?: boolean;
+  className?: string;
+}) => (
+  <SegmentedTabs
+    options={RANGE_OPTIONS}
+    value={value}
+    onChange={onChange}
+    label={label}
+    disabled={disabled}
+    className={className}
+  />
+);
+
+/** The two shapes a usage chart can take — matches `Chart`'s own variants. */
+export type ChartType = NonNullable<ChartProps["variant"]>;
+
+const CHART_TYPE_OPTIONS: Array<Segment<ChartType>> = [
+  { value: "area", icon: ChartArea, name: "نمودار سطحی" },
+  { value: "bar", icon: ChartColumn, name: "نمودار ستونی" },
+];
+
+/** Area / column switcher for a usage chart. */
+export const ChartTypeTabs = ({
+  value,
+  onChange,
+  label = "نوع نمودار",
+  disabled = false,
+  className,
+}: {
+  value: ChartType;
+  onChange: (type: ChartType) => void;
+  label?: string;
+  disabled?: boolean;
+  className?: string;
+}) => (
+  <SegmentedTabs
+    options={CHART_TYPE_OPTIONS}
+    value={value}
+    onChange={onChange}
+    label={label}
+    disabled={disabled}
+    className={className}
+  />
+);
 
 // ---------------------------------------------------------------------------
 // Data loading

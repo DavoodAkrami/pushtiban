@@ -26,6 +26,7 @@ import {
   type PipelineStage,
 } from "@/app/dashboard/overview/reply-pipeline";
 import {
+  ChartTypeTabs,
   faNumber,
   faTokens,
   RANGE_HINTS,
@@ -34,6 +35,7 @@ import {
   UsageFigure,
   UsageRangeTabs,
   useUsageSeries,
+  type ChartType,
   type UsageRange,
 } from "@/components/dashboard/usage";
 import { Badge } from "@/components/ui/badge";
@@ -172,6 +174,7 @@ export const OverviewPanel = () => {
   const [loading, setLoading] = React.useState(true);
   const [setupDismissed, setSetupDismissed] = React.useState(false);
   const [range, setRange] = React.useState<UsageRange>("week");
+  const [chartType, setChartType] = React.useState<ChartType>("area");
   const { points, totals, loading: seriesLoading } = useUsageSeries(
     { scope: "self" },
     range
@@ -538,11 +541,18 @@ export const OverviewPanel = () => {
                 توکن ورودی پرسش‌ها و توکن خروجی پاسخ‌ها — {RANGE_HINTS[range]}
               </p>
             </div>
-            <UsageRangeTabs
-              value={range}
-              onChange={setRange}
-              disabled={seriesLoading}
-            />
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              <ChartTypeTabs
+                value={chartType}
+                onChange={setChartType}
+                disabled={seriesLoading}
+              />
+              <UsageRangeTabs
+                value={range}
+                onChange={setRange}
+                disabled={seriesLoading}
+              />
+            </div>
           </div>
 
           <dl className="mt-5 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
@@ -568,6 +578,7 @@ export const OverviewPanel = () => {
               data={toTokenChartData(points)}
               series={TOKEN_CHART_SERIES}
               xKey="label"
+              variant={chartType}
               height={260}
               loading={seriesLoading}
               formatValue={faTokens}

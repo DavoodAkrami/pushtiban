@@ -150,6 +150,11 @@ How to use:
       completed steps, and let the user dismiss the checklist
 - [x] Overview setup steps render immediately, show completed steps with green
       ticks while unfinished work remains, and hide after everything is done
+- [x] Token usage charts read truthfully: the input/output series overlay on a
+      shared axis instead of stacking (the output curve was drawn at
+      input + output), on the overview and in the admin console — plus an
+      area / column switcher beside the week / month / year tabs on the
+      overview chart
 - [x] Production dashboard inbox with searchable status queues, full
       transcripts, Telegram replies, and close actions
 - [x] Telegram-gated automation, flow, and menu pages link directly to the
