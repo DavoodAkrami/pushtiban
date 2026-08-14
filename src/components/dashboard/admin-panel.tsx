@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { luxe } from "@/components/motion/reveal";
 import {
+  ChartTypeTabs,
   faNumber,
   faTokens,
   RANGE_HINTS,
@@ -27,6 +28,7 @@ import {
   UsageFigure,
   UsageRangeTabs,
   useUsageSeries,
+  type ChartType,
   type UsageRange,
 } from "@/components/dashboard/usage";
 import { Badge } from "@/components/ui/badge";
@@ -298,8 +300,8 @@ const StatCard = ({
 );
 
 /**
- * Token chart with its own range switcher. Used both for the whole platform
- * and, inside the business modal, for a single account.
+ * Token chart with its own range and chart-type switchers. Used both for the
+ * whole platform and, inside the business modal, for a single account.
  */
 const UsageChartCard = ({
   target,
@@ -313,6 +315,7 @@ const UsageChartCard = ({
   height?: number;
 }) => {
   const [range, setRange] = React.useState<UsageRange>("week");
+  const [chartType, setChartType] = React.useState<ChartType>("area");
   const { points, totals, loading } = useUsageSeries(target, range);
 
   return (
@@ -327,7 +330,14 @@ const UsageChartCard = ({
             {description} — {RANGE_HINTS[range]}
           </p>
         </div>
-        <UsageRangeTabs value={range} onChange={setRange} disabled={loading} />
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <ChartTypeTabs
+            value={chartType}
+            onChange={setChartType}
+            disabled={loading}
+          />
+          <UsageRangeTabs value={range} onChange={setRange} disabled={loading} />
+        </div>
       </div>
 
       <dl className="mt-5 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
@@ -350,6 +360,7 @@ const UsageChartCard = ({
           data={toTokenChartData(points)}
           series={TOKEN_CHART_SERIES}
           xKey="label"
+          variant={chartType}
           height={height}
           loading={loading}
           formatValue={faTokens}

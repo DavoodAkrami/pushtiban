@@ -153,8 +153,8 @@ How to use:
 - [x] Token usage charts read truthfully: the input/output series overlay on a
       shared axis instead of stacking (the output curve was drawn at
       input + output), on the overview and in the admin console — plus an
-      area / column switcher beside the week / month / year tabs on the
-      overview chart
+      area / column switcher beside the week / month / year tabs on every
+      token chart (overview, platform-wide and per business)
 - [x] Production dashboard inbox with searchable status queues, full
       transcripts, Telegram replies, and close actions
 - [x] Telegram-gated automation, flow, and menu pages link directly to the
