@@ -2,43 +2,16 @@
 
 import * as React from "react";
 import { motion, useReducedMotion, type HTMLMotionProps } from "framer-motion";
-import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/spinner";
-
-const buttonVariants = cva(
-  // before:hidden suppresses the glass top-sheen line on button surfaces
-  "relative inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full font-medium transition-colors duration-300 ease-luxe before:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50",
-  {
-    variants: {
-      variant: {
-        primary:
-          "bg-accent text-accent-foreground shadow-glow hover:brightness-110 hover:shadow-lift",
-        secondary: "glass text-foreground hover:bg-card",
-        outline:
-          "border border-line bg-transparent text-foreground hover:bg-card/60",
-        ghost: "text-muted hover:text-foreground hover:bg-line/50",
-        danger:
-          "bg-danger text-white hover:brightness-110 focus-visible:ring-danger/60",
-        success:
-          "bg-success text-white hover:brightness-110 focus-visible:ring-success/60",
-        link: "h-auto px-0 text-accent underline-offset-4 hover:underline focus-visible:ring-offset-0",
-      },
-      size: {
-        sm: "h-9 px-4 text-sm",
-        md: "h-11 px-6 text-sm",
-        lg: "h-[3.25rem] px-8 text-base",
-        icon: "size-11 px-0",
-        "icon-sm": "size-9 px-0",
-      },
-    },
-    defaultVariants: { variant: "primary", size: "md" },
-  }
-);
+import {
+  buttonVariants,
+  type ButtonVariantProps,
+} from "@/components/ui/button-variants";
 
 export interface ButtonProps
   extends Omit<HTMLMotionProps<"button">, "children">,
-    VariantProps<typeof buttonVariants> {
+    ButtonVariantProps {
   /** Shows a spinner and disables the button. */
   loading?: boolean;
   /** Icon placed before the label (start side in RTL). */
@@ -85,4 +58,8 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 );
 Button.displayName = "Button";
 
-export { Button, buttonVariants };
+// `buttonVariants` is intentionally NOT re-exported here: re-exporting it from
+// this `"use client"` module would turn it back into a client reference and
+// break every server component that styles a `<Link>` with it. Import it from
+// `@/components/ui/button-variants`.
+export { Button };

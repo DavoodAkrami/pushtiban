@@ -974,20 +974,19 @@ function GalleryInner() {
         <div className="grid max-w-4xl gap-5 lg:grid-cols-2">
           <div className="rounded-3xl border border-line bg-surface/40 p-5">
             <p className="mb-4 text-xs font-bold uppercase tracking-wide text-muted">
-              سطحی و انباشته
+              سطحی و همپوشان
             </p>
             <Chart
               data={CHART_DATA}
               series={CHART_SERIES}
               xKey="label"
-              stacked
               height={230}
               ariaLabel="نمونه نمودار سطحی مصرف توکن ورودی و خروجی در هفت روز گذشته"
             />
           </div>
           <div className="rounded-3xl border border-line bg-surface/40 p-5">
             <p className="mb-4 text-xs font-bold uppercase tracking-wide text-muted">
-              ستونی
+              ستونی و انباشته
             </p>
             <Chart
               data={CHART_DATA}

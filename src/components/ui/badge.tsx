@@ -12,7 +12,11 @@ const badgeVariants = cva(
         success: "border-success/25 bg-success/12 text-success",
         error: "border-danger/25 bg-danger/12 text-danger",
         warning: "border-warning/25 bg-warning/12 text-warning",
-        muted: "border-transparent bg-line/60 text-muted",
+        // `line` already carries its own alpha (`rgb(var(--line) / var(--line-alpha))`),
+        // so a `/60` modifier REPLACES that alpha instead of scaling it — which
+        // painted this chip 60% black in light theme, under 65% black text. Plain
+        // `bg-line` is the hairline fill the token is for.
+        muted: "border-transparent bg-line text-muted",
       },
     },
     defaultVariants: { variant: "default" },

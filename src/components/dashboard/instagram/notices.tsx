@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { TbBrandInstagram } from "react-icons/tb";
 import { Alert } from "@/components/ui/alert";
-import { buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button-variants";
 
 /**
  * Shown at the top of every Instagram feature page while the app is pending

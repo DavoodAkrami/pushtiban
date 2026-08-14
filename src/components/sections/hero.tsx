@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   motion,
@@ -19,8 +20,10 @@ import {
   CheckCheck,
   Database,
   BookOpenText,
+  Waypoints,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button-variants";
 import { WordReveal, Reveal, luxe } from "@/components/motion/reveal";
 import { AmbientBackground } from "@/components/motion/parallax";
 import { fa } from "@/lib/utils";
@@ -139,6 +142,26 @@ export function Hero() {
                 <PlayCircle className="size-4" />
                 مشاهده دمو
               </Button>
+            </div>
+          </Reveal>
+
+          <Reveal delay={1} y={16} blur={false}>
+            <div className="mt-5 flex justify-center lg:justify-start">
+              <Link
+                href="/how-ai-feed-data"
+                className={buttonVariants({
+                  variant: "link",
+                  size: "md",
+                  className: "group gap-2.5",
+                })}
+              >
+                <Waypoints className="size-4" aria-hidden />
+                ببینید دستیار با چه داده‌هایی تغذیه می‌شود
+                <ArrowLeft
+                  className="size-4 transition-transform duration-300 group-hover:-translate-x-1"
+                  aria-hidden
+                />
+              </Link>
             </div>
           </Reveal>
 

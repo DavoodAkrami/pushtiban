@@ -111,7 +111,7 @@ user       the customer's new message
 | Piece | Source | Owner edits at |
 | --- | --- | --- |
 | Business name, category | `profiles.business_name` / `business_category` | Settings → business info |
-| Business intro | `ai_assistant_settings.business_intro` | `/dashboard/ai-assistance/persona` |
+| Business intro | `ai_assistant_settings.business_intro` | `/dashboard/assistant/persona` |
 | Behaviour instructions | `ai_assistant_settings.assistant_instructions` | same |
 | Warmth, enthusiasm, headings/lists, emoji | four `less` / `default` / `more` columns | same |
 
@@ -239,6 +239,17 @@ The prompt is deliberately lean, and changes should keep it that way:
 - Untouched persona dials cost nothing.
 - Memory and facts are the two parts that grow without a similarity bar to stop
   them, which is why both are capped twice (count *and* characters).
+
+### Explaining it to the owner
+
+`/how-ai-feed-data` is the public, non-technical version of this section: one
+worked example, the four inputs named with where each came from, what never
+reaches the model, the three gates, and the numbers. It is a server component and
+**imports** `FACTS_MAX_COUNT` / `FACTS_MAX_CHARS` / `CHUNKS_MAX_PER_USER`
+(`lib/ai/limits.ts`), `SESSION_WINDOW_MS` / `PROMPT_MAX_TURNS` /
+`PROMPT_MAX_CHARS` (`lib/ai/memory.ts`) and `DEFAULT_SIGNUP_MESSAGE_LIMIT`
+(`lib/ai/usage.ts`) rather than restating them — change a cap here and the page
+follows. Never hard-code these digits back into its Persian copy.
 
 ### SQL
 

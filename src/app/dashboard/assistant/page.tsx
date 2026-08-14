@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
-import { Bot } from "lucide-react";
+import Link from "next/link";
+import { Bot, Waypoints } from "lucide-react";
 import { AssistantPanel } from "@/components/dashboard/assistant-panel";
 import { DashboardPageHeader } from "@/components/dashboard/page-header";
+import { buttonVariants } from "@/components/ui/button-variants";
 import { isAssistantAiConfigured } from "@/lib/ai/assistant";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -80,6 +82,15 @@ const AssistantPage = async () => {
         icon={Bot}
         title="وضعیت و رفتار"
         description="دستیار آخرین حلقهٔ پاسخ‌گویی است: هر پیامی که فلوها و کلیدواژه‌ها جواب ندهند به او می‌رسد."
+        action={
+          <Link
+            href="/how-ai-feed-data"
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            <Waypoints className="size-4" aria-hidden />
+            ببینید دستیار چه می‌خواند
+          </Link>
+        }
       />
       <AssistantPanel
         initialEnabled={settingsResult.data?.is_enabled === true}

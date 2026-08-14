@@ -350,7 +350,6 @@ const UsageChartCard = ({
           data={toTokenChartData(points)}
           series={TOKEN_CHART_SERIES}
           xKey="label"
-          stacked
           height={height}
           loading={loading}
           formatValue={faTokens}

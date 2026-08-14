@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Link2 } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
-import { buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button-variants";
 
 /**
  * Shown by every page that cannot do anything until a Telegram bot is

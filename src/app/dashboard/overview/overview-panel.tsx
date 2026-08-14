@@ -37,7 +37,8 @@ import {
   type UsageRange,
 } from "@/components/dashboard/usage";
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button-variants";
 import { Chart } from "@/components/ui/chart";
 import { Icon } from "@/components/ui/icon";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -567,7 +568,6 @@ export const OverviewPanel = () => {
               data={toTokenChartData(points)}
               series={TOKEN_CHART_SERIES}
               xKey="label"
-              stacked
               height={260}
               loading={seriesLoading}
               formatValue={faTokens}

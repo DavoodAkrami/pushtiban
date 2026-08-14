@@ -71,9 +71,9 @@ export type ChatSession = {
 export const SESSION_WINDOW_MS = 30 * 60_000;
 
 /** Turns sent to the model (2 exchanges). */
-const PROMPT_MAX_TURNS = 4;
+export const PROMPT_MAX_TURNS = 4;
 /** Total characters of history sent to the model. */
-const PROMPT_MAX_CHARS = 600;
+export const PROMPT_MAX_CHARS = 600;
 /** Per-turn cap applied when storing. */
 const STORED_TURN_MAX_CHARS = 400;
 /** Turns kept in the row — a little more than we send, so trimming is cheap. */

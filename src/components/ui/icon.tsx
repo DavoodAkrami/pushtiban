@@ -35,7 +35,9 @@ const tileVariants = cva(
     variants: {
       tone: {
         default: "bg-card/70 text-foreground",
-        muted: "bg-line/60 text-muted",
+        // Plain `bg-line`, not `bg-line/60`: the token bakes its own alpha in, so
+        // a modifier replaces it and the tile turns near-black in light theme.
+        muted: "bg-line text-muted",
         accent: "bg-accent/15 text-accent",
         success: "bg-success/15 text-success",
         danger: "bg-danger/15 text-danger",

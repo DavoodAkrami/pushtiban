@@ -210,6 +210,20 @@ How to use:
       title stays put instead of waiting for the scroll
 - [ ] Conversation inbox (live conversations, handoff to human)
 - [ ] Analytics dashboard (response rate, satisfaction, volumes)
+- [x] `/how-ai-feed-data` explainer page: a mindmap of the four channels that
+      feed the assistant (persona, retrieval, memory, customer message) plus
+      the reply pipeline, gates, output formatting and usage logging, so
+      anyone can see how the AI is fed with data
+- [x] `/how-ai-feed-data` rewritten for shop owners rather than engineers: the
+      mindmap (whose connectors never lined up, and were hidden entirely below
+      `lg`) is replaced by one worked example — a real customer question that
+      assembles its own answer while a step rail walks the four things the
+      assistant holds, each shown with the content an owner would have typed.
+      The four are then named with a `[شما]` / `[خودکار]` / `[مشتری]` chip and a
+      link to the page that controls them, followed by what never reaches the
+      assistant, the three gates, and the exact numbers in an accordion —
+      imported from `src/lib/ai/{limits,memory,usage}.ts` so they cannot drift
+      from what the pipeline enforces
 
 ## Phase 4 — Growth
 
