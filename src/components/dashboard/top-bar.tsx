@@ -4,7 +4,6 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import { useTheme } from "next-themes";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
@@ -12,7 +11,6 @@ import {
   TbLayoutSidebarRightExpand,
 } from "react-icons/tb";
 import {
-  Check,
   ChevronLeft,
   Inbox,
   LogOut,
@@ -21,10 +19,21 @@ import {
   Search,
   Settings2,
 } from "lucide-react";
+import { Avatar } from "@/components/ui/avatar";
 import {
   CommandPalette,
   type CommandGroup,
 } from "@/components/ui/command-palette";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import { luxe } from "@/components/motion/reveal";
 import { cn, fa } from "@/lib/utils";
@@ -174,15 +183,11 @@ const AccountMenu = ({
   | "onOpenSettings"
   | "onRequestSignOut"
 >) => {
-  const reduce = useReducedMotion();
   const { theme, setTheme } = useTheme();
   const [open, setOpen] = React.useState(false);
 
   const displayName =
     businessName.trim() || profile?.name?.trim() || "کسب‌وکار من";
-
-  const itemClass =
-    "flex h-10 cursor-pointer items-center gap-3 rounded-2xl px-3 text-sm text-muted outline-none transition-colors data-[highlighted]:bg-card/70 data-[highlighted]:text-foreground";
 
   const handleSelectSettings = () => {
     setOpen(false);
@@ -195,102 +200,72 @@ const AccountMenu = ({
   };
 
   return (
-    <DropdownMenuPrimitive.Root open={open} onOpenChange={setOpen} dir="rtl">
-      <DropdownMenuPrimitive.Trigger asChild>
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
         <button
           type="button"
           aria-label={`منوی حساب ${displayName}`}
-          className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent/15 text-sm font-bold text-accent transition-colors hover:bg-accent/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+          className="flex shrink-0 items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
         >
-          {displayName.charAt(0)}
+          <Avatar
+            name={displayName}
+            className="transition-colors hover:bg-accent/25"
+          />
         </button>
-      </DropdownMenuPrimitive.Trigger>
+      </DropdownMenuTrigger>
 
-      <AnimatePresence>
-        {open && (
-          <DropdownMenuPrimitive.Portal>
-            <DropdownMenuPrimitive.Content
-              asChild
-              align="end"
-              sideOffset={10}
-              className="z-50"
+      <DropdownMenuContent className="w-64">
+        <DropdownMenuLabel>
+          <span className="block truncate text-sm font-medium">
+            {displayName}
+          </span>
+          {profile?.email && (
+            <span
+              dir="ltr"
+              className="block truncate text-start text-xs text-muted"
             >
-              <motion.div
-                initial={
-                  reduce ? { opacity: 0 } : { opacity: 0, y: -6, scale: 0.97 }
-                }
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={
-                  reduce ? { opacity: 0 } : { opacity: 0, y: -4, scale: 0.98 }
-                }
-                transition={{ duration: reduce ? 0 : 0.2, ease: luxe }}
-                className="glass-strong w-64 rounded-3xl p-2 shadow-lift"
-              >
-                <DropdownMenuPrimitive.Label className="px-3 py-2">
-                  <span className="block truncate text-sm font-medium">
-                    {displayName}
-                  </span>
-                  {profile?.email && (
-                    <span
-                      dir="ltr"
-                      className="block truncate text-start text-xs text-muted"
-                    >
-                      {profile.email}
-                    </span>
-                  )}
-                </DropdownMenuPrimitive.Label>
+              {profile.email}
+            </span>
+          )}
+        </DropdownMenuLabel>
 
-                <DropdownMenuPrimitive.Separator className="my-1.5 h-px bg-line" />
+        <DropdownMenuSeparator />
 
-                <DropdownMenuPrimitive.Item
-                  className={itemClass}
-                  onSelect={handleSelectSettings}
-                >
-                  <Settings2 className="size-4 shrink-0" aria-hidden />
-                  <span>تنظیمات</span>
-                </DropdownMenuPrimitive.Item>
+        <DropdownMenuItem onSelect={handleSelectSettings}>
+          <Settings2 className="size-4 shrink-0" aria-hidden />
+          <span>تنظیمات</span>
+        </DropdownMenuItem>
 
-                <DropdownMenuPrimitive.Separator className="my-1.5 h-px bg-line" />
+        <DropdownMenuSeparator />
 
-                <DropdownMenuPrimitive.Label className="flex items-center gap-2 px-3 pb-1 pt-2 text-[11px] font-medium text-muted/80">
-                  <Palette className="size-3.5" aria-hidden />
-                  ظاهر
-                </DropdownMenuPrimitive.Label>
-                <DropdownMenuPrimitive.RadioGroup
-                  value={themeReady ? theme : undefined}
-                  onValueChange={setTheme}
-                >
-                  {THEME_OPTIONS.map((option) => (
-                    <DropdownMenuPrimitive.RadioItem
-                      key={option.value}
-                      value={option.value}
-                      disabled={!themeReady}
-                      className={itemClass}
-                    >
-                      <option.icon className="size-4 shrink-0" aria-hidden />
-                      <span className="flex-1">{option.label}</span>
-                      <DropdownMenuPrimitive.ItemIndicator>
-                        <Check className="size-3.5 text-accent" aria-hidden />
-                      </DropdownMenuPrimitive.ItemIndicator>
-                    </DropdownMenuPrimitive.RadioItem>
-                  ))}
-                </DropdownMenuPrimitive.RadioGroup>
+        <DropdownMenuLabel variant="muted">
+          <Palette className="size-3.5" aria-hidden />
+          ظاهر
+        </DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={themeReady ? theme : undefined}
+          onValueChange={setTheme}
+        >
+          {THEME_OPTIONS.map((option) => (
+            <DropdownMenuRadioItem
+              key={option.value}
+              value={option.value}
+              disabled={!themeReady}
+            >
+              <option.icon className="size-4 shrink-0" aria-hidden />
+              <span className="flex-1">{option.label}</span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
 
-                <DropdownMenuPrimitive.Separator className="my-1.5 h-px bg-line" />
+        <DropdownMenuSeparator />
 
-                <DropdownMenuPrimitive.Item
-                  className={itemClass}
-                  onSelect={handleSelectSignOut}
-                >
-                  <LogOut className="size-4 shrink-0" aria-hidden />
-                  <span>خروج از حساب</span>
-                </DropdownMenuPrimitive.Item>
-              </motion.div>
-            </DropdownMenuPrimitive.Content>
-          </DropdownMenuPrimitive.Portal>
-        )}
-      </AnimatePresence>
-    </DropdownMenuPrimitive.Root>
+        <DropdownMenuItem onSelect={handleSelectSignOut}>
+          <LogOut className="size-4 shrink-0" aria-hidden />
+          <span>خروج از حساب</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 };
 

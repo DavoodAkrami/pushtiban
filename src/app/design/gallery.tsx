@@ -5,17 +5,21 @@ import Link from "next/link";
 import { useTheme } from "next-themes";
 import {
   ArrowLeft,
+  ArrowUpDown,
   Bell,
   Bot,
   BrainCircuit,
   Building2,
+  ChevronDown,
   Database,
   FileText,
   Globe,
   HelpCircle,
+  Inbox,
   LineChart,
   Lock,
   Mail,
+  MessageSquareText,
   Moon,
   PanelRightClose,
   PanelRightOpen,
@@ -31,8 +35,23 @@ import {
   Zap,
 } from "lucide-react";
 
+import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { LoadMore } from "@/components/ui/load-more";
+import { MetricCard } from "@/components/ui/metric-card";
+import { Steps } from "@/components/ui/steps";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, type SelectOption } from "@/components/ui/select";
 import {
@@ -349,6 +368,16 @@ function InputsDemo() {
           maxLength={200}
           showCount
           defaultValue="سلام! من دستیار هوشمند فروشگاه نیلا هستم. هر سوالی درباره محصولات دارید بپرسید."
+        />
+      </div>
+      <div className="sm:col-span-2">
+        <Textarea
+          label="پاسخ به مشتری"
+          placeholder="پاسخ خود را بنویسید…"
+          hint="با هر خط تازه بلندتر می‌شود، تا سقفی که برایش تعیین شده"
+          autoResize
+          className="min-h-24 max-h-56"
+          defaultValue="سلام! سفارش شما امروز ارسال شد."
         />
       </div>
       <div className="sm:col-span-2">
@@ -690,6 +719,271 @@ const PageTabsDemo = () => (
   </div>
 );
 
+const EmptyStateDemo = () => (
+  <div className="grid max-w-4xl gap-5 lg:grid-cols-2">
+    <EmptyState
+      icon={BrainCircuit}
+      title="اولین اطلاعات کسب‌وکار را اضافه کنید"
+      description="مثلاً ساعت کاری، آدرس یا سیاست ارسال را وارد کنید تا هوش مصنوعی همیشه آن را بداند."
+      action={<Button startIcon={<Plus className="size-4" />}>افزودن اطلاعات</Button>}
+    />
+    <div className="space-y-5">
+      <EmptyState
+        icon={Search}
+        tone="muted"
+        description="کسب‌وکاری با این مشخصات پیدا نشد."
+      />
+      <EmptyState
+        size="sm"
+        icon={Inbox}
+        tone="muted"
+        title="صندوق خالی است"
+        description="هر گفتگویی که به اپراتور ارجاع شود همین‌جا می‌نشیند."
+      />
+    </div>
+  </div>
+);
+
+const LoadMoreDemo = () => {
+  const [shown, setShown] = React.useState(20);
+  const [loading, setLoading] = React.useState(false);
+  const total = 134;
+
+  const loadMore = () => {
+    setLoading(true);
+    window.setTimeout(() => {
+      setShown((current) => Math.min(current + 20, total));
+      setLoading(false);
+    }, 700);
+  };
+
+  return (
+    <div className="max-w-md rounded-3xl border border-line bg-surface/40 p-5">
+      <div className="space-y-2">
+        {[0, 1, 2].map((row) => (
+          <div
+            key={row}
+            className="rounded-2xl border border-line bg-card/50 px-4 py-3 text-xs text-muted"
+          >
+            ردیف نمونه {fa(row + 1)}
+          </div>
+        ))}
+      </div>
+      <LoadMore
+        shown={shown}
+        total={total}
+        unit="کسب‌وکار"
+        step={20}
+        loading={loading}
+        onLoadMore={loadMore}
+      />
+    </div>
+  );
+};
+
+const DEMO_STEPS = [
+  { id: "channels", label: "اتصال کانال", description: "تلگرام یا اینستاگرام" },
+  { id: "bot", label: "ساخت ربات", description: "توکن را از BotFather بگیرید" },
+  { id: "knowledge", label: "افزودن دانش", description: "اطلاعات و پرسش‌های پرتکرار" },
+  { id: "launch", label: "شروع پاسخ‌گویی" },
+];
+
+const StepsDemo = () => {
+  const [current, setCurrent] = React.useState(1);
+  const done = current >= DEMO_STEPS.length - 1;
+
+  return (
+    <div className="grid max-w-4xl gap-5 lg:grid-cols-2">
+      <div className="rounded-3xl border border-line bg-surface/40 p-6">
+        <p className="mb-5 text-xs font-bold uppercase tracking-wide text-muted">
+          عمودی — قابل انتخاب
+        </p>
+        <Steps
+          label="نمونهٔ مراحل راه‌اندازی"
+          steps={DEMO_STEPS}
+          current={current}
+          onSelect={(_step, index) => setCurrent(index)}
+        />
+        <div className="mt-2 flex gap-3">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={current === 0}
+            onClick={() => setCurrent((step) => Math.max(step - 1, 0))}
+          >
+            قدم قبلی
+          </Button>
+          <Button
+            size="sm"
+            disabled={done}
+            onClick={() =>
+              setCurrent((step) => Math.min(step + 1, DEMO_STEPS.length - 1))
+            }
+          >
+            قدم بعدی
+          </Button>
+        </div>
+      </div>
+      <div className="space-y-5">
+        <div className="rounded-3xl border border-line bg-surface/40 p-6">
+          <p className="mb-5 text-xs font-bold uppercase tracking-wide text-muted">
+            افقی
+          </p>
+          <Steps
+            orientation="horizontal"
+            label="نمونهٔ مراحل افقی"
+            steps={DEMO_STEPS}
+            current={current}
+          />
+        </div>
+        <div className="rounded-3xl border border-line bg-surface/40 p-6">
+          <p className="mb-5 text-xs font-bold uppercase tracking-wide text-muted">
+            پایان‌یافته
+          </p>
+          <Steps
+            orientation="horizontal"
+            label="نمونهٔ مراحل کامل‌شده"
+            steps={DEMO_STEPS}
+            current={DEMO_STEPS.length - 1}
+            complete
+          />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const DropdownMenuDemo = () => {
+  const [sort, setSort] = React.useState("recent");
+  const [picked, setPicked] = React.useState<string | null>(null);
+
+  return (
+    <div className="flex max-w-2xl flex-wrap items-center gap-6">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" endIcon={<ChevronDown className="size-4" />}>
+            منوی نمونه
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent className="w-60">
+          <DropdownMenuLabel>
+            <span className="block truncate text-sm font-medium">قنادی نیلا</span>
+            <span dir="ltr" className="block truncate text-start text-xs text-muted">
+              nila@example.com
+            </span>
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => setPicked("تنظیمات")}>
+            <Settings className="size-4 shrink-0" aria-hidden />
+            <span>تنظیمات</span>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel variant="muted">
+            <ArrowUpDown className="size-3.5" aria-hidden />
+            ترتیب
+          </DropdownMenuLabel>
+          <DropdownMenuRadioGroup value={sort} onValueChange={setSort}>
+            <DropdownMenuRadioItem value="recent">
+              <span className="flex-1">تازه‌ترین</span>
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="oldest">
+              <span className="flex-1">قدیمی‌ترین</span>
+            </DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem tone="danger" onSelect={() => setPicked("حذف")}>
+            <Trash2 className="size-4 shrink-0" aria-hidden />
+            <span>حذف کسب‌وکار</span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <p className="text-sm text-muted">
+        ترتیب: {sort === "recent" ? "تازه‌ترین" : "قدیمی‌ترین"}
+        {picked && ` — آخرین انتخاب: ${picked}`}
+      </p>
+    </div>
+  );
+};
+
+const AvatarDemo = () => (
+  <>
+    <Row label="اندازه‌ها">
+      <Avatar name="نیلا" size="xs" />
+      <Avatar name="نیلا" size="sm" />
+      <Avatar name="نیلا" size="md" />
+      <Avatar name="نیلا" size="lg" />
+    </Row>
+    <Row label="رنگ و شکل">
+      <Avatar name="پشتیبان" tone="accent" />
+      <Avatar name="مهمان" tone="muted" />
+      <Avatar name="سارا" tone="default" />
+      <Avatar name="آنلاین" tone="success" />
+      <Avatar name="کاربر" shape="tile" tone="muted" />
+      <Avatar name="کاربر" shape="tile" size="md" />
+    </Row>
+    <Row label="در یک ردیف">
+      <div className="flex w-full max-w-sm items-center gap-3 rounded-2xl border border-line bg-surface/40 p-3">
+        <Avatar name="مریم رضایی" shape="tile" />
+        <div className="min-w-0">
+          <p className="truncate text-sm font-bold">مریم رضایی</p>
+          <p className="truncate text-xs text-muted">۲ پیام تازه</p>
+        </div>
+        <Badge variant="accent" className="ms-auto">
+          باز
+        </Badge>
+      </div>
+    </Row>
+  </>
+);
+
+const MetricCardDemo = () => (
+  <div className="grid max-w-5xl gap-5 sm:grid-cols-2 lg:grid-cols-3">
+    <MetricCard
+      icon={MessageSquareText}
+      label="پیام‌های پاسخ‌داده‌شده"
+      value={fa("1348")}
+      hint="در ۳۰ روز گذشته"
+      delta={{ value: 18, since: "نسبت به ماه گذشته" }}
+      trend={CHART_DATA.map((point) => point.output)}
+    />
+    <MetricCard
+      icon={Inbox}
+      label="گفتگوهای باز"
+      value={fa(4)}
+      hint="در انتظار پاسخ اپراتور"
+      tone="warning"
+      delta={{ value: -25, since: "نسبت به هفته گذشته", sense: "down" }}
+      href="#"
+    />
+    <MetricCard
+      icon={Zap}
+      label="مصرف توکن"
+      value={fa("144٬600")}
+      hint="سطحی برای سنجش، نه قضاوت"
+      tone="accent"
+      delta={{ value: 9, since: "نسبت به هفته گذشته", sense: "none" }}
+      trend={CHART_DATA.map((point) => point.input)}
+    />
+    <MetricCard
+      icon={BrainCircuit}
+      label="تکه‌های دانش"
+      value={fa(0)}
+      hint="در حال بارگذاری"
+      loading
+      trend={CHART_DATA.map((point) => point.input)}
+    />
+    <MetricCard
+      icon={ShieldCheck}
+      label="نرخ پاسخ خودکار"
+      value={`${fa(94)}٪`}
+      hint="بدون دخالت اپراتور"
+      tone="success"
+      delta={{ value: 0 }}
+    />
+  </div>
+);
+
 function AtomsDemo() {
   return (
     <>
@@ -965,6 +1259,48 @@ function GalleryInner() {
             <SkeletonBlock />
           </div>
         </div>
+      </Section>
+
+      <Section
+        title="منوی کشویی"
+        lead="منوی Radix با انیمیشن Framer؛ باز و بسته‌شدن هر دو انیمیشن دارند، جهت RTL، کلیدهای بالا و پایین، تایپ برای رسیدن به یک ردیف و Esc برای بستن."
+      >
+        <DropdownMenuDemo />
+      </Section>
+
+      <Section
+        title="آواتار"
+        lead="یک حرف روی سطح نرم — جای عکسی که کسی آپلود نمی‌کند. اندازه‌ها و رنگ‌ها با کاشی آیکون‌ها هم‌تراز است."
+      >
+        <AvatarDemo />
+      </Section>
+
+      <Section
+        title="مراحل"
+        lead="ریل پیشرفت؛ فقط شمارهٔ مرحلهٔ جاری را می‌گیرد و بقیه از آن نتیجه می‌شود. خط میان دو نشانه با تمام‌شدن مرحلهٔ قبل پر می‌شود."
+      >
+        <StepsDemo />
+      </Section>
+
+      <Section
+        title="حالت خالی"
+        lead="چیزی که یک فهرست پیش از پر شدن نشان می‌دهد: نام آن چیزِ نبوده، و همان یک کاری که باید کرد."
+      >
+        <EmptyStateDemo />
+      </Section>
+
+      <Section
+        title="بارگذاری بیشتر"
+        lead="پای یک فهرست بلند: چقدرش روی صفحه است، چقدر هست، و کلیک بعدی چند ردیف اضافه می‌کند."
+      >
+        <LoadMoreDemo />
+      </Section>
+
+      <Section
+        title="کارت شاخص"
+        lead="یک عدد با برچسب، تغییر نسبت به دورهٔ قبل و نمودار کوچک روند. جهت خوب بودنِ تغییر را خودتان تعیین می‌کنید — بالا رفتن مصرف توکن خبر است، نه قضاوت."
+      >
+        <MetricCardDemo />
       </Section>
 
       <Section

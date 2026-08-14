@@ -27,6 +27,11 @@ How to use:
 - [x] Viewport-aware select dropdowns (flip up / internal scroll)
 - [x] Skeleton loading components (card, text, large block)
 - [x] Language-aware input direction and non-resizable textareas
+- [x] Library additions at `/design` — empty states, metric cards with a trend
+      sparkline and change chip, initial avatars, a list footer that says how
+      much is left to load, and a step rail for ordered flows
+- [x] Dropdown menus as a shared component (RTL, keyboard, radio rows) — the
+      account menu used to disappear instead of closing
 - [x] Developer docs: `CONTRIBUTING.md` + agent rules in `CLAUDE.md`
 - [ ] Pricing section (built, currently commented out — re-enable when plans
       are final)
@@ -157,6 +162,22 @@ How to use:
       token chart (overview, platform-wide and per business)
 - [x] Production dashboard inbox with searchable status queues, full
       transcripts, Telegram replies, and close actions
+- [x] Inbox reworked into a fixed-height, two-pane app frame: the panel is
+      pinned to the viewport so a long transcript no longer stretches the page,
+      each pane scrolls on its own, and below `lg` the list and the chat become
+      a master/detail pair with a back button
+- [x] Inbox composer rebuilt around one focus-within card: a taller
+      auto-growing field, Enter to send with Shift + Enter for a new line
+      (IME-safe), a 4000-character counter that appears near the limit, and a
+      send button that swaps its glyph for the spinner instead of squeezing both
+- [x] Inbox transcript reads like a chat app: day separators with time-only
+      bubbles, sticky day markers, skeleton loading, auto-scroll to the newest
+      message, an optimistic pending bubble with a delivery tick, distinct
+      customer / assistant / operator / system treatments, and replies that keep
+      the operator in the same conversation
+- [x] Inbox is channel-aware: Telegram and Instagram conversations get their own
+      avatar mark, profile link and delivery note, and search folds Persian
+      digits and ی/ک variants via normalizeFa
 - [x] Telegram-gated automation, flow, and menu pages link directly to the
       Settings connections flow
 - [x] Settings business information section for editing business name and

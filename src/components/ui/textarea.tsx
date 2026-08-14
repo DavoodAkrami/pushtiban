@@ -14,6 +14,12 @@ export interface TextareaProps
     FieldWrapperProps {
   /** Shows a live character counter when maxLength is set. */
   showCount?: boolean;
+  /**
+   * Grows the field with its content instead of scrolling at a fixed height.
+   * The travel is bounded by the `min-h-*` / `max-h-*` classes on the field,
+   * so a caller decides how small it rests and how tall it may get.
+   */
+  autoResize?: boolean;
 }
 
 const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
@@ -26,6 +32,7 @@ const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
       success,
       required,
       showCount,
+      autoResize,
       maxLength,
       id: idProp,
       onChange,
@@ -45,6 +52,29 @@ const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
     const currentValue = value ?? uncontrolledValue;
     const direction = getFieldDirection(currentValue);
     const count = String(currentValue).length;
+    const innerRef = React.useRef<HTMLTextAreaElement | null>(null);
+
+    // The measurement needs the node, the caller usually wants it too (to focus
+    // the field after sending), so the forwarded ref is mirrored rather than
+    // handed over.
+    const attachRef = (node: HTMLTextAreaElement | null) => {
+      innerRef.current = node;
+      if (typeof ref === "function") ref(node);
+      else if (ref) ref.current = node;
+    };
+
+    // Height follows the content: reset to auto so it can shrink again, then
+    // take scrollHeight — which counts padding but not the border, while
+    // border-box height does, hence the two border widths added back.
+    React.useEffect(() => {
+      const node = innerRef.current;
+      if (!autoResize || !node) return;
+      node.style.height = "auto";
+      const styles = window.getComputedStyle(node);
+      const borders =
+        parseFloat(styles.borderTopWidth) + parseFloat(styles.borderBottomWidth);
+      node.style.height = `${node.scrollHeight + borders}px`;
+    }, [autoResize, currentValue]);
 
     return (
       <FieldWrapper
@@ -59,7 +89,7 @@ const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
           <textarea
             {...props}
             id={id}
-            ref={ref}
+            ref={attachRef}
             dir={direction}
             rows={rows ?? 4}
             maxLength={maxLength}
@@ -78,6 +108,7 @@ const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
               fieldStateClasses(state),
               "min-h-28 px-4 py-3 leading-7",
               showCount && maxLength && "pb-8",
+              autoResize && "overflow-y-auto",
               className,
               "resize-none text-start"
             )}

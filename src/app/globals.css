@@ -130,16 +130,21 @@ body {
 /* Persian digits render nicely with Vazirmatn's built-in numerals */
 
 @layer utilities {
+  /* The prefixed property comes first on purpose. The CSS pipeline treats
+     `-webkit-backdrop-filter` as an alias of the standard property and keeps
+     only the last one written, so declaring the standard property first left
+     the build with nothing but the `-webkit-` form — which current Chrome no
+     longer supports, and every glass surface rendered flat. */
   .glass {
     background: rgb(var(--glass-bg) / var(--glass-alpha));
-    backdrop-filter: blur(20px) saturate(1.4);
     -webkit-backdrop-filter: blur(20px) saturate(1.4);
+    backdrop-filter: blur(20px) saturate(1.4);
     border: 1px solid rgb(var(--line) / calc(var(--line-alpha) + 0.03));
   }
   .glass-strong {
     background: rgb(var(--glass-bg) / calc(var(--glass-alpha) + 0.2));
-    backdrop-filter: blur(28px) saturate(1.5);
     -webkit-backdrop-filter: blur(28px) saturate(1.5);
+    backdrop-filter: blur(28px) saturate(1.5);
     border: 1px solid rgb(var(--line) / calc(var(--line-alpha) + 0.04));
   }
   .text-balance {

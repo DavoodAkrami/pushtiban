@@ -17,6 +17,7 @@ const InboxPage = async () => {
   // is not yet set up (the user will see an empty-state with a note).
   let initialConversations: Array<{
     id: string;
+    channel: "telegram" | "instagram";
     customerDisplayName: string | null;
     customerUsername: string | null;
     lastCustomerMessageText: string | null;
@@ -31,7 +32,7 @@ const InboxPage = async () => {
     const { data, error } = await supabase
       .from("support_conversations")
       .select(
-        "id, customer_display_name, customer_username, last_customer_message_text, last_customer_message_at, status, queued_reason, created_at"
+        "id, channel, customer_display_name, customer_username, last_customer_message_text, last_customer_message_at, status, queued_reason, created_at"
       )
       .eq("user_id", user.id)
       .order("last_customer_message_at", { ascending: false, nullsFirst: false })
@@ -42,6 +43,9 @@ const InboxPage = async () => {
     } else if (data) {
       initialConversations = data.map((row) => ({
         id: row.id,
+        // Rows written before channel-inbox.sql ran have no channel, and every
+        // one of those came from Telegram.
+        channel: row.channel ?? "telegram",
         customerDisplayName: row.customer_display_name,
         customerUsername: row.customer_username,
         lastCustomerMessageText: row.last_customer_message_text,

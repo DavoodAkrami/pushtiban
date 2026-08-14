@@ -38,6 +38,10 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ) => {
     const reduce = useReducedMotion();
     const still = variant === "link" || !!reduce;
+    // An icon-only button is a fixed circle with room for exactly one glyph, so
+    // the spinner has to REPLACE its icon rather than join it: rendering both
+    // squeezed the two side by side and made every send button jump mid-click.
+    const iconOnly = size === "icon" || size === "icon-sm";
     return (
       <motion.button
         className={cn(buttonVariants({ variant, size, className }))}
@@ -50,7 +54,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         {...props}
       >
         {loading ? <Spinner size="sm" /> : startIcon}
-        {children}
+        {loading && iconOnly ? null : children}
         {!loading && endIcon}
       </motion.button>
     );

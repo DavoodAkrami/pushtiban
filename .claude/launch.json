@@ -6,6 +6,18 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 3000
+    },
+    {
+      "name": "pushtiban-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["next", "start", "-p", "3100"],
+      "port": 3100
+    },
+    {
+      "name": "pushtiban-design-verify",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["next", "start", "-p", "3210"],
+      "port": 3210
     }
   ]
 }
