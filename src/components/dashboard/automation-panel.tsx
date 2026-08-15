@@ -20,6 +20,7 @@ import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/checkbox";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import {
@@ -841,22 +842,21 @@ const AutomationPanelContent = () => {
         )}
 
         {!loading && status === "succeeded" && bot && items.length === 0 && (
-          <section className="rounded-3xl border border-dashed border-line bg-surface/25 px-6 py-14 text-center">
-            <Icon icon={MessageSquareText} tile size="lg" tone="accent" />
-            <h2 className="mt-5 text-lg font-bold">اولین پاسخ آماده را بسازید</h2>
-            <p className="mx-auto mt-2 max-w-lg text-sm leading-7 text-muted">
-              مثلاً فرمان «/help» یا کلیدواژه «راهنما» را به یک متن کامل وصل
-              کنید تا مشتری فوراً پاسخ آماده را دریافت کند.
-            </p>
-            <Button
-              type="button"
-              className="mt-7"
-              startIcon={<Plus className="size-4" />}
-              onClick={openCreate}
-            >
-              ساخت اولین اتوماسیون
-            </Button>
-          </section>
+          <EmptyState
+            icon={MessageSquareText}
+            tone="accent"
+            title="اولین پاسخ آماده را بسازید"
+            description="مثلاً فرمان «/help» یا کلیدواژه «راهنما» را به یک متن کامل وصل کنید تا مشتری فوراً پاسخ آماده را دریافت کند."
+            action={
+              <Button
+                type="button"
+                startIcon={<Plus className="size-4" />}
+                onClick={openCreate}
+              >
+                ساخت اولین اتوماسیون
+              </Button>
+            }
+          />
         )}
 
         {!loading && status === "succeeded" && items.length > 0 && (

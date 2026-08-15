@@ -21,6 +21,7 @@ import { SettingsModal } from "@/components/dashboard/settings-modal";
 import { DashboardTopBar } from "@/components/dashboard/top-bar";
 import { DashboardTitleContext } from "@/components/dashboard/title-context";
 import { luxe } from "@/components/motion/reveal";
+import { Avatar } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
@@ -101,7 +102,6 @@ const UserChip = ({
 }) => {
   const displayName =
     businessName.trim() || profile?.name?.trim() || "کسب‌وکار من";
-  const initial = displayName.charAt(0);
 
   return (
     <button
@@ -116,9 +116,7 @@ const UserChip = ({
         !expanded && "justify-center p-2"
       )}
     >
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent/15 text-sm font-bold text-accent">
-        {initial}
-      </span>
+      <Avatar name={displayName} size="sm" tone="accent" shape="circle" />
       {expanded && (
         <>
           <span className="min-w-0 flex-1">

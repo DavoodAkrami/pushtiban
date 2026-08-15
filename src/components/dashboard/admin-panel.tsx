@@ -35,8 +35,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Chart } from "@/components/ui/chart";
 import { Switch } from "@/components/ui/checkbox";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
+import { MetricCard } from "@/components/ui/metric-card";
 import {
   Modal,
   ModalContent,
@@ -272,33 +274,6 @@ const RefreshButton = ({
 // Usage overview panel — /dashboard/admin
 // ---------------------------------------------------------------------------
 
-const StatCard = ({
-  label,
-  value,
-  hint,
-  icon,
-  loading,
-}: {
-  label: string;
-  value: string;
-  hint: string;
-  icon: LucideIcon;
-  loading: boolean;
-}) => (
-  <div className="rounded-3xl border border-line bg-surface/40 p-5">
-    <div className="flex items-center gap-3">
-      <Icon icon={icon} tile size="sm" tone="accent" className="shrink-0" />
-      <span className="text-xs text-muted">{label}</span>
-    </div>
-    {loading ? (
-      <Skeleton className="mt-3 h-7 w-24" />
-    ) : (
-      <p className="mt-3 text-2xl font-black tabular-nums">{value}</p>
-    )}
-    <p className="mt-1 text-xs text-muted">{hint}</p>
-  </div>
-);
-
 /**
  * Token chart with its own range and chart-type switchers. Used both for the
  * whole platform and, inside the business modal, for a single account.
@@ -409,28 +384,28 @@ export const AdminUsagePanel = () => {
           aria-label="مصرف این ماه در کل پلتفرم"
           className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
         >
-          <StatCard
+          <MetricCard
             label="توکن ورودی این ماه"
             value={faTokens(totals?.monthPromptTokens ?? 0)}
             hint="پرسش‌ها و دانش ارسال‌شده به مدل"
             icon={ArrowUpFromLine}
             loading={loading}
           />
-          <StatCard
+          <MetricCard
             label="توکن خروجی این ماه"
             value={faTokens(totals?.monthCompletionTokens ?? 0)}
             hint="پاسخ‌های تولیدشده توسط مدل"
             icon={ArrowDownToLine}
             loading={loading}
           />
-          <StatCard
+          <MetricCard
             label="پیام این ماه"
             value={fa(totals?.monthMessages ?? 0)}
             hint="پاسخ‌های هوشمند ارسال‌شده"
             icon={MessageSquareText}
             loading={loading}
           />
-          <StatCard
+          <MetricCard
             label="کسب‌وکارها"
             value={fa(businesses.length)}
             hint="حساب‌های ثبت‌نام‌شده"
@@ -494,12 +469,11 @@ export const AdminUsagePanel = () => {
           )}
 
           {!loading && topBusinesses.length === 0 && (
-            <div className="rounded-3xl border border-dashed border-line bg-surface/25 px-6 py-14 text-center">
-              <Icon icon={BarChart3} tile size="lg" tone="muted" />
-              <p className="mt-5 text-sm leading-7 text-muted">
-                در این ماه هنوز مصرفی ثبت نشده است.
-              </p>
-            </div>
+            <EmptyState
+              icon={BarChart3}
+              tone="muted"
+              description="در این ماه هنوز مصرفی ثبت نشده است."
+            />
           )}
 
           {!loading && topBusinesses.length > 0 && (
@@ -982,14 +956,15 @@ export const AdminBusinessesPanel = () => {
       )}
 
       {!loading && filteredBusinesses.length === 0 && (
-        <div className="rounded-3xl border border-dashed border-line bg-surface/25 px-6 py-14 text-center">
-          <Icon icon={query ? Search : Ban} tile size="lg" tone="muted" />
-          <p className="mt-5 text-sm leading-7 text-muted">
-            {query
+        <EmptyState
+          icon={query ? Search : Ban}
+          tone="muted"
+          description={
+            query
               ? "کسب‌وکاری با این مشخصات پیدا نشد."
-              : "هنوز کسب‌وکاری ثبت‌نام نکرده است."}
-          </p>
-        </div>
+              : "هنوز کسب‌وکاری ثبت‌نام نکرده است."
+          }
+        />
       )}
 
       {!loading && filteredBusinesses.length > 0 && (

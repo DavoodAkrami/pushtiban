@@ -12,6 +12,7 @@ import {
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import {
   Modal,
   ModalContent,
@@ -23,7 +24,6 @@ import {
 import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Select } from "@/components/ui/select";
-import { Icon } from "@/components/ui/icon";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
 import { FACTS_MAX_CHARS, FACTS_MAX_COUNT } from "@/lib/ai/limits";
@@ -415,24 +415,21 @@ export const FactsEditor = () => {
         )}
 
         {!loading && facts.length === 0 && (
-          <section className="rounded-3xl border border-dashed border-line bg-surface/25 px-6 py-14 text-center">
-            <Icon icon={BookOpen} tile size="lg" tone="accent" />
-            <h2 className="mt-5 text-lg font-bold">
-              اولین اطلاعات کسب‌وکار را اضافه کنید
-            </h2>
-            <p className="mx-auto mt-2 max-w-lg text-sm leading-7 text-muted">
-              مثلاً ساعت کاری، آدرس یا سیاست ارسال را وارد کنید تا هوش مصنوعی
-              همیشه آن را بداند.
-            </p>
-            <Button
-              type="button"
-              className="mt-6"
-              startIcon={<Plus className="size-4" />}
-              onClick={openCreate}
-            >
-              افزودن اولین اطلاعات
-            </Button>
-          </section>
+          <EmptyState
+            icon={BookOpen}
+            tone="accent"
+            title="اولین اطلاعات کسب‌وکار را اضافه کنید"
+            description="مثلاً ساعت کاری، آدرس یا سیاست ارسال را وارد کنید تا هوش مصنوعی همیشه آن را بداند."
+            action={
+              <Button
+                type="button"
+                startIcon={<Plus className="size-4" />}
+                onClick={openCreate}
+              >
+                افزودن اولین اطلاعات
+              </Button>
+            }
+          />
         )}
 
         {!loading && facts.length > 0 && (

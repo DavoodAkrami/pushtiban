@@ -42,7 +42,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { buttonVariants } from "@/components/ui/button-variants";
 import { Chart } from "@/components/ui/chart";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Icon } from "@/components/ui/icon";
+import { MetricCard } from "@/components/ui/metric-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { cn, fa } from "@/lib/utils";
@@ -64,54 +66,6 @@ type Overview = {
     ownerLinked: boolean;
   };
   business: { category: string; categoryLabel: string };
-};
-
-const StatCard = ({
-  label,
-  value,
-  hint,
-  icon,
-  loading,
-  href,
-}: {
-  label: string;
-  value: string;
-  hint: string;
-  icon: LucideIcon;
-  loading: boolean;
-  href?: string;
-}) => {
-  const body = (
-    <>
-      <div className="flex items-center gap-3">
-        <Icon icon={icon} tile size="sm" tone="accent" className="shrink-0" />
-        <span className="text-xs text-muted">{label}</span>
-      </div>
-      {loading ? (
-        <Skeleton className="mt-3 h-7 w-20" />
-      ) : (
-        <p className="mt-3 text-2xl font-black tabular-nums">{value}</p>
-      )}
-      <p className="mt-1 text-xs text-muted">{hint}</p>
-    </>
-  );
-
-  if (!href) {
-    return (
-      <div className="rounded-3xl border border-line bg-surface/40 p-5">
-        {body}
-      </div>
-    );
-  }
-
-  return (
-    <Link
-      href={href}
-      className="rounded-3xl border border-line bg-surface/40 p-5 transition-colors duration-300 hover:bg-surface/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-    >
-      {body}
-    </Link>
-  );
 };
 
 /** One row of the setup checklist: done, or a link to the page that does it. */
@@ -496,7 +450,7 @@ export const OverviewPanel = () => {
           aria-label="آمار کلی"
           className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
         >
-          <StatCard
+          <MetricCard
             label="گفتگوهای باز"
             value={fa(overview?.inbox.openConversations ?? 0)}
             hint="منتظر پاسخ شما در صندوق پیام‌ها"
@@ -504,7 +458,7 @@ export const OverviewPanel = () => {
             loading={loading}
             href="/dashboard/inbox"
           />
-          <StatCard
+          <MetricCard
             label="دانش کسب‌وکار"
             value={fa(knowledgeCount)}
             hint="اطلاعات و پرسش‌وپاسخ ثبت‌شده"
@@ -512,7 +466,7 @@ export const OverviewPanel = () => {
             loading={loading}
             href="/dashboard/knowledge"
           />
-          <StatCard
+          <MetricCard
             label="فلوهای فعال"
             value={fa(overview?.automation.activeFlows ?? 0)}
             hint="گفتگوهای خودکار تلگرام"
@@ -520,7 +474,7 @@ export const OverviewPanel = () => {
             loading={loading}
             href="/dashboard/automation"
           />
-          <StatCard
+          <MetricCard
             label="توکن این ماه"
             value={faTokens(usage?.monthTokens ?? 0)}
             hint="ورودی و خروجی مدل"
@@ -589,21 +543,18 @@ export const OverviewPanel = () => {
         </section>
 
         {(overview?.assistant.enabled ?? false) === false && !loading && (
-          <section className="rounded-3xl border border-dashed border-line bg-surface/25 px-6 py-10 text-center">
-            <Icon icon={Sparkles} tile size="lg" tone="accent" />
-            <h2 className="mt-5 text-lg font-bold">دستیار شما خاموش است</h2>
-            <p className="mx-auto mt-2 max-w-md text-sm leading-7 text-muted">
-              با روشن کردن دستیار، پرسش‌هایی که فلوها و پیام‌های آماده پاسخ
-              نمی‌دهند به هوش مصنوعی سپرده می‌شوند.
-            </p>
-            <Link
-              href="/dashboard/assistant"
-              className={buttonVariants({ className: "mt-6" })}
-            >
-              رفتن به تنظیمات دستیار
-              <ArrowLeft className="size-4" aria-hidden />
-            </Link>
-          </section>
+          <EmptyState
+            icon={Sparkles}
+            tone="accent"
+            title="دستیار شما خاموش است"
+            description="با روشن کردن دستیار، پرسش‌هایی که فلوها و پیام‌های آماده پاسخ نمی‌دهند به هوش مصنوعی سپرده می‌شوند."
+            action={
+              <Link href="/dashboard/assistant" className={buttonVariants()}>
+                رفتن به تنظیمات دستیار
+                <ArrowLeft className="size-4" aria-hidden />
+              </Link>
+            }
+          />
         )}
       </div>
     </div>

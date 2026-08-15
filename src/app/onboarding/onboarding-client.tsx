@@ -32,6 +32,7 @@ import { GlassCard } from "@/components/ui/glass-card";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { Steps } from "@/components/ui/steps";
 import { luxe } from "@/components/motion/reveal";
 import { BUSINESS_CATEGORIES } from "@/lib/business-categories";
 import {
@@ -689,34 +690,12 @@ export const OnboardingClient = ({
               </p>
             </div>
 
-            <ol className="mt-9 space-y-1" aria-label="مراحل راه‌اندازی">
-              {steps.map((item, index) => {
-                const active = item.id === step;
-                const complete = index < currentIndex;
-                return (
-                  <li
-                    key={item.id}
-                    aria-current={active ? "step" : undefined}
-                    className={cn(
-                      "flex items-center gap-3 rounded-2xl px-3 py-3 text-xs transition-colors",
-                      active ? "bg-accent/10 text-accent" : "text-muted"
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "flex size-6 shrink-0 items-center justify-center rounded-full border text-[10px]",
-                        active && "border-accent bg-accent text-accent-foreground",
-                        complete && "border-success/30 bg-success/10 text-success",
-                        !active && !complete && "border-line bg-surface"
-                      )}
-                    >
-                      {complete ? <Check className="size-3" /> : fa(index + 1)}
-                    </span>
-                    <span className={cn(active && "font-bold")}>{item.shortTitle}</span>
-                  </li>
-                );
-              })}
-            </ol>
+            <Steps
+              className="mt-9"
+              label="مراحل راه‌اندازی"
+              steps={steps.map((item) => ({ id: item.id, label: item.shortTitle }))}
+              current={currentIndex}
+            />
 
             <div className="mt-auto rounded-2xl border border-line bg-surface/50 p-4">
               <div className="flex items-center gap-2 text-xs font-medium">

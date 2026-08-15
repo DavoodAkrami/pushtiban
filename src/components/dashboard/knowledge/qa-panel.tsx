@@ -11,6 +11,7 @@ import {
 } from "@/components/dashboard/knowledge/categories";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import {
   Modal,
@@ -23,7 +24,6 @@ import {
 import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Select } from "@/components/ui/select";
-import { Icon } from "@/components/ui/icon";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/toast";
 import { fa } from "@/lib/utils";
@@ -434,22 +434,21 @@ export const QaEditor = () => {
         )}
 
         {!loading && qa.length === 0 && (
-          <section className="rounded-3xl border border-dashed border-line bg-surface/25 px-6 py-14 text-center">
-            <Icon icon={HelpCircle} tile size="lg" tone="accent" />
-            <h2 className="mt-5 text-lg font-bold">اولین پرسش را اضافه کنید</h2>
-            <p className="mx-auto mt-2 max-w-lg text-sm leading-7 text-muted">
-              پرسش‌های پرتکرار مشتریان و پاسخ دقیق آن‌ها را اینجا ذخیره کنید تا
-              هوش مصنوعی اولویت بالاتری به آن‌ها بدهد.
-            </p>
-            <Button
-              type="button"
-              className="mt-6"
-              startIcon={<Plus className="size-4" />}
-              onClick={openCreate}
-            >
-              افزودن اولین پرسش
-            </Button>
-          </section>
+          <EmptyState
+            icon={HelpCircle}
+            tone="accent"
+            title="اولین پرسش را اضافه کنید"
+            description="پرسش‌های پرتکرار مشتریان و پاسخ دقیق آن‌ها را اینجا ذخیره کنید تا هوش مصنوعی اولویت بالاتری به آن‌ها بدهد."
+            action={
+              <Button
+                type="button"
+                startIcon={<Plus className="size-4" />}
+                onClick={openCreate}
+              >
+                افزودن اولین پرسش
+              </Button>
+            }
+          />
         )}
 
         {!loading && qa.length > 0 && (

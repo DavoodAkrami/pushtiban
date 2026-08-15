@@ -22,6 +22,7 @@ import {
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import {
   Modal,
@@ -868,22 +869,21 @@ export const SourcesEditor = () => {
         )}
 
         {!loading && !setupRequired && sources.length === 0 && (
-          <section className="rounded-3xl border border-dashed border-line bg-surface/25 px-6 py-14 text-center">
-            <Icon icon={FileText} tile size="lg" tone="accent" />
-            <h2 className="mt-5 text-lg font-bold">اولین منبع را اضافه کنید</h2>
-            <p className="mx-auto mt-2 max-w-lg text-sm leading-7 text-muted">
-              راهنمای محصول، شرایط ارسال یا صفحهٔ پرسش‌های متداول سایت‌تان را
-              اضافه کنید تا دستیار بتواند از آن پاسخ بسازد.
-            </p>
-            <Button
-              type="button"
-              className="mt-7"
-              startIcon={<Plus className="size-4" />}
-              onClick={() => setAddOpen(true)}
-            >
-              افزودن منبع
-            </Button>
-          </section>
+          <EmptyState
+            icon={FileText}
+            tone="accent"
+            title="اولین منبع را اضافه کنید"
+            description="راهنمای محصول، شرایط ارسال یا صفحهٔ پرسش‌های متداول سایت‌تان را اضافه کنید تا دستیار بتواند از آن پاسخ بسازد."
+            action={
+              <Button
+                type="button"
+                startIcon={<Plus className="size-4" />}
+                onClick={() => setAddOpen(true)}
+              >
+                افزودن منبع
+              </Button>
+            }
+          />
         )}
 
         {!loading && sources.length > 0 && (

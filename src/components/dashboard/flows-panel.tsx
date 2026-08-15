@@ -23,6 +23,7 @@ import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/checkbox";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import {
@@ -788,28 +789,25 @@ export const FlowsPanel = () => {
         )}
 
         {!loading && listReady && connected && items.length === 0 && (
-          <section className="rounded-3xl border border-dashed border-line bg-surface/25 px-6 py-14 text-center">
-            <Icon
-              icon={isInstagram ? TbBrandInstagram : GitBranch}
-              tile
-              size="lg"
-              tone="accent"
-            />
-            <h2 className="mt-5 text-lg font-bold">اولین فلو را بسازید</h2>
-            <p className="mx-auto mt-2 max-w-lg text-sm leading-7 text-muted">
-              {isInstagram
+          <EmptyState
+            icon={isInstagram ? TbBrandInstagram : GitBranch}
+            tone="accent"
+            title="اولین فلو را بسازید"
+            description={
+              isInstagram
                 ? "مثلاً کلیدواژهٔ «خرید» را به یک پیام خوش‌آمدگویی با سه دکمه وصل کنید و برای هر انتخاب مشتری یک مسیر جدا بسازید."
-                : "مثلاً فرمان /start را به یک پیام خوش‌آمدگویی وصل کنید و برای هر انتخاب مشتری یک مسیر جدا بسازید."}
-            </p>
-            <Button
-              type="button"
-              className="mt-6"
-              startIcon={<Plus className="size-4" />}
-              onClick={() => setCreateOpen(true)}
-            >
-              ساخت اولین فلو
-            </Button>
-          </section>
+                : "مثلاً فرمان /start را به یک پیام خوش‌آمدگویی وصل کنید و برای هر انتخاب مشتری یک مسیر جدا بسازید."
+            }
+            action={
+              <Button
+                type="button"
+                startIcon={<Plus className="size-4" />}
+                onClick={() => setCreateOpen(true)}
+              >
+                ساخت اولین فلو
+              </Button>
+            }
+          />
         )}
 
         {!loading && listReady && items.length > 0 && (

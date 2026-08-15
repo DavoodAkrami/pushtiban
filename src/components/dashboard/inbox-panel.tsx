@@ -19,6 +19,7 @@ import {
 import { TbBrandInstagram } from "react-icons/tb";
 import { luxe } from "@/components/motion/reveal";
 import { Alert } from "@/components/ui/alert";
+import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -609,12 +610,15 @@ export const InboxPanel = ({
                       >
                         <div className="flex items-start gap-3">
                           <span className="relative shrink-0">
-                            <span className={cn(
-                              "flex size-9 items-center justify-center rounded-xl text-sm font-bold",
-                              conv.status === "open" ? "bg-accent/15 text-accent" : "bg-card text-muted"
-                            )}>
-                              {customerLabel(conv).charAt(0)}
-                            </span>
+                            <Avatar
+                              name={customerLabel(conv)}
+                              shape="tile"
+                              size="sm"
+                              tone={conv.status === "open" ? "accent" : "muted"}
+                              className={
+                                conv.status === "open" ? undefined : "bg-card"
+                              }
+                            />
                             {/* Which channel the customer wrote from, on the
                                 avatar rather than as another row of text. */}
                             <span
