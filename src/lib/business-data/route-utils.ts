@@ -39,3 +39,25 @@ export const readJsonBody = async (request: NextRequest): Promise<unknown> => {
   }
 };
 
+export const readFormBody = async (request: NextRequest) => {
+  try {
+    return await request.formData();
+  } catch {
+    throw new BusinessDataServiceError(
+      "فایل یا اطلاعات فرم قابل خواندن نیست.",
+      400,
+      "invalid_form"
+    );
+  }
+};
+
+export const parseFormJson = (value: FormDataEntryValue | null, field: string): unknown => {
+  if (typeof value !== "string") {
+    throw new BusinessDataServiceError(`${field} قابل خواندن نیست.`, 400, "invalid_form");
+  }
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    throw new BusinessDataServiceError(`${field} معتبر نیست.`, 400, "invalid_form");
+  }
+};

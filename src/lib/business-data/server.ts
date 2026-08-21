@@ -27,6 +27,13 @@ import {
   validateFieldDefinitions,
   validateRecordValues,
 } from "./validation";
+import {
+  buildImportPreview,
+  mapAndValidateRows,
+  type IngestionMapping,
+  type IngestionPreview,
+  type IngestionSourceType,
+} from "./ingestion";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -70,6 +77,8 @@ type SourceRow = {
   last_attempted_at: string | null;
   last_succeeded_at: string | null;
   last_error: string | null;
+  configuration: Record<string, unknown>;
+  field_mapping: Record<string, string | null>;
   created_at: string;
   updated_at: string;
 };
@@ -89,7 +98,7 @@ const COLLECTION_COLUMNS =
 const FIELD_COLUMNS =
   "id, key, label, description, data_type, semantic_role, required, searchable, filterable, ai_exposure, position, validation, created_at, updated_at";
 const SOURCE_COLUMNS =
-  "id, name, source_type, status, last_attempted_at, last_succeeded_at, last_error, created_at, updated_at";
+  "id, name, source_type, status, configuration, field_mapping, last_attempted_at, last_succeeded_at, last_error, created_at, updated_at";
 const RECORD_COLUMNS =
   "id, values, status, source_id, source_updated_at, created_at, updated_at";
 
@@ -152,6 +161,8 @@ const mapSource = (row: SourceRow): BusinessDataSource => ({
   lastAttemptedAt: row.last_attempted_at,
   lastSucceededAt: row.last_succeeded_at,
   lastError: row.last_error,
+  configuration: row.configuration ?? {},
+  fieldMapping: row.field_mapping ?? {},
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -848,4 +859,94 @@ export const deleteRecord = async (
     .eq("collection_id", collectionId)
     .eq("user_id", context.user.id);
   if (error) throw mapDatabaseFailure(error);
+};
+
+const parseIngestionMapping = (value: unknown): IngestionMapping => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new BusinessDataServiceError("تطبیق ستون‌ها قابل خواندن نیست.", 400, "invalid_mapping");
+  }
+  const mapping: IngestionMapping = {};
+  for (const [key, target] of Object.entries(value as Record<string, unknown>)) {
+    if (!/^[a-z][a-z0-9_]{0,63}$/.test(key) || (target !== null && typeof target !== "string")) {
+      throw new BusinessDataServiceError("تطبیق ستون‌ها معتبر نیست.", 400, "invalid_mapping");
+    }
+    mapping[key] = target;
+  }
+  return mapping;
+};
+
+export const previewIngestion = async (
+  context: BusinessDataContext,
+  input: {
+    collectionId: string;
+    preview: IngestionPreview;
+    mapping: unknown;
+    externalIdField: unknown;
+  }
+) => {
+  const collection = await getCollectionRow(context, input.collectionId);
+  const fields = (await getFieldRows(context, collection.id)).map(mapField);
+  const mapping = parseIngestionMapping(input.mapping);
+  const externalIdField = typeof input.externalIdField === "string" ? input.externalIdField : null;
+  return buildImportPreview(input.preview, fields, mapping, externalIdField);
+};
+
+export const importIngestion = async (
+  context: BusinessDataContext,
+  input: {
+    collectionId: string;
+    preview: IngestionPreview;
+    mapping: unknown;
+    externalIdField: unknown;
+    idempotencyKey: unknown;
+  }
+) => {
+  const collection = await getCollectionRow(context, input.collectionId);
+  assertCollectionWritable(collection);
+  const fields = (await getFieldRows(context, collection.id)).map(mapField);
+  const mapping = parseIngestionMapping(input.mapping);
+  const externalIdField = typeof input.externalIdField === "string" ? input.externalIdField : null;
+  const idempotencyKey = typeof input.idempotencyKey === "string"
+    ? input.idempotencyKey.trim()
+    : "";
+  if (!/^[a-zA-Z0-9_-]{16,120}$/.test(idempotencyKey)) {
+    throw new BusinessDataServiceError("درخواست ورود داده معتبر نیست؛ دوباره تلاش کنید.", 400, "invalid_idempotency");
+  }
+  const outcome = mapAndValidateRows(input.preview, mapping, fields, externalIdField);
+  if (!outcome.valid.length) {
+    throw new BusinessDataServiceError("هیچ ردیف معتبری برای ورود پیدا نشد.", 400, "no_valid_rows");
+  }
+  const sourceType = input.preview.sourceType as IngestionSourceType;
+  const sources = await getSourceRows(context, collection.id);
+  const matchingSource = sources.find((source) => source.source_type === sourceType);
+  const sourceId = matchingSource?.id ?? randomUUID();
+  const { data, error } = await context.admin.rpc("business_data_import_records", {
+    p_user_id: context.user.id,
+    p_collection_id: collection.id,
+    p_source_id: sourceId,
+    p_source_type: sourceType,
+    p_source_name: input.preview.sourceName.slice(0, BUSINESS_DATA_LIMITS.sourceNameChars),
+    p_source_configuration: {
+      sheetName: input.preview.sheetName,
+      importedFrom: sourceType === "google_sheets" ? "google_sheets" : "file",
+    },
+    p_field_mapping: mapping,
+    p_records: outcome.valid.map((record) => ({
+      values: record.values,
+      externalId: record.externalId,
+      checksum: record.checksum,
+    })),
+    p_rejected_count: input.preview.rows.length - outcome.valid.length,
+    p_idempotency_key: idempotencyKey,
+  });
+  if (error || !data || typeof data !== "object") throw mapDatabaseFailure(error);
+  return data as {
+    runId: string;
+    insertedCount: number;
+    updatedCount: number;
+    skippedCount: number;
+    failedCount: number;
+    status: "succeeded" | "partial" | "failed";
+    idempotent: boolean;
+  };
 };

@@ -96,10 +96,10 @@ How to use:
 - [x] Business Data milestone 1: generic domain types, deterministic
       business-category templates, bounded validation and normalization, and
       an idempotent tenant-isolated Supabase schema
-- [ ] Business Data milestone 2: authenticated collection, field, record, and
+- [x] Business Data milestone 2: authenticated collection, field, record, and
       source APIs plus manual management in the dashboard
-- [ ] Business Data milestone 3: CSV / Excel import, Google Sheets, external
-      database and API connectors, synchronization, and source health
+- [ ] Business Data milestone 3: CSV / Excel import, Google Sheets,
+      synchronization, and source health
 - [ ] Business Data milestone 4: bounded AI structured lookup for public
       catalogs, preview inspection, and verified customer access before private
       order, reservation, or delivery lookup

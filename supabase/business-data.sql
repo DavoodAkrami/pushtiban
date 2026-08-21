@@ -900,7 +900,198 @@ revoke execute on function public.business_data_move_field(uuid, uuid, uuid, int
 grant execute on function public.business_data_move_field(uuid, uuid, uuid, integer)
   to service_role;
 
--- 10) Row Level Security and explicit grants ----------------------------------
+-- 10) Atomic ingestion functions -----------------------------------------------
+
+create or replace function public.business_data_import_records(
+  p_user_id uuid,
+  p_collection_id uuid,
+  p_source_id uuid,
+  p_source_type text,
+  p_source_name text,
+  p_source_configuration jsonb,
+  p_field_mapping jsonb,
+  p_records jsonb,
+  p_rejected_count integer,
+  p_idempotency_key text
+)
+returns jsonb
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  run_row public.business_data_sync_runs%rowtype;
+  item jsonb;
+  record_values jsonb;
+  record_external_id text;
+  record_checksum text;
+  existing_record_id uuid;
+  v_inserted_count integer := 0;
+  v_updated_count integer := 0;
+  v_skipped_count integer := 0;
+  v_failed_count integer := greatest(coalesce(p_rejected_count, 0), 0);
+begin
+  if not exists (
+    select 1 from public.business_data_collections
+    where id = p_collection_id and user_id = p_user_id
+  ) then
+    raise exception 'Business Data collection was not found' using errcode = 'foreign_key_violation';
+  end if;
+
+  if p_source_type not in ('csv', 'excel', 'google_sheets')
+    or p_source_name is null
+    or char_length(btrim(p_source_name)) = 0
+    or p_source_configuration is null
+    or jsonb_typeof(p_source_configuration) <> 'object'
+    or p_field_mapping is null
+    or jsonb_typeof(p_field_mapping) <> 'object'
+    or p_records is null
+    or jsonb_typeof(p_records) <> 'array'
+    or jsonb_array_length(p_records) > 2000
+    or p_idempotency_key is null
+    or char_length(btrim(p_idempotency_key)) = 0
+    or char_length(p_idempotency_key) > 120
+  then
+    raise exception 'Business Data import input is invalid' using errcode = 'check_violation';
+  end if;
+
+  if exists (
+    select 1 from public.business_data_sources
+    where id = p_source_id
+      and (user_id <> p_user_id or collection_id <> p_collection_id)
+  ) then
+    raise exception 'Business Data source does not belong to this collection' using errcode = 'foreign_key_violation';
+  end if;
+
+  insert into public.business_data_sources (
+    id, user_id, collection_id, name, source_type, status, configuration,
+    field_mapping, last_attempted_at, last_error
+  ) values (
+    p_source_id, p_user_id, p_collection_id, btrim(p_source_name), p_source_type,
+    'syncing', p_source_configuration, p_field_mapping, now(), null
+  ) on conflict (id) do update set
+    name = excluded.name,
+    source_type = excluded.source_type,
+    status = 'syncing',
+    configuration = excluded.configuration,
+    field_mapping = excluded.field_mapping,
+    last_attempted_at = now(),
+    last_error = null;
+
+  insert into public.business_data_sync_runs (
+    user_id, collection_id, source_id, status, idempotency_key, started_at
+  ) values (
+    p_user_id, p_collection_id, p_source_id, 'running', p_idempotency_key, now()
+  ) on conflict (source_id, idempotency_key) where idempotency_key is not null
+  do nothing
+  returning * into run_row;
+
+  if run_row.id is null then
+    select * into run_row
+    from public.business_data_sync_runs
+    where source_id = p_source_id and idempotency_key = p_idempotency_key;
+    return jsonb_build_object(
+      'runId', run_row.id,
+      'insertedCount', run_row.inserted_count,
+      'updatedCount', run_row.updated_count,
+      'skippedCount', run_row.skipped_count,
+      'failedCount', run_row.failed_count,
+      'status', run_row.status,
+      'idempotent', true
+    );
+  end if;
+
+  for item in select value from jsonb_array_elements(p_records)
+  loop
+    record_values := item -> 'values';
+    record_external_id := nullif(btrim(item ->> 'externalId'), '');
+    record_checksum := nullif(btrim(item ->> 'checksum'), '');
+    if record_values is null or jsonb_typeof(record_values) <> 'object' then
+      raise exception 'Business Data import record is invalid' using errcode = 'check_violation';
+    end if;
+
+    if record_external_id is null then
+      insert into public.business_data_records (
+        user_id, collection_id, source_id, values, checksum, source_updated_at, status
+      ) values (
+        p_user_id, p_collection_id, p_source_id, record_values, record_checksum, now(), 'active'
+      );
+      v_inserted_count := v_inserted_count + 1;
+    else
+      select id into existing_record_id
+      from public.business_data_records
+      where collection_id = p_collection_id and external_id = record_external_id
+      for update;
+
+      if existing_record_id is null then
+        insert into public.business_data_records (
+          user_id, collection_id, source_id, external_id, values, checksum, source_updated_at, status
+        ) values (
+          p_user_id, p_collection_id, p_source_id, record_external_id, record_values,
+          record_checksum, now(), 'active'
+        );
+        v_inserted_count := v_inserted_count + 1;
+      elsif exists (
+        select 1 from public.business_data_records
+        where id = existing_record_id and checksum is not distinct from record_checksum
+      ) then
+        v_skipped_count := v_skipped_count + 1;
+      else
+        update public.business_data_records
+        set source_id = p_source_id,
+            values = record_values,
+            checksum = record_checksum,
+            source_updated_at = now(),
+            status = 'active'
+        where id = existing_record_id and user_id = p_user_id;
+        v_updated_count := v_updated_count + 1;
+      end if;
+    end if;
+  end loop;
+
+  update public.business_data_sync_runs
+  set status = case when v_failed_count > 0 then 'partial' else 'succeeded' end,
+      inserted_count = v_inserted_count,
+      updated_count = v_updated_count,
+      skipped_count = v_skipped_count,
+      failed_count = v_failed_count,
+      completed_at = now()
+  where id = run_row.id;
+
+  update public.business_data_sources
+  set status = 'ready', last_succeeded_at = now(), last_error = null
+  where id = p_source_id and user_id = p_user_id and collection_id = p_collection_id;
+
+  return jsonb_build_object(
+    'runId', run_row.id,
+    'insertedCount', v_inserted_count,
+    'updatedCount', v_updated_count,
+    'skippedCount', v_skipped_count,
+    'failedCount', v_failed_count,
+    'status', case when v_failed_count > 0 then 'partial' else 'succeeded' end,
+    'idempotent', false
+  );
+exception when others then
+  if run_row.id is not null then
+    update public.business_data_sync_runs
+    set status = 'failed', error_summary = 'Import could not be completed safely.', completed_at = now()
+    where id = run_row.id;
+    update public.business_data_sources
+    set status = 'error', last_error = 'همگام‌سازی کامل نشد؛ دوباره تلاش کنید.'
+    where id = p_source_id and user_id = p_user_id and collection_id = p_collection_id;
+  end if;
+  raise;
+end;
+$$;
+
+revoke execute on function public.business_data_import_records(
+  uuid, uuid, uuid, text, text, jsonb, jsonb, jsonb, integer, text
+) from public, anon, authenticated;
+grant execute on function public.business_data_import_records(
+  uuid, uuid, uuid, text, text, jsonb, jsonb, jsonb, integer, text
+) to service_role;
+
+-- 11) Row Level Security and explicit grants ----------------------------------
 
 alter table public.business_data_collections enable row level security;
 alter table public.business_data_fields enable row level security;

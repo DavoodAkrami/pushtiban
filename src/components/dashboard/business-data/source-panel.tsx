@@ -22,6 +22,7 @@ import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
 import { SOURCE_STATUS_LABELS } from "@/lib/business-data/api-types";
 import { fa } from "@/lib/utils";
 import { useBusinessDataCollection } from "./use-collection";
+import { FileImportFlow } from "./file-import-flow";
 
 const formatDate = (value: string | null | undefined) => {
   if (!value) return "هنوز ثبت نشده";
@@ -38,6 +39,7 @@ const formatDate = (value: string | null | undefined) => {
 export const BusinessDataSourcePanel = ({ collectionId }: { collectionId: string }) => {
   const router = useRouter();
   const { collection, loading, error, reload } = useBusinessDataCollection(collectionId);
+  const [fileImportOpen, setFileImportOpen] = React.useState(false);
   useDashboardTitle(collection?.name ?? null);
 
   if (loading) {
@@ -83,7 +85,9 @@ export const BusinessDataSourcePanel = ({ collectionId }: { collectionId: string
               </Badge>
             </div>
             <p className="mt-2 text-sm leading-7 text-muted">
-              رکوردها از داخل پشتیبان ساخته و ویرایش می‌شوند. هیچ اتصال خارجی یا همگام‌سازی خودکاری فعال نیست.
+              {source?.type === "manual" || !source
+                ? "رکوردها از داخل پشتیبان ساخته و ویرایش می‌شوند. برای ورود دسته‌ای می‌توانید یک فایل CSV یا Excel اضافه کنید."
+                : "این منبع داده به مجموعه متصل است. ورود دوباره فایل، رکوردهای دارای شناسه یکتا را به‌روزرسانی می‌کند."}
             </p>
           </div>
         </div>
@@ -106,27 +110,36 @@ export const BusinessDataSourcePanel = ({ collectionId }: { collectionId: string
             <dd className="mt-2 font-medium">برای منبع دستی کاربرد ندارد</dd>
           </div>
         </dl>
+        <div className="mt-6 flex flex-wrap gap-2 border-t border-line pt-5">
+          <Button type="button" size="sm" startIcon={<FileSpreadsheet className="size-4" />} onClick={() => setFileImportOpen(true)}>
+            ورود از فایل CSV یا Excel
+          </Button>
+          <Button type="button" size="sm" variant="ghost" startIcon={<Sheet className="size-4" />} onClick={() => { window.location.assign(`/api/business-data/google-sheets/connect?collectionId=${encodeURIComponent(collection.id)}`); }}>
+            اتصال Google Sheets
+          </Button>
+        </div>
       </section>
 
       <section aria-labelledby="future-sources-heading" className="mt-8 border-t border-line pt-8">
         <h2 id="future-sources-heading" className="text-sm font-bold">راه‌های ورود داده در مرحله‌های بعد</h2>
         <p className="mt-1 text-xs leading-6 text-muted">
-          ساختار این مجموعه برای اتصال‌های بعدی آماده است، اما هیچ‌کدام هنوز داده‌ای نمی‌خوانند.
+          اتصال Google Sheets پس از اتصال امن حساب Google قابل استفاده خواهد بود. اتصال‌های پایگاه‌داده و API در مرحله‌های بعد اضافه می‌شوند.
         </p>
         <ul className="mt-4 grid gap-2 sm:grid-cols-3">
           {[
-            { icon: FileSpreadsheet, label: "فایل CSV و Excel" },
-            { icon: Sheet, label: "Google Sheets" },
+            { icon: FileSpreadsheet, label: "فایل CSV و Excel", status: "آماده" },
+            { icon: Sheet, label: "Google Sheets", status: "در انتظار اتصال" },
             { icon: Waypoints, label: "پایگاه‌داده و API" },
           ].map((item) => (
             <li key={item.label} className="flex items-center gap-3 rounded-2xl border border-line bg-surface/20 p-4 text-sm text-muted">
               <item.icon className="size-4 shrink-0" aria-hidden />
               <span className="min-w-0 flex-1">{item.label}</span>
-              <Badge variant="muted">بعداً</Badge>
+              <Badge variant={item.status === "آماده" ? "success" : "muted"}>{item.status}</Badge>
             </li>
           ))}
         </ul>
       </section>
+      <FileImportFlow collection={collection} open={fileImportOpen} onOpenChange={setFileImportOpen} onImported={() => void reload()} />
     </>
   );
 };

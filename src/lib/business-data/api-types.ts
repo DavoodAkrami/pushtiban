@@ -27,6 +27,8 @@ export type BusinessDataSource = {
   lastAttemptedAt: string | null;
   lastSucceededAt: string | null;
   lastError: string | null;
+  configuration: Record<string, unknown>;
+  fieldMapping: Record<string, string | null>;
   createdAt: string;
   updatedAt: string;
 };
