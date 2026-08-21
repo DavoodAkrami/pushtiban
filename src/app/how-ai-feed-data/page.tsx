@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import {
   ArrowLeft,
+  ArrowDown,
   Gauge,
   History,
   LibraryBig,
@@ -45,7 +46,7 @@ import {
   SESSION_WINDOW_MS,
 } from "@/lib/ai/memory";
 import { DEFAULT_SIGNUP_MESSAGE_LIMIT } from "@/lib/ai/usage";
-import { fa } from "@/lib/utils";
+import { cn, fa } from "@/lib/utils";
 
 export const metadata: Metadata = {
   title: "دستیار با چه داده‌هایی تغذیه می‌شود — پشتیبان",
@@ -213,16 +214,68 @@ const PageHero = () => (
           جواب می‌دهد. پایین ببینید برای یک سوال واقعی چه چیزی دستش است.
         </p>
       </Reveal>
+
+      <Reveal delay={0.45} y={16}>
+        <div className="mx-auto mt-10 grid max-w-2xl grid-cols-3 divide-x divide-x-reverse divide-line overflow-hidden rounded-3xl border border-line bg-card/40 text-start">
+          {[
+            { value: fa(4), label: "ورودی روشن" },
+            { value: fa(3), label: "دروازهٔ کنترل" },
+            { value: fa(1), label: "پاسخ نهایی" },
+          ].map((item) => (
+            <div key={item.label} className="px-3 py-4 sm:px-5 sm:py-5">
+              <p className="text-xl font-black text-accent sm:text-2xl">{item.value}</p>
+              <p className="mt-1 text-[11px] leading-5 text-muted sm:text-xs">{item.label}</p>
+            </div>
+          ))}
+        </div>
+      </Reveal>
     </div>
   </header>
+);
+
+const PageMap = () => (
+  <nav
+  aria-label="بخش‌های صفحه"
+    className="sticky top-20 z-20 mx-auto -mb-3 w-full max-w-5xl px-5 sm:top-24 sm:px-8"
+  >
+    <div className="glass overflow-x-auto rounded-full p-1 shadow-soft">
+      <div className="flex min-w-max items-center justify-center gap-1">
+        {[
+          { href: "#stage", label: "مثال واقعی" },
+          { href: "#channels", label: "چهار ورودی" },
+          { href: "#blocked", label: "مرزها" },
+          { href: "#control", label: "دروازه‌ها" },
+          { href: "#details", label: "جزئیات" },
+        ].map((item) => (
+          <a
+            key={item.href}
+            href={item.href}
+            className="rounded-full px-3 py-2 text-xs font-medium text-muted transition-colors duration-300 ease-luxe hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:px-4"
+          >
+            {item.label}
+          </a>
+        ))}
+      </div>
+    </div>
+  </nav>
 );
 
 // Not wrapped in `Section`: the stage follows the hero directly, so it needs a
 // tighter top than `section-pad`'s py-24 while keeping the same container.
 const Stage = () => (
-  <section id="stage" className="relative pb-24 pt-4 md:pb-32 md:pt-6">
+  <section id="stage" className="relative scroll-mt-24 pb-24 pt-10 md:pb-32 md:pt-14">
     <div className="mx-auto w-full max-w-6xl px-5 sm:px-8">
       <Reveal y={24}>
+        <div className="mx-auto mb-5 max-w-5xl px-1">
+          <div className="flex items-center gap-2 text-xs font-extrabold text-accent">
+            <ArrowDown className="size-3.5" aria-hidden />
+            یک سوال، چهار ورودی، یک پاسخ
+          </div>
+          <p className="mt-2 max-w-xl text-sm leading-7 text-muted">
+            این نمونه را کامل ببینید یا هر مرحله را جدا انتخاب کنید تا معلوم شود
+            کدام بخش از پاسخ از کجا آمده است.
+          </p>
+        </div>
         <FeedStage />
       </Reveal>
     </div>
@@ -230,27 +283,31 @@ const Stage = () => (
 );
 
 const Channels = () => (
-  <Section id="channels" className="bg-surface/60">
+  <Section id="channels" className="scroll-mt-24 bg-surface/60">
     <SectionHeading
       eyebrow="همان چهار چیز، با نامشان"
       title="دو تا را شما می‌نویسید، دو تا خودکار می‌آیند"
       lead="هرکدام یک جای مشخص دارد. آن دو که دست شماست، همین حالا قابل تغییر است."
     />
 
-    <Stagger className="grid gap-4 md:grid-cols-2">
-      {CHANNELS.map((channel) => (
+    <Stagger className="mx-auto max-w-4xl overflow-hidden rounded-3xl border border-line bg-card/30">
+      {CHANNELS.map((channel, index) => (
         <StaggerItem key={channel.title}>
-          <div className="flex h-full flex-col rounded-3xl border border-line bg-card/40 p-6">
-            <div className="mb-4 flex items-start justify-between gap-3">
-              <Icon icon={channel.icon} tile tone={channel.owned ? "accent" : "muted"} />
-              <Badge variant={channel.owned ? "default" : "muted"}>
-                {channel.from}
-              </Badge>
+          <div
+            className={cn(
+              "grid gap-4 p-5 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-start sm:gap-5 sm:p-6",
+              index > 0 && "border-t border-line"
+            )}
+          >
+            <Icon icon={channel.icon} tile tone={channel.owned ? "accent" : "muted"} />
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <h3 className="text-base font-extrabold">{channel.title}</h3>
+                <Badge variant={channel.owned ? "default" : "muted"}>{channel.from}</Badge>
+              </div>
+              <p className="mt-2 text-sm leading-7 text-muted">{channel.desc}</p>
             </div>
-            <h3 className="mb-2 text-base font-extrabold">{channel.title}</h3>
-            <p className="text-sm leading-7 text-muted">{channel.desc}</p>
-
-            <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line pt-4">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 sm:justify-end">
               {channel.links.map((link) => (
                 <Link
                   key={link.href}
@@ -258,7 +315,7 @@ const Channels = () => (
                   className={buttonVariants({
                     variant: "link",
                     size: "sm",
-                    className: "group gap-1.5",
+                    className: "group gap-1.5 px-0",
                   })}
                 >
                   {link.label}
@@ -268,9 +325,7 @@ const Channels = () => (
                   />
                 </Link>
               ))}
-              {channel.note && (
-                <span className="text-xs leading-6 text-muted">{channel.note}</span>
-              )}
+              {channel.note && <span className="text-xs leading-6 text-muted">{channel.note}</span>}
             </div>
           </div>
         </StaggerItem>
@@ -280,15 +335,15 @@ const Channels = () => (
 );
 
 const Blocked = () => (
-  <Section id="blocked">
+  <Section id="blocked" className="scroll-mt-24">
     <SectionHeading
-      eyebrow="آن روی سکه"
-      title="چه چیزهایی هیچ‌وقت به دستیار نمی‌رسد"
-      lead="فهرست بالا کامل است. یعنی هرچه در این فهرست است، بیرون می‌ماند."
+      eyebrow="مرز دانسته‌ها"
+      title="فهرست بالا کامل است"
+      lead="هر چیزی که اینجا می‌بینید، بیرون از پیام دستیار می‌ماند."
     />
 
     <Reveal>
-      <ul className="mx-auto max-w-3xl divide-y divide-line overflow-hidden rounded-3xl border border-line bg-surface/40">
+      <ul className="mx-auto max-w-3xl divide-y divide-line overflow-hidden rounded-3xl border border-danger/20 bg-danger/[0.035]">
         {BLOCKED.map((item) => (
           <li key={item.title} className="flex items-start gap-4 p-5 sm:p-6">
             <span
@@ -316,18 +371,18 @@ const Blocked = () => (
 );
 
 const Control = () => (
-  <Section id="control" className="bg-surface/60">
+  <Section id="control" className="scroll-mt-24 bg-surface/60">
     <SectionHeading
-      eyebrow="کلید دست شماست"
-      title="هر لحظه می‌توانید جلویش را بگیرید"
-      lead="سه شرط باید همزمان برقرار باشد تا دستیار حتی یک کلمه بنویسد."
+      eyebrow="سه دروازهٔ واقعی"
+      title="پیش از هر پاسخ، سه شرط بررسی می‌شود"
+      lead="اگر یکی از این دروازه‌ها بسته باشد، دستیار پاسخی تولید نمی‌کند."
     />
 
     <Reveal>
-      <div className="mx-auto max-w-3xl rounded-3xl border border-line bg-card/40 p-2">
-        <ol className="divide-y divide-line">
+      <div className="mx-auto max-w-4xl rounded-3xl border border-line bg-card/35 p-3 sm:p-5">
+        <ol className="grid gap-3 md:grid-cols-3">
           {CONTROLS.map((item, index) => (
-            <li key={item.title} className="flex items-start gap-4 p-4 sm:p-5">
+            <li key={item.title} className="relative flex items-start gap-3 rounded-2xl border border-line bg-surface/45 p-4 sm:p-5">
               <span
                 aria-hidden
                 className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent"
@@ -383,7 +438,7 @@ const Control = () => (
 );
 
 const Details = () => (
-  <Section id="details">
+  <Section id="details" className="scroll-mt-24">
     <SectionHeading
       eyebrow="جزئیات دقیق"
       title="اگر عدد و رقمش را می‌خواهید"
@@ -391,7 +446,10 @@ const Details = () => (
     />
 
     <Stagger className="mx-auto max-w-2xl">
-      <Accordion type="single" collapsible className="space-y-4">
+      <p className="mb-5 text-center text-sm leading-7 text-muted">
+        پاسخ کوتاه را بالاتر گفتیم؛ اینجا می‌توانید هر عدد و قاعده را جدا باز کنید.
+      </p>
+      <Accordion type="single" collapsible defaultValue="detail-0" className="space-y-4">
         {DETAILS.map((item, index) => (
           <StaggerItem key={item.q}>
             <AccordionItem value={`detail-${index}`}>
@@ -410,6 +468,7 @@ const HowAiFeedDataPage = () => (
     <Header />
     <main>
       <PageHero />
+      <PageMap />
       <Stage />
       <Channels />
       <Blocked />

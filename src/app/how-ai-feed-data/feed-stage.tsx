@@ -374,11 +374,14 @@ export const FeedStage = () => {
   const ref = useRef<HTMLElement>(null);
   const inView = useInView(ref, { margin: "-20% 0px -20% 0px" });
 
-  const [step, setStep] = useState(0);
-  const [playing, setPlaying] = useState(true);
+  // The complete example is the most useful no-waiting state. The step rail
+  // remains available for readers who want to inspect how each input affects
+  // the answer, and the play control is an explicit enhancement.
+  const [step, setStep] = useState(REPLY_STEP);
+  const [playing, setPlaying] = useState(false);
   const [held, setHeld] = useState(false);
   /** Step whose reply has finished "writing"; -1 before the first one lands. */
-  const [writtenAt, setWrittenAt] = useState(-1);
+  const [writtenAt, setWrittenAt] = useState(REPLY_STEP);
 
   const atEnd = step >= REPLY_STEP;
 
@@ -423,11 +426,11 @@ export const FeedStage = () => {
   const control = atEnd
     ? {
         icon: RotateCcw,
-        label: "نمایش از ابتدا",
+        label: "بررسی مرحله‌به‌مرحله",
         onClick: () => {
           setWrittenAt(-1);
           setStep(0);
-          setPlaying(true);
+          setPlaying(false);
         },
       }
     : playing
@@ -460,7 +463,13 @@ export const FeedStage = () => {
         )}
       </div>
 
-      <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1.06fr)_minmax(0,0.94fr)] lg:gap-4">
+      {!reduce && (
+        <p className="mt-2 px-1 text-[11px] leading-5 text-muted">
+          پاسخ کامل است؛ برای دیدن مسیر ساختن آن، یکی از مرحله‌ها را انتخاب کنید.
+        </p>
+      )}
+
+      <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,0.94fr)_minmax(0,1.06fr)] lg:gap-4">
         <div className="min-w-0">
           <p className="mb-2 flex items-center gap-2 px-1 text-[11px] font-extrabold text-muted">
             <Layers className="size-3.5" aria-hidden />
@@ -539,7 +548,6 @@ export const FeedStage = () => {
     </figure>
   );
 };
-
 
 
 

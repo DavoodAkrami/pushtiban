@@ -3,10 +3,25 @@
 import * as React from "react";
 import Link from "next/link";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ArrowLeft, Bot, Send, Users, type LucideIcon } from "lucide-react";
+import {
+  ArrowLeft,
+  Bot,
+  GitBranch,
+  Inbox,
+  MessageSquareText,
+  Send,
+  Sparkles,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
 import { TbBrandInstagram } from "react-icons/tb";
 import { luxe } from "@/components/motion/reveal";
 import { AssistantPreviewPane } from "@/components/dashboard/assistant/preview-pane";
+import {
+  ReplyPipeline,
+  stageCountHint,
+  type PipelineStage,
+} from "@/components/dashboard/reply-pipeline";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/checkbox";
@@ -25,6 +40,12 @@ type AssistantPanelProps = {
   channelSwitchesReady: boolean;
   telegramConnected: boolean;
   instagramConnected: boolean;
+  replyPipeline: {
+    telegramConnected: boolean;
+    telegramUsername: string;
+    activeFlows: number;
+    preparedReplies: number;
+  };
   loadError: boolean;
   providerConfigured: boolean;
   setupRequired: boolean;
@@ -48,6 +69,7 @@ export const AssistantPanel = ({
   channelSwitchesReady,
   telegramConnected,
   instagramConnected,
+  replyPipeline,
   loadError,
   providerConfigured,
   setupRequired,
@@ -210,6 +232,46 @@ export const AssistantPanel = ({
     }
   };
 
+  const pipelineStages: PipelineStage[] = [
+    {
+      label: "ربات تلگرام",
+      hint: replyPipeline.telegramConnected
+        ? `@${replyPipeline.telegramUsername}`
+        : "متصل نیست",
+      href: "/dashboard/bot",
+      icon: Send,
+      active: replyPipeline.telegramConnected,
+    },
+    {
+      label: "فلوها",
+      hint: stageCountHint(replyPipeline.activeFlows, "فعال"),
+      href: "/dashboard/automation",
+      icon: GitBranch,
+      active: replyPipeline.activeFlows > 0,
+    },
+    {
+      label: "کلیدواژه‌ها",
+      hint: stageCountHint(replyPipeline.preparedReplies, "پاسخ"),
+      href: "/dashboard/automation/keywords",
+      icon: MessageSquareText,
+      active: replyPipeline.preparedReplies > 0,
+    },
+    {
+      label: "دستیار هوشمند",
+      hint: enabled ? "روشن" : "خاموش",
+      href: "/dashboard/assistant",
+      icon: Sparkles,
+      active: enabled,
+    },
+    {
+      label: "پشتیبان انسانی",
+      hint: humanHandoff ? "روشن" : "خاموش",
+      href: "/dashboard/inbox",
+      icon: Inbox,
+      active: humanHandoff,
+    },
+  ];
+
   return (
     <div className="space-y-4">
       {setupRequired && (
@@ -233,6 +295,8 @@ export const AssistantPanel = ({
           description="برای روشن کردن دستیار، کلید NVIDIA NIM یا OpenAI را در سرور تنظیم کنید."
         />
       )}
+
+      <ReplyPipeline stages={pipelineStages} loading={false} />
 
       <ToggleCard
         icon={Bot}

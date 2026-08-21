@@ -46,6 +46,60 @@ const readConnectedChannels = async (userId: string) => {
   }
 };
 
+type ReplyPipelineData = {
+  telegramConnected: boolean;
+  telegramUsername: string;
+  activeFlows: number;
+  preparedReplies: number;
+};
+
+/** Read the routing stages shown beside the assistant settings. */
+const readReplyPipelineData = async (
+  userId: string
+): Promise<ReplyPipelineData> => {
+  const empty: ReplyPipelineData = {
+    telegramConnected: false,
+    telegramUsername: "",
+    activeFlows: 0,
+    preparedReplies: 0,
+  };
+
+  try {
+    const admin = createAdminClient();
+    const countRows = async (table: string, filter?: [string, boolean]) => {
+      let query = admin
+        .from(table)
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId);
+      if (filter) query = query.eq(filter[0], filter[1]);
+      const { count, error } = await query;
+      return error ? 0 : (count ?? 0);
+    };
+
+    const [telegram, activeFlows, preparedReplies] = await Promise.all([
+      admin
+        .from("telegram_connections")
+        .select("bot_username")
+        .eq("user_id", userId)
+        .maybeSingle(),
+      countRows("automation_flows", ["is_active", true]),
+      countRows("telegram_keyword_automations"),
+    ]);
+
+    return {
+      telegramConnected: Boolean(telegram.data),
+      telegramUsername:
+        typeof telegram.data?.bot_username === "string"
+          ? telegram.data.bot_username
+          : "",
+      activeFlows,
+      preparedReplies,
+    };
+  } catch {
+    return empty;
+  }
+};
+
 const AssistantPage = async () => {
   const supabase = await createClient();
   const {
@@ -72,9 +126,20 @@ const AssistantPage = async () => {
         .maybeSingle()
     : { data: null, error: null };
 
-  const connected = user
-    ? await readConnectedChannels(user.id)
-    : { telegram: false, instagram: false };
+  const [connected, replyPipeline] = user
+    ? await Promise.all([
+        readConnectedChannels(user.id),
+        readReplyPipelineData(user.id),
+      ])
+    : [
+        { telegram: false, instagram: false },
+        {
+          telegramConnected: false,
+          telegramUsername: "",
+          activeFlows: 0,
+          preparedReplies: 0,
+        },
+      ];
 
   return (
     <>
@@ -104,6 +169,7 @@ const AssistantPage = async () => {
         channelSwitchesReady={!channelResult.error}
         telegramConnected={connected.telegram}
         instagramConnected={connected.instagram}
+        replyPipeline={replyPipeline}
         loadError={Boolean(settingsResult.error)}
         providerConfigured={isAssistantAiConfigured()}
         setupRequired={Boolean(

@@ -21,11 +21,6 @@ import {
 } from "lucide-react";
 import { luxe } from "@/components/motion/reveal";
 import {
-  ReplyPipeline,
-  stageCountHint,
-  type PipelineStage,
-} from "@/app/dashboard/overview/reply-pipeline";
-import {
   ChartTypeTabs,
   faNumber,
   faTokens,
@@ -260,48 +255,15 @@ export const OverviewPanel = () => {
     href?: string;
     actionLabel?: string;
   }>;
-  const pipelineStages: PipelineStage[] = [
-    {
-      label: "ربات تلگرام",
-      hint: overview?.telegram.connected
-        ? `@${overview.telegram.botUsername}`
-        : "متصل نیست",
-      href: "/dashboard/bot",
-      icon: Send,
-      active: overview?.telegram.connected ?? false,
-    },
-    {
-      label: "فلوها",
-      hint: stageCountHint(overview?.automation.activeFlows ?? 0, "فعال"),
-      href: "/dashboard/automation",
-      icon: GitBranch,
-      active: (overview?.automation.activeFlows ?? 0) > 0,
-    },
-    {
-      label: "کلیدواژه‌ها",
-      hint: stageCountHint(overview?.automation.preparedReplies ?? 0, "پاسخ"),
-      href: "/dashboard/automation/keywords",
-      icon: MessageSquareText,
-      active: (overview?.automation.preparedReplies ?? 0) > 0,
-    },
-    {
-      label: "دستیار هوشمند",
-      hint: overview?.assistant.enabled ? "روشن" : "خاموش",
-      href: "/dashboard/assistant",
-      icon: Sparkles,
-      active: overview?.assistant.enabled ?? false,
-    },
-    {
-      label: "پشتیبان انسانی",
-      hint: overview?.assistant.handoffEnabled ? "روشن" : "خاموش",
-      href: "/dashboard/inbox",
-      icon: Inbox,
-      active: overview?.assistant.handoffEnabled ?? false,
-    },
-  ];
-
   const pendingSetupSteps = setupSteps.filter((step) => !step.done);
-  const showSetup = !setupDismissed && (loading || pendingSetupSteps.length > 0);
+  // Wait for the overview response before deciding whether setup is needed.
+  // This keeps the completed state quiet and avoids rendering a checklist
+  // placeholder while the server is still determining the user's progress.
+  const showSetup =
+    !loading &&
+    overview !== null &&
+    !setupDismissed &&
+    pendingSetupSteps.length > 0;
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -321,8 +283,6 @@ export const OverviewPanel = () => {
       </header>
 
       <div className="space-y-8">
-        <ReplyPipeline stages={pipelineStages} loading={loading} />
-
         <AnimatePresence initial={false}>
           {showSetup && (
             <motion.section
@@ -342,11 +302,9 @@ export const OverviewPanel = () => {
                       قدم‌های بعدی برای راه‌اندازی
                     </h2>
                     <p className="mt-1 text-xs leading-6 text-muted">
-                      {loading
-                        ? "در حال بررسی وضعیت راه‌اندازی…"
-                        : `${fa(setupSteps.length - pendingSetupSteps.length)} از ${fa(
-                            setupSteps.length
-                          )} قدم انجام شده — این‌ها باقی مانده است.`}
+                      {`${fa(setupSteps.length - pendingSetupSteps.length)} از ${fa(
+                        setupSteps.length
+                      )} قدم انجام شده — این‌ها باقی مانده است.`}
                     </p>
                   </div>
                 </div>
@@ -363,7 +321,7 @@ export const OverviewPanel = () => {
                 </Button>
               </div>
 
-              <ul className="mt-5 space-y-2" aria-busy={loading}>
+              <ul className="mt-5 space-y-2">
                 {pendingSetupSteps.map((step) => (
                   <SetupRow key={step.id} {...step} />
                 ))}
