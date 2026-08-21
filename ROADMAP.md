@@ -89,6 +89,20 @@ How to use:
       the exact chunks the assistant searches, edit or delete any chunk, and
       rename the source. Editing a chunk re-embeds it, and renaming re-embeds
       the whole source, because the title is part of every chunk's vector
+- [ ] Business Data / Structured Collections: connect typed operational data
+      such as products, services, menus, plans, courses, orders, reservations,
+      deliveries, and custom datasets to Pushtiban through safe, extensible
+      sources and use customer-safe live values in assistant answers
+- [x] Business Data milestone 1: generic domain types, deterministic
+      business-category templates, bounded validation and normalization, and
+      an idempotent tenant-isolated Supabase schema
+- [ ] Business Data milestone 2: authenticated collection, field, record, and
+      source APIs plus manual management in the dashboard
+- [ ] Business Data milestone 3: CSV / Excel import, Google Sheets, external
+      database and API connectors, synchronization, and source health
+- [ ] Business Data milestone 4: bounded AI structured lookup for public
+      catalogs, preview inspection, and verified customer access before private
+      order, reservation, or delivery lookup
 - [ ] Knowledge-base ingestion for PDF and Word — needs a parser dependency and
       a Supabase Storage bucket with its own policies
 - [ ] AI assistant configuration (name, tone, model selection)

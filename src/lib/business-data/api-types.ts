@@ -1,0 +1,138 @@
+import type {
+  BusinessDataAccessScope,
+  BusinessDataAiExposure,
+  BusinessDataCollectionKind,
+  BusinessDataCollectionStatus,
+  BusinessDataFieldDefinition,
+  BusinessDataFieldRole,
+  BusinessDataFieldType,
+  BusinessDataFieldValidation,
+  BusinessDataRecordStatus,
+  BusinessDataRecordValues,
+  BusinessDataSourceStatus,
+  BusinessDataSourceType,
+} from "./types";
+
+export type BusinessDataField = BusinessDataFieldDefinition & {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BusinessDataSource = {
+  id: string;
+  name: string;
+  type: BusinessDataSourceType;
+  status: BusinessDataSourceStatus;
+  lastAttemptedAt: string | null;
+  lastSucceededAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BusinessDataCollection = {
+  id: string;
+  key: string;
+  name: string;
+  description: string;
+  kind: BusinessDataCollectionKind;
+  accessScope: BusinessDataAccessScope;
+  aiEnabled: boolean;
+  status: BusinessDataCollectionStatus;
+  schemaVersion: number;
+  recordCount: number;
+  activeRecordCount: number;
+  dataUpdatedAt: string | null;
+  source: BusinessDataSource | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BusinessDataCollectionDetail = BusinessDataCollection & {
+  fields: BusinessDataField[];
+};
+
+export type BusinessDataRecord = {
+  id: string;
+  values: BusinessDataRecordValues;
+  status: BusinessDataRecordStatus;
+  sourceId: string | null;
+  sourceUpdatedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BusinessDataRecordPage = {
+  records: BusinessDataRecord[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+};
+
+export type BusinessDataFieldDraft = {
+  key: string;
+  label: string;
+  description?: string;
+  type: BusinessDataFieldType;
+  role: BusinessDataFieldRole;
+  required: boolean;
+  searchable: boolean;
+  filterable: boolean;
+  aiExposure: BusinessDataAiExposure;
+  validation?: BusinessDataFieldValidation;
+};
+
+export type BusinessDataApiError = {
+  error: string;
+  code?: string;
+};
+
+export const ACCESS_SCOPE_LABELS: Record<BusinessDataAccessScope, string> = {
+  public_catalog: "عمومی",
+  verified_customer: "فقط مشتری تأییدشده",
+  internal: "داخلی",
+};
+
+export const AI_EXPOSURE_LABELS: Record<BusinessDataAiExposure, string> = {
+  answer: "قابل نمایش در پاسخ",
+  filter_only: "فقط برای پیدا کردن رکورد",
+  hidden: "پنهان از دستیار",
+};
+
+export const FIELD_TYPE_LABELS: Record<BusinessDataFieldType, string> = {
+  text: "متن کوتاه",
+  long_text: "متن بلند",
+  number: "عدد",
+  currency: "مبلغ",
+  boolean: "بله یا خیر",
+  date: "تاریخ",
+  datetime: "تاریخ و زمان",
+  select: "انتخاب از فهرست",
+  url: "لینک",
+};
+
+export const COLLECTION_STATUS_LABELS: Record<
+  BusinessDataCollectionStatus,
+  string
+> = {
+  draft: "پیش‌نویس",
+  active: "فعال",
+  paused: "متوقف",
+  archived: "بایگانی‌شده",
+};
+
+export const RECORD_STATUS_LABELS: Record<BusinessDataRecordStatus, string> = {
+  active: "فعال",
+  archived: "بایگانی‌شده",
+};
+
+export const SOURCE_STATUS_LABELS: Record<BusinessDataSourceStatus, string> = {
+  pending: "در انتظار",
+  ready: "آماده",
+  syncing: "در حال همگام‌سازی",
+  paused: "متوقف",
+  error: "نیازمند بررسی",
+  disconnected: "قطع‌شده",
+};

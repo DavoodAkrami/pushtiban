@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test:business-data": "node scripts/business-data-check.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",

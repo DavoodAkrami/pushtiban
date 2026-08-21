@@ -28,6 +28,28 @@ alter table public.profiles
 comment on column public.profiles.is_admin is
   'Site administrator — can manage businesses, global AI settings, and limits.';
 
+-- RLS alone is row-scoped, so a broad table UPDATE grant would let an owner
+-- set is_admin on their own profile. Reapply the explicit owner-editable column
+-- boundary here so this file is safe regardless of schema execution order.
+revoke update on table public.profiles from authenticated;
+grant select on table public.profiles to authenticated;
+grant update (full_name, business_name, heard_from)
+  on table public.profiles to authenticated;
+
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and column_name = 'business_category'
+  ) then
+    execute 'grant update (business_category) on table public.profiles to authenticated';
+  end if;
+end;
+$$;
+
 -- 2) RLS helper ----------------------------------------------------------------
 -- Security definer so it can read profiles.is_admin regardless of the
 -- caller's own RLS visibility.
