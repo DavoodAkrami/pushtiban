@@ -294,7 +294,10 @@ export const parseFileForPreview = async (file: File, selectedSheet?: string | n
 export const parseGoogleRowsForPreview = (input: { spreadsheetName: string; sheetName: string; rows: unknown[][] }) =>
   makePreview(input.rows, "google_sheets", input.spreadsheetName, input.sheetName, [input.sheetName]);
 
-export const suggestedFieldDefinitions = (preview: IngestionPreview): BusinessDataFieldDefinition[] => {
+export const suggestedFieldDefinitions = (
+  preview: IngestionPreview,
+  options: { fallbackTitle?: boolean } = {}
+): BusinessDataFieldDefinition[] => {
   const definitions: BusinessDataFieldDefinition[] = preview.columns.map((column, position) => ({
     key: column.key,
     label: column.label,
@@ -306,10 +309,68 @@ export const suggestedFieldDefinitions = (preview: IngestionPreview): BusinessDa
     aiExposure: ["customer_identifier", "internal_notes"].includes(column.role) ? "hidden" : "answer",
     position,
   }));
-  if (!definitions.some((field) => field.role === "title") && definitions[0]) {
+  if (options.fallbackTitle !== false && !definitions.some((field) => field.role === "title") && definitions[0]) {
     definitions[0] = { ...definitions[0], role: "title", required: true };
   }
   return definitions;
+};
+
+export type IngestionTitleResolution = {
+  fields: BusinessDataFieldDefinition[];
+  candidateKeys: string[];
+  titleKey: string | null;
+  requiresSelection: boolean;
+};
+
+export const resolveIngestionTitle = (
+  preview: IngestionPreview,
+  definitions: BusinessDataFieldDefinition[],
+  existingTitleKey?: string | null
+): IngestionTitleResolution => {
+  const demoteTitles = (fields: BusinessDataFieldDefinition[]) =>
+    fields.map((field) =>
+      field.role === "title"
+        ? { ...field, role: "custom" as const, required: false }
+        : field
+    );
+
+  if (existingTitleKey) {
+    return {
+      fields: demoteTitles(definitions),
+      candidateKeys: [],
+      titleKey: existingTitleKey,
+      requiresSelection: false,
+    };
+  }
+
+  const inferredKeys = preview.columns
+    .filter((column) => column.role === "title")
+    .map((column) => column.key)
+    .filter((key) => definitions.some((field) => field.key === key));
+  const candidateKeys = inferredKeys.length
+    ? inferredKeys
+    : definitions.map((field) => field.key);
+  if (inferredKeys.length === 1) {
+    return {
+      fields: definitions.map((field) =>
+        field.key === inferredKeys[0]
+          ? { ...field, role: "title" as const, required: true }
+          : field.role === "title"
+            ? { ...field, role: "custom" as const, required: false }
+            : field
+      ),
+      candidateKeys,
+      titleKey: inferredKeys[0],
+      requiresSelection: false,
+    };
+  }
+
+  return {
+    fields: demoteTitles(definitions),
+    candidateKeys,
+    titleKey: null,
+    requiresSelection: true,
+  };
 };
 
 export const suggestedMapping = (preview: IngestionPreview, fields: BusinessDataFieldDefinition[]): IngestionMapping => {

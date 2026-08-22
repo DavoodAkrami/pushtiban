@@ -3,6 +3,7 @@ import {
   BusinessDataIngestionError,
   buildImportPreview,
   parseFileForPreview,
+  resolveIngestionTitle,
   suggestedFieldDefinitions,
   suggestedMapping,
 } from "@/lib/business-data/ingestion";
@@ -33,27 +34,29 @@ export const POST = async (request: NextRequest) => {
     const collection = typeof collectionId === "string"
       ? await getCollectionDetail(context, collectionId)
       : null;
-    const fields = collection?.fields ?? suggestedFieldDefinitions(preview);
+    const existingTitle = collection?.fields.find((field) => field.role === "title") ?? null;
+    const titleResolution = resolveIngestionTitle(
+      preview,
+      suggestedFieldDefinitions(preview, { fallbackTitle: false }),
+      existingTitle?.key
+    );
+    const fields = collection?.fields ?? titleResolution.fields;
     const mapping = suggestedMapping(preview, fields);
     const newFields: BusinessDataFieldDefinition[] = [];
     if (collection) {
-      const suggested = suggestedFieldDefinitions(preview);
+      const suggested = titleResolution.fields;
       const usedKeys = new Set(fields.map((field) => field.key));
       for (const column of preview.columns) {
         if (mapping[column.key]) continue;
         const candidate = suggested.find((field) => field.key === column.key);
         if (!candidate) continue;
-        const normalizedCandidate =
-          fields.some((field) => field.role === "title") && candidate.role === "title"
-            ? { ...candidate, role: "custom" as const, required: false }
-            : candidate;
-        let key = normalizedCandidate.key;
+        let key = candidate.key;
         let suffix = 2;
         while (usedKeys.has(key)) {
-          key = `${normalizedCandidate.key}_${suffix}`;
+          key = `${candidate.key}_${suffix}`;
           suffix += 1;
         }
-        const definition = { ...normalizedCandidate, key, position: fields.length + newFields.length };
+        const definition = { ...candidate, key, position: fields.length + newFields.length };
         newFields.push(definition);
         usedKeys.add(key);
         mapping[column.key] = key;
@@ -81,6 +84,9 @@ export const POST = async (request: NextRequest) => {
       newFields: collection ? newFields : fields,
       mapping,
       externalIdField: identifier ? mapping[identifier.key] ?? null : null,
+      titleFieldKey: titleResolution.titleKey,
+      titleCandidateKeys: titleResolution.candidateKeys,
+      titleSelectionRequired: collection ? false : titleResolution.requiresSelection,
     });
   } catch (error) {
     if (error instanceof BusinessDataIngestionError) {

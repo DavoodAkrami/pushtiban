@@ -1061,7 +1061,7 @@ const parseIngestionMapping = (value: unknown): IngestionMapping => {
 
 const parseProposedImportFields = (value: unknown): BusinessDataFieldDefinition[] => {
   if (value === undefined || value === null) return [];
-  const result = validateFieldDefinitions(value);
+  const result = validateFieldDefinitions(value, { requireTitle: false });
   if (!result.ok) throw invalidDefinition(result.issues);
   return result.value;
 };

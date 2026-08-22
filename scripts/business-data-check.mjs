@@ -152,8 +152,10 @@ assert.match(serverSource, /\.rpc\("business_data_create_import_collection"/);
 assert.match(serverSource, /\.rpc\("business_data_delete_collection"/);
 assert.match(importFlowSource, /ایجاد فیلد جدید/);
 assert.match(importFlowSource, /نادیده گرفتن این ستون/);
+assert.match(importFlowSource, /نام اصلی هر رکورد را انتخاب کنید/);
 assert.match(importFlowSource, /newFields/);
 assert.match(structurePanelSource, /منابع ورود و اطلاعات مرتبط/);
+assert.match(serverSource, /validateFieldDefinitions\(value, \{ requireTitle: false \}\)/);
 assert.match(
   sqlSource,
   /revoke execute on function public\.business_data_create_manual_collection\([\s\S]*?from public, anon, authenticated;/
@@ -450,6 +452,64 @@ const runIngestionChecks = async () => {
     null
   );
   assert.equal(ignoredOutcome.valid.length, 1, "Ignored columns must not block a valid import");
+
+  const existingTitleResolution = ingestion.resolveIngestionTitle(
+    expandedPreview,
+    ingestion.suggestedFieldDefinitions(expandedPreview, { fallbackTitle: false }),
+    "name"
+  );
+  assert.equal(
+    validation.validateFieldDefinitions([...existingFieldsWithoutAvailability, ...existingTitleResolution.fields.filter((field) => expandedMapping[field.key] === null)]).ok,
+    true,
+    "Existing collections keep exactly one title while adding fields"
+  );
+
+  const incomingTitleMapping = ingestion.suggestedMapping(
+    ingestion.parseGoogleRowsForPreview({
+      spreadsheetName: "نمونه",
+      sheetName: "نام",
+      rows: [["نام محصول", "قیمت"], ["قهوه", "125000"]],
+    }),
+    productFields
+  );
+  assert.equal(incomingTitleMapping.field_1, "name", "An incoming title column must map to the existing title field");
+
+  const obviousTitleResolution = ingestion.resolveIngestionTitle(
+    expandedPreview,
+    ingestion.suggestedFieldDefinitions(expandedPreview, { fallbackTitle: false })
+  );
+  assert.equal(obviousTitleResolution.titleKey, "field_1", "Obvious title inference should select the title field");
+  assert.equal(obviousTitleResolution.requiresSelection, false);
+  assert.equal(validation.validateFieldDefinitions(obviousTitleResolution.fields).ok, true);
+
+  const noTitlePreview = ingestion.parseGoogleRowsForPreview({
+    spreadsheetName: "نمونه",
+    sheetName: "بدون عنوان",
+    rows: [["رنگ", "سایز"], ["مشکی", "L"]],
+  });
+  const noTitleResolution = ingestion.resolveIngestionTitle(
+    noTitlePreview,
+    ingestion.suggestedFieldDefinitions(noTitlePreview, { fallbackTitle: false })
+  );
+  assert.equal(noTitleResolution.requiresSelection, true, "A new collection without an obvious title must require a choice");
+  assert.equal(validation.validateFieldDefinitions(noTitleResolution.fields).ok, false);
+  const selectedNoTitle = noTitleResolution.fields.map((field) =>
+    field.key === noTitleResolution.candidateKeys[0] ? { ...field, role: "title", required: true } : field
+  );
+  assert.equal(validation.validateFieldDefinitions(selectedNoTitle).ok, true);
+
+  const ambiguousTitlePreview = ingestion.parseGoogleRowsForPreview({
+    spreadsheetName: "نمونه",
+    sheetName: "عنوان‌های مشابه",
+    rows: [["نام", "عنوان"], ["قهوه", "قهوه فوری"]],
+  });
+  const ambiguousTitleResolution = ingestion.resolveIngestionTitle(
+    ambiguousTitlePreview,
+    ingestion.suggestedFieldDefinitions(ambiguousTitlePreview, { fallbackTitle: false })
+  );
+  assert.equal(ambiguousTitleResolution.candidateKeys.length, 2, "Ambiguous title candidates must be surfaced");
+  assert.equal(ambiguousTitleResolution.requiresSelection, true);
+  assert.equal(validation.validateFieldDefinitions(ambiguousTitleResolution.fields).ok, false);
 
   const duplicateIdentifierOutcome = ingestion.mapAndValidateRows(
     ingestion.parseGoogleRowsForPreview({

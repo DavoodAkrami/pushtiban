@@ -24,6 +24,7 @@ import type {
   BusinessDataFieldDefinition,
   BusinessDataFieldType,
 } from "@/lib/business-data/types";
+import { validateFieldDefinitions } from "@/lib/business-data/validation";
 import { fa } from "@/lib/utils";
 
 type ImportPreview = {
@@ -79,6 +80,9 @@ export const FileImportFlow = ({
   const [mapping, setMapping] = React.useState<Record<string, string | null>>({});
   const [fields, setFields] = React.useState<BusinessDataField[]>(collection?.fields ?? []);
   const [newFields, setNewFields] = React.useState<BusinessDataFieldDefinition[]>([]);
+  const [titleFieldKey, setTitleFieldKey] = React.useState("");
+  const [titleCandidateKeys, setTitleCandidateKeys] = React.useState<string[]>([]);
+  const [titleSelectionRequired, setTitleSelectionRequired] = React.useState(false);
   const [externalIdField, setExternalIdField] = React.useState<string>("");
   const [collectionName, setCollectionName] = React.useState("");
   const [accessScope, setAccessScope] = React.useState<BusinessDataAccessScope>("internal");
@@ -100,6 +104,9 @@ export const FileImportFlow = ({
     setMapping({});
     setFields(collection?.fields ?? []);
     setNewFields([]);
+    setTitleFieldKey("");
+    setTitleCandidateKeys([]);
+    setTitleSelectionRequired(false);
     setExternalIdField("");
     setCollectionName("");
     setAccessScope("internal");
@@ -135,10 +142,16 @@ export const FileImportFlow = ({
         newFields: BusinessDataFieldDefinition[];
         mapping: Record<string, string | null>;
         externalIdField: string | null;
+        titleFieldKey: string | null;
+        titleCandidateKeys: string[];
+        titleSelectionRequired: boolean;
       }>("/api/business-data/imports/file/preview", { method: "POST", body: form });
       setPreview(response.preview);
       setFields(response.fields);
       setNewFields(response.newFields ?? []);
+      setTitleFieldKey(response.titleFieldKey ?? "");
+      setTitleCandidateKeys(response.titleCandidateKeys ?? []);
+      setTitleSelectionRequired(response.titleSelectionRequired ?? false);
       setMapping(response.mapping);
       setExternalIdField(response.externalIdField ?? "");
       setSheetName(response.preview.sheetName ?? "");
@@ -159,6 +172,32 @@ export const FileImportFlow = ({
     if (!file || !preview) return;
     if (!collection && !collectionName.trim()) {
       setError("نام مجموعه جدید را وارد کنید.");
+      return;
+    }
+    const existingDefinitions: BusinessDataFieldDefinition[] = fields.map((field) => ({
+      key: field.key,
+      label: field.label,
+      ...(field.description ? { description: field.description } : {}),
+      type: field.type,
+      role: field.role,
+      required: field.required,
+      searchable: field.searchable,
+      filterable: field.filterable,
+      aiExposure: field.aiExposure,
+      position: field.position,
+      ...(field.validation ? { validation: field.validation } : {}),
+    }));
+    const finalFields = collection ? [...existingDefinitions, ...selectedNewFields] : selectedNewFields;
+    const schemaResult = validateFieldDefinitions(finalFields);
+    if (!schemaResult.ok) {
+      const titleCount = finalFields.filter((field) => field.role === "title").length;
+      setError(
+        titleCount === 0
+          ? "یک ستون را به‌عنوان نام اصلی هر رکورد انتخاب کنید."
+          : titleCount > 1
+            ? "فقط یک ستون می‌تواند نام اصلی هر رکورد باشد؛ یکی را انتخاب کنید."
+            : "ساختار فیلدها را بررسی کنید و دوباره تلاش کنید."
+      );
       return;
     }
     setBusy(true);
@@ -217,7 +256,22 @@ export const FileImportFlow = ({
     if (externalIdField && externalIdField === mapping[columnKey] && externalIdField !== value) {
       setExternalIdField("");
     }
+    if (!collection && titleFieldKey && titleFieldKey === mapping[columnKey] && titleFieldKey !== value) {
+      setTitleFieldKey("");
+      setNewFields((current) => current.map((field) => field.key === titleFieldKey ? { ...field, role: "custom", required: false } : field));
+    }
     setMapping(nextMapping);
+  };
+
+  const selectTitleField = (value: string) => {
+    setTitleFieldKey(value);
+    setNewFields((current) => current.map((field) =>
+      field.key === value
+        ? { ...field, role: "title", required: true }
+        : field.role === "title"
+          ? { ...field, role: "custom", required: false }
+          : field
+    ));
   };
 
   const updateNewFieldType = (key: string, type: BusinessDataFieldType) => {
@@ -255,6 +309,20 @@ export const FileImportFlow = ({
                 </div>
                 {preview.sheetNames.length > 1 && <Select id="import-sheet" label="برگه فایل" className="mt-5" value={sheetName} onChange={(value) => void changeSheet(value)} options={preview.sheetNames.map((name) => ({ value: name, label: name }))} />}
                 {preview.warnings.map((warning) => <Alert key={warning} variant="warning" title="تطبیق را بررسی کنید" description={warning} className="mt-4" />)}
+                {!collection && titleSelectionRequired && (
+                  <div className="mt-4 rounded-2xl border border-warning/30 bg-warning/10 p-4">
+                    <p className="text-sm font-bold">نام اصلی هر رکورد را انتخاب کنید</p>
+                    <p className="mt-1 text-xs leading-6 text-muted">برای ادامه، ستونی را انتخاب کنید که نام یا عنوان هر مورد را نشان می‌دهد.</p>
+                    <Select
+                      id="import-title-field"
+                      className="mt-3"
+                      label="ستون نام هر مورد"
+                      value={titleFieldKey}
+                      onChange={selectTitleField}
+                      options={newFields.filter((field) => titleCandidateKeys.includes(field.key)).map((field) => ({ value: field.key, label: field.label }))}
+                    />
+                  </div>
+                )}
               </section>
               <section aria-labelledby="mapping-heading">
                 <h3 id="mapping-heading" className="text-sm font-bold">تطبیق اطلاعات</h3>

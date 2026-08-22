@@ -335,7 +335,8 @@ const parseField = (
 };
 
 export const validateFieldDefinitions = (
-  value: unknown
+  value: unknown,
+  options: { requireTitle?: boolean } = {}
 ): BusinessDataValidationResult<BusinessDataFieldDefinition[]> => {
   if (!Array.isArray(value)) {
     return {
@@ -369,7 +370,9 @@ export const validateFieldDefinitions = (
     }
     seen.add(field.key);
   }
-  if (fields.filter((field) => field.role === "title").length !== 1) {
+  const titleCount = fields.filter((field) => field.role === "title").length;
+  const requiresTitle = options.requireTitle !== false;
+  if ((requiresTitle && titleCount !== 1) || (!requiresTitle && titleCount > 1)) {
     issues.push(
       issue("invalid_value", "fields", "Exactly one title field is required.")
     );
