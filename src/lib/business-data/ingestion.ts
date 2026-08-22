@@ -1,5 +1,4 @@
-import ExcelJs, { type Worksheet } from "@excel.js/exceljs";
-import { parseString } from "@fast-csv/parse";
+import type { Worksheet } from "@excel.js/exceljs";
 import { BUSINESS_DATA_LIMITS } from "./limits";
 import type {
   BusinessDataFieldDefinition,
@@ -233,6 +232,7 @@ const worksheetRows = (worksheet: Worksheet) => {
 };
 
 const parseCsvRows = async (buffer: Buffer): Promise<unknown[][]> => {
+  const { parseString } = await import("@fast-csv/parse");
   const source = buffer.toString("utf8");
   if (source.includes("\uFFFD")) {
     throw new BusinessDataIngestionError("کدگذاری فایل CSV قابل خواندن نیست.", "invalid_encoding");
@@ -264,6 +264,7 @@ export const parseFileForPreview = async (file: File, selectedSheet?: string | n
     if (extension === "csv") {
       rows = await parseCsvRows(buffer);
     } else {
+      const { default: ExcelJs } = await import("@excel.js/exceljs");
       const workbook = new ExcelJs.Workbook();
       await workbook.xlsx.load(buffer, { ignoreNodes: ["drawing", "extLst"] });
       if (workbook.worksheets.length === 0 || workbook.worksheets.length > BUSINESS_DATA_LIMITS.importWorkbookSheets) {

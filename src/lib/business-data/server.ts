@@ -28,12 +28,10 @@ import {
   validateFieldDefinitions,
   validateRecordValues,
 } from "./validation";
-import {
-  buildImportPreview,
-  mapAndValidateRows,
-  type IngestionMapping,
-  type IngestionPreview,
-  type IngestionSourceType,
+import type {
+  IngestionMapping,
+  IngestionPreview,
+  IngestionSourceType,
 } from "./ingestion";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -948,6 +946,7 @@ export const previewIngestion = async (
     externalIdField: unknown;
   }
 ) => {
+  const { buildImportPreview } = await import("./ingestion");
   const collection = await getCollectionRow(context, input.collectionId);
   const fields = (await getFieldRows(context, collection.id)).map(mapField);
   const mapping = parseIngestionMapping(input.mapping);
@@ -965,6 +964,7 @@ export const importIngestion = async (
     idempotencyKey: unknown;
   }
 ) => {
+  const { mapAndValidateRows } = await import("./ingestion");
   const collection = await getCollectionRow(context, input.collectionId);
   assertCollectionWritable(collection);
   const fields = (await getFieldRows(context, collection.id)).map(mapField);
@@ -1025,6 +1025,7 @@ export const importNewCollectionIngestion = async (
     idempotencyKey: unknown;
   }
 ) => {
+  const { mapAndValidateRows } = await import("./ingestion");
   const definitionResult = validateCollectionDefinition(input.definition);
   if (!definitionResult.ok) throw invalidDefinition(definitionResult.issues);
   const definition = definitionResult.value;
