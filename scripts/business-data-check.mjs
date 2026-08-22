@@ -31,6 +31,7 @@ const businessDataDirectory = path.join(
 const validation = require(path.join(businessDataDirectory, "validation.ts"));
 const templates = require(path.join(businessDataDirectory, "templates.ts"));
 const ingestion = require(path.join(businessDataDirectory, "ingestion.ts"));
+const importPlan = require(path.join(businessDataDirectory, "import-plan.ts"));
 const aiRetrieval = require(
   path.join(businessDataDirectory, "ai-retrieval-core.ts")
 );
@@ -193,6 +194,26 @@ assert.match(
   sqlSource,
   /set status = case when run_row\.status = 'failed' then 'error' else 'ready' end/,
   "An idempotent retry must not leave its source stuck in syncing"
+);
+assert.match(
+  sqlSource,
+  /pg_advisory_xact_lock\([\s\S]*business-data-fields:/,
+  "Field imports must serialize position assignment per collection"
+);
+assert.match(
+  sqlSource,
+  /select coalesce\(max\(position\), -1\) \+ 1[\s\S]*into next_position/,
+  "Field import positions must be assigned from the current collection maximum"
+);
+assert.match(
+  sqlSource,
+  /next_position,[\s\S]*next_position := next_position \+ 1/,
+  "Field import positions must advance deterministically inside the transaction"
+);
+assert.match(
+  sqlSource,
+  /item ->> 'ai_exposure',[\s\S]*position - 1,/,
+  "New collection positions must come from array order, not browser positions"
 );
 assert.match(
   sqlSource,
@@ -399,6 +420,35 @@ const runIngestionChecks = async () => {
 
   const productFields = templates.getBusinessDataTemplate("products").fields;
   const mapping = ingestion.suggestedMapping(preview, productFields);
+  const exactPreview = ingestion.parseGoogleRowsForPreview({
+    spreadsheetName: "نمونه",
+    sheetName: "فیلدهای موجود",
+    rows: [["name", "sku", "price", "available", "description", "url"], ["قهوه", "SKU-1", "125000", "true", "توضیح", "https://example.com"]],
+  });
+  const exactMapping = ingestion.suggestedMapping(exactPreview, productFields);
+  const exactProposedFields = importPlan.selectProposedImportFields(
+    ingestion.suggestedFieldDefinitions(exactPreview, { fallbackTitle: false }),
+    exactMapping,
+    productFields
+  );
+  assert.deepEqual(exactMapping, {
+    name: "name",
+    sku: "sku",
+    price: "price",
+    available: "available",
+    description: "description",
+    url: "url",
+  });
+  assert.equal(exactProposedFields.length, 0, "Existing-field-only imports must submit zero proposed fields");
+  assert.equal(
+    importPlan.findConflictingProposedImportFields(
+      [{ ...productFields[0] }],
+      { name: null },
+      productFields
+    ).length,
+    1,
+    "A proposed existing field must remain an explicit conflict when it is not mapped"
+  );
   const outcome = ingestion.mapAndValidateRows(preview, mapping, productFields, "sku");
   assert.equal(outcome.valid.length, 2, "Persian numeric values should normalize for currency fields");
   assert.equal(outcome.valid[0].values.price, 125000);
@@ -431,6 +481,22 @@ const runIngestionChecks = async () => {
     validation.validateFieldDefinitions([...existingFieldsWithoutAvailability, ...proposedFields]).ok,
     true,
     "Accepted inferred fields must validate with the existing collection"
+  );
+  const positionedFields = importPlan.appendImportFieldPositions(
+    [
+      { ...productFields[0], position: 0 },
+      { ...productFields[1], position: 2 },
+      { ...productFields[2], position: 5 },
+    ],
+    [
+      { ...proposedFields[0], position: 0 },
+      { ...proposedFields[1], position: 1 },
+    ]
+  );
+  assert.deepEqual(
+    positionedFields.map((field) => field.position),
+    [6, 7],
+    "New fields must be appended after the current maximum, even with non-contiguous positions"
   );
   assert.equal(
     validation.validateFieldDefinitions([...existingFieldsWithoutAvailability, proposedFields[0], proposedFields[0]]).ok,

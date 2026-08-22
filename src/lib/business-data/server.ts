@@ -37,6 +37,11 @@ import type {
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { invalidateBusinessDataAiCapabilities } from "./ai-retrieval";
+import {
+  appendImportFieldPositions,
+  findConflictingProposedImportFields,
+  selectProposedImportFields,
+} from "./import-plan";
 
 type CollectionRow = {
   id: string;
@@ -245,6 +250,27 @@ const invalidDefinition = (issues: { path: string }[]) => {
 const mapDatabaseFailure = (error: { code?: string; message?: string } | null) => {
   const message = error?.message ?? "";
   if (error?.code === "23505") {
+    if (message.includes("business_data_fields_collection_id_position_key")) {
+      return new BusinessDataServiceError(
+        "جایگاه یکی از فیلدهای جدید با ساختار مجموعه تداخل داشت؛ دوباره تلاش کنید.",
+        409,
+        "field_position_conflict"
+      );
+    }
+    if (message.includes("business_data_fields_collection_id_key_key")) {
+      return new BusinessDataServiceError(
+        "یکی از فیلدهای پیشنهادی از قبل در مجموعه وجود دارد.",
+        409,
+        "field_duplicate"
+      );
+    }
+    if (message.includes("business_data_records_external_id_unique")) {
+      return new BusinessDataServiceError(
+        "شناسه یکتای یکی از رکوردها با داده موجود تداخل دارد.",
+        409,
+        "record_identity_conflict"
+      );
+    }
     return new BusinessDataServiceError(
       "این مقدار قبلاً در مجموعه استفاده شده است.",
       409,
@@ -1103,7 +1129,7 @@ export const importIngestion = async (
   const collection = await getCollectionRow(context, input.collectionId);
   assertCollectionWritable(collection);
   const fields = (await getFieldRows(context, collection.id)).map(mapField);
-  const proposedFields = parseProposedImportFields(input.newFields);
+  const submittedProposedFields = parseProposedImportFields(input.newFields);
   const existingDefinitions: BusinessDataFieldDefinition[] = fields.map((field) => ({
     key: field.key,
     label: field.label,
@@ -1117,10 +1143,21 @@ export const importIngestion = async (
     position: field.position,
     ...(field.validation ? { validation: field.validation } : {}),
   }));
+  const mapping = parseIngestionMapping(input.mapping);
+  if (findConflictingProposedImportFields(submittedProposedFields, mapping, existingDefinitions).length > 0) {
+    throw new BusinessDataServiceError(
+      "یکی از فیلدهای پیشنهادی از قبل در مجموعه وجود دارد.",
+      409,
+      "field_duplicate"
+    );
+  }
+  const proposedFields = appendImportFieldPositions(
+    existingDefinitions,
+    selectProposedImportFields(submittedProposedFields, mapping, existingDefinitions)
+  );
   const allFieldsResult = validateFieldDefinitions([...existingDefinitions, ...proposedFields]);
   if (!allFieldsResult.ok) throw invalidDefinition(allFieldsResult.issues);
   const importFields = allFieldsResult.value;
-  const mapping = parseIngestionMapping(input.mapping);
   const externalIdField = typeof input.externalIdField === "string" ? input.externalIdField : null;
   const idempotencyKey = typeof input.idempotencyKey === "string"
     ? input.idempotencyKey.trim()

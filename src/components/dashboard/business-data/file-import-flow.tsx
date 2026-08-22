@@ -25,6 +25,7 @@ import type {
   BusinessDataFieldType,
 } from "@/lib/business-data/types";
 import { validateFieldDefinitions } from "@/lib/business-data/validation";
+import { selectProposedImportFields } from "@/lib/business-data/import-plan";
 import { fa } from "@/lib/utils";
 
 type ImportPreview = {
@@ -208,7 +209,17 @@ export const FileImportFlow = ({
       if (collection) form.set("collectionId", collection.id);
       form.set("sheetName", sheetName);
       form.set("mapping", JSON.stringify(mapping));
-      const selectedNewFields = newFields.filter((field) => Object.values(mapping).includes(field.key));
+      const selectedNewFields = selectProposedImportFields(newFields, mapping, fields.map((field) => ({
+        key: field.key,
+        label: field.label,
+        type: field.type,
+        role: field.role,
+        required: field.required,
+        searchable: field.searchable,
+        filterable: field.filterable,
+        aiExposure: field.aiExposure,
+        position: field.position,
+      })));
       form.set("newFields", JSON.stringify(selectedNewFields));
       form.set("externalIdField", externalIdField);
       form.set("idempotencyKey", idempotencyRef.current);
@@ -248,7 +259,17 @@ export const FileImportFlow = ({
     }
   };
 
-  const selectedNewFields = newFields.filter((field) => Object.values(mapping).includes(field.key));
+  const selectedNewFields = selectProposedImportFields(newFields, mapping, fields.map((field) => ({
+    key: field.key,
+    label: field.label,
+    type: field.type,
+    role: field.role,
+    required: field.required,
+    searchable: field.searchable,
+    filterable: field.filterable,
+    aiExposure: field.aiExposure,
+    position: field.position,
+  })));
   const allFields = [...fields, ...selectedNewFields];
   const newFieldKeys = new Set(newFields.map((field) => field.key));
   const updateMapping = (columnKey: string, value: string) => {

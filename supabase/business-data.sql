@@ -1118,6 +1118,7 @@ as $$
 declare
   new_field jsonb;
   new_field_key text;
+  next_position integer;
 begin
   if not exists (
     select 1 from public.business_data_collections
@@ -1125,6 +1126,12 @@ begin
   ) then
     raise exception 'Business Data collection was not found' using errcode = 'foreign_key_violation';
   end if;
+
+  -- Serialize field additions for this collection. Positions supplied by the
+  -- browser are advisory only; the transaction assigns the next positions.
+  perform pg_advisory_xact_lock(
+    hashtextextended('business-data-fields:' || p_collection_id::text, 0)
+  );
 
   -- Let the existing import transaction resolve retries before attempting to
   -- recreate fields from the same idempotent request.
@@ -1188,6 +1195,12 @@ begin
     raise exception 'Business Data field already exists' using errcode = 'unique_violation';
   end if;
 
+  select coalesce(max(position), -1) + 1
+    into next_position
+  from public.business_data_fields
+  where collection_id = p_collection_id
+    and user_id = p_user_id;
+
   for new_field in select value from jsonb_array_elements(p_new_fields)
   loop
     new_field_key := new_field ->> 'key';
@@ -1206,9 +1219,10 @@ begin
       coalesce((new_field ->> 'searchable')::boolean, false),
       coalesce((new_field ->> 'filterable')::boolean, false),
       coalesce(new_field ->> 'ai_exposure', 'hidden'),
-      coalesce((new_field ->> 'position')::integer, 0),
+      next_position,
       coalesce(new_field -> 'validation', '{}'::jsonb)
     );
+    next_position := next_position + 1;
   end loop;
 
   return public.business_data_import_records(
@@ -1310,7 +1324,7 @@ begin
     coalesce((item ->> 'searchable')::boolean, false),
     coalesce((item ->> 'filterable')::boolean, false),
     item ->> 'ai_exposure',
-    coalesce((item ->> 'position')::integer, position - 1),
+    position - 1,
     coalesce(item -> 'validation', '{}'::jsonb)
   from jsonb_array_elements(p_fields) with ordinality as fields(item, position);
 
