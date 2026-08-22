@@ -16,6 +16,13 @@ alter table public.profiles
 comment on column public.profiles.business_category is
   'Business category picked during onboarding (slug from src/lib/business-categories.ts). Empty for accounts onboarded before the question existed.';
 
+-- Preserve the narrow profile-update boundary established in auth.sql while
+-- allowing the dashboard settings form to edit this owner-facing column.
+revoke update on table public.profiles from authenticated;
+grant select on table public.profiles to authenticated;
+grant update (full_name, business_name, heard_from, business_category)
+  on table public.profiles to authenticated;
+
 create table if not exists public.telegram_connections (
   id               uuid primary key default gen_random_uuid(),
   user_id          uuid not null unique references auth.users (id) on delete cascade,

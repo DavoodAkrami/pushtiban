@@ -99,7 +99,7 @@ One `system` message, then the session's remembered turns, then the new question
 
 ```
 system     persona identity + persona lines + format rule + source priority
-             + retrieved FACTS / Q&A / KB
+             + retrieved BUSINESS DATA / FACTS / Q&A / KB
              + escalation instruction (only when handoff is on)
 assistant  …
 user       …          ← memory: recent turns of the open session
@@ -121,19 +121,57 @@ emits **nothing** — only the dials the owner moved cost tokens.
 
 **2. Retrieval (RAG)** — `src/lib/ai/rag.ts`, `retrieveRagContext()`
 
-1. **Intent** — one cheap `gpt-4o-mini` call classifies the message
+1. **Intent and retrieval plan** — one cheap `gpt-4o-mini` call classifies the message
    (`shipping` / `pricing` / `products` / `returns` / `account` / `general`) and
    condenses it into a search query. When the chat has memory, the previous
    customer message is passed in so follow-ups resolve into standalone queries.
-   Toggleable platform-wide by a site admin.
+   When eligible Business Data exists, the same call may also produce one
+   constrained structured lookup plan; there is no separate planner or
+   summarizer completion. The classifier sees at most **8** active public
+   collection capabilities, **10** searchable/filterable fields per collection,
+   and **3600 characters** of compact metadata. Names and labels are serialized
+   as untrusted data. Toggleable platform-wide by a site admin.
 2. **Facts** — rows of `ai_knowledge_facts` for the business. Always included,
    never vector-searched. This is the only section with no similarity bar to
    limit it, so it is capped at **20 facts / 1200 characters** (oldest first,
    `src/lib/ai/limits.ts`); the facts editor warns the owner when their list
    exceeds the cap.
-3. **Q&A** — `match_knowledge_qa` (pgvector, cosine) over curated pairs in
+3. **Business Data** — `src/lib/business-data/ai-retrieval.ts` discovers only
+   collections where `access_scope = public_catalog`, `ai_enabled = true`, and
+   `status = active`. The model names a stable collection key and a bounded set
+   of search/filter/sort operations; server validation resolves those only
+   against the eligible capability map, then the service-role-only
+   `business_data_lookup_public` RPC repeats tenant, scope, collection, field,
+   operator, type, projection, and limit checks in PostgreSQL. It performs
+   deterministic text matching and typed comparisons in the database rather
+   than loading a collection for model-side filtering.
+
+   The RPC returns no record IDs or source metadata. It projects only fields
+   marked `answer`; `filter_only` fields can constrain or sort a lookup but are
+   removed before the result crosses the database boundary, and `hidden` fields
+   cannot be searched, filtered, sorted, or returned. The customer-facing path
+   never queries `verified_customer` or `internal` collections. Customer-specific
+   order, reservation, delivery, and account requests are identified as private
+   and receive no structured lookup until identity verification is implemented.
+
+   One turn performs at most one structured lookup. The normal request is **3**
+   records and the hard ceiling is **5 records**, **5 filters**, **6 returned
+   fields**, **280 characters per string value**, and **2800 serialized
+   characters** of Business Data context. Oversized results are reduced
+   deterministically before prompt construction. A pure structured-data question
+   skips knowledge embedding/vector search; a mixed structured + policy question
+   runs both retrieval paths after the same intent call. Capability metadata is
+   cached for 60 seconds and invalidated after collection/field structure changes.
+
+   Business-controlled values are serialized under a short `BUSINESS DATA`
+   section labelled as untrusted data, never concatenated as assistant
+   instructions. A zero-match result is preserved as evidence and the prompt
+   forbids inventing a matching item. Bounded logs contain only collection kind,
+   counts, payload size, duration, and truncation state—not record values,
+   customer queries, secrets, or private identifiers.
+4. **Q&A** — `match_knowledge_qa` (pgvector, cosine) over curated pairs in
    `ai_knowledge_qa`. The condensed query is what gets embedded.
-4. **Chunks** — `match_knowledge_chunks_filtered` over `knowledge_chunks`. The
+5. **Chunks** — `match_knowledge_chunks_filtered` over `knowledge_chunks`. The
    detected category is a **soft ranking boost, never a hard filter**. The owner
    picks a source's category when ingesting it at
    `/dashboard/knowledge/sources`, and every chunk of that source is stored with
@@ -165,7 +203,12 @@ whose re-index fails keeps the new title with stale vectors: a ranking nuance,
 reported rather than rolled back, and never a broken source.
 
 Thresholds and match counts come from `ai_global_settings` (site admin), and the
-prompt states the source priority explicitly: **FACTS > Q&A > KB**.
+prompt states the source priority explicitly: **current BUSINESS DATA > FACTS >
+Q&A > KB**. Business Data is authoritative for dynamic structured values such as
+current price, stock, and availability; curated facts/Q&A and document chunks
+remain authoritative for policies, explanations, and other long-form knowledge.
+Mixed questions receive both paths without silently merging contradictory
+dynamic values from an older document.
 
 The two similarity thresholds are deliberately different, and both are
 calibrated for `text-embedding-3-small`, whose cosine scores run well below the
@@ -228,12 +271,20 @@ call — a free escalation.
 Every completion is logged to `ai_usage_logs` by `logAiUsage()`, which feeds the
 admin usage charts and the sidebar's remaining-message count.
 
+Structured database retrieval is not AI usage and creates no token log. The
+existing intent and final chat completions continue to be logged separately;
+Business Data does not introduce an additional model call. Provider/model
+routing remains unchanged.
+
 ### Token discipline
 
 The prompt is deliberately lean, and changes should keep it that way:
 
 - Retrieval metadata the model cannot act on (similarity scores, per-item
   categories) is **not** sent.
+- Business Data capability discovery and result context have independent hard
+  character/count budgets; internal IDs, source metadata, filter-only values,
+  and hidden values never enter the final prompt.
 - Section markers are one short header (`FACTS:`), not open/close banners.
 - Unused capabilities are not described — no handoff, no escalation text.
 - Untouched persona dials cost nothing.
@@ -264,7 +315,9 @@ logs) · `supabase/channel-inbox.sql` (channel column on conversations,
 `telegram_enabled` / `instagram_enabled` on `ai_assistant_settings`) ·
 `supabase/instagram-automations.sql` (Instagram chat sessions, idempotency
 table) · `supabase/instagram-flows.sql` (channel column on `automation_flows`,
-Instagram-specific node/button limit triggers).
+Instagram-specific node/button limit triggers) · `supabase/business-data.sql`
+(collections, fields, records, source/sync foundation, and the service-role-only
+bounded public-catalog lookup RPC).
 
 ## Notes
 

@@ -1,6 +1,7 @@
 import {
   BarChart3,
   BookOpen,
+  Database,
   FileText,
   GitBranch,
   HelpCircle,
@@ -107,6 +108,12 @@ export const NAV_GROUPS: NavGroup[] = [
         label: "دانش دستیار",
         icon: BookOpen,
       },
+      {
+        id: "business-data",
+        href: "/dashboard/data",
+        label: "داده‌های کسب‌وکار",
+        icon: Database,
+      },
     ],
   },
 ];
@@ -141,6 +148,8 @@ export type RouteSection = { label: string; href: string };
 
 export type DashboardRoute = {
   href: string;
+  /** Match a dynamic route family while keeping a stable manifest href. */
+  pathPrefix?: string;
   /**
    * The page's own h1, verbatim — the bar shows this once the heading scrolls
    * away, so anything else makes the bar contradict the page it is labelling.
@@ -172,6 +181,10 @@ const ASSISTANT: RouteSection = {
 const KNOWLEDGE: RouteSection = {
   label: "دانش دستیار",
   href: "/dashboard/knowledge",
+};
+const BUSINESS_DATA: RouteSection = {
+  label: "داده‌های کسب‌وکار",
+  href: "/dashboard/data",
 };
 const ADMIN: RouteSection = { label: "مدیریت", href: "/dashboard/admin" };
 
@@ -319,6 +332,31 @@ export const DASHBOARD_ROUTES: DashboardRoute[] = [
   },
 
   {
+    href: "/dashboard/data",
+    title: "داده‌های کسب‌وکار",
+    icon: Database,
+    keywords: [
+      "محصول",
+      "سفارش",
+      "منو",
+      "رزرو",
+      "دوره",
+      "خدمت",
+      "داده",
+      "collection",
+      "data",
+    ],
+  },
+  {
+    href: "/dashboard/data/collection",
+    pathPrefix: "/dashboard/data/",
+    title: "رکوردها",
+    section: BUSINESS_DATA,
+    icon: Database,
+    unlisted: true,
+  },
+
+  {
     href: "/dashboard/admin",
     title: "مصرف و آمار",
     section: ADMIN,
@@ -355,10 +393,11 @@ export const resolveRoute = (pathname: string): DashboardRoute | null => {
   let match: DashboardRoute | null = null;
 
   for (const route of DASHBOARD_ROUTES) {
-    const matches =
-      pathname === route.href ||
-      (!EXACT_MATCH_HREFS.has(route.href) &&
-        pathname.startsWith(`${route.href}/`));
+    const matches = route.pathPrefix
+      ? pathname.startsWith(route.pathPrefix)
+      : pathname === route.href ||
+        (!EXACT_MATCH_HREFS.has(route.href) &&
+          pathname.startsWith(`${route.href}/`));
     if (!matches) continue;
     if (match === null || route.href.length > match.href.length) match = route;
   }

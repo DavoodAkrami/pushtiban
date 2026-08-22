@@ -13,6 +13,7 @@ import {
 import { luxe } from "@/components/motion/reveal";
 import {
   RagInspector,
+  type BusinessDataRetrievalView,
   type RagChunkView,
   type RagFactView,
   type RagIntentView,
@@ -46,6 +47,7 @@ type PreviewMessage = {
     sources: RagSourceView[];
     facts: RagFactView[];
     qa: RagQaView[];
+    businessData?: BusinessDataRetrievalView | null;
     embeddingsUnavailable?: boolean;
   } | null;
 };
@@ -117,6 +119,7 @@ const Bubble = ({ message }: { message: PreviewMessage }) => {
             sources={message.retrieval.sources}
             facts={message.retrieval.facts}
             qa={message.retrieval.qa}
+            businessData={message.retrieval.businessData}
             embeddingsUnavailable={message.retrieval.embeddingsUnavailable}
           />
         )}
@@ -206,8 +209,8 @@ export const AssistantPreviewPane = ({ enabled }: { enabled: boolean }) => {
             آزمایش دستیار
           </h2>
           <p className="mt-1 text-xs leading-6 text-muted">
-            دقیقاً همان مسیری که پیام مشتری طی می‌کند — همان شخصیت، همان دانش و
-            همان قالب‌بندی تلگرام.
+            دقیقاً همان مسیری که پیام مشتری طی می‌کند — همان شخصیت، دانش، دادهٔ
+            عمومی و قالب‌بندی تلگرام.
           </p>
         </div>
         {messages.length > 0 && (
@@ -248,8 +251,8 @@ export const AssistantPreviewPane = ({ enabled }: { enabled: boolean }) => {
           <div className="mt-4 max-h-[26rem] min-h-40 space-y-4 overflow-y-auto overscroll-contain rounded-2xl bg-background/30 p-4">
             {messages.length === 0 ? (
               <p className="py-10 text-center text-sm leading-7 text-muted">
-                یک پرسش بنویسید — مثلاً «هزینه ارسال چقدره؟» — تا ببینید دستیار
-                چه پاسخی می‌دهد.
+                یک پرسش بنویسید — مثلاً «کفش مشکی زیر پنج میلیون دارید؟» — تا
+                ببینید دستیار چه پاسخی می‌دهد.
               </p>
             ) : (
               <AnimatePresence initial={false}>

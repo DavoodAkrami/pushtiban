@@ -95,12 +95,36 @@ alter table public.profiles enable row level security;
 drop policy if exists "profiles: read own" on public.profiles;
 create policy "profiles: read own"
   on public.profiles for select
-  using (auth.uid() = id);
+  to authenticated
+  using ((select auth.uid()) = id);
 
 drop policy if exists "profiles: update own" on public.profiles;
 create policy "profiles: update own"
   on public.profiles for update
-  using (auth.uid() = id)
-  with check (auth.uid() = id);
+  to authenticated
+  using ((select auth.uid()) = id)
+  with check ((select auth.uid()) = id);
+
+-- RLS limits which row an owner can update; column grants limit what can be
+-- changed on that row. This prevents future privileged profile columns (for
+-- example is_admin) from becoming owner-editable through the Data API.
+revoke update on table public.profiles from authenticated;
+grant select on table public.profiles to authenticated;
+grant update (full_name, business_name, heard_from)
+  on table public.profiles to authenticated;
+
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and column_name = 'business_category'
+  ) then
+    execute 'grant update (business_category) on table public.profiles to authenticated';
+  end if;
+end;
+$$;
 
 -- Inserts happen only via the trigger; no user-facing insert policy needed.
