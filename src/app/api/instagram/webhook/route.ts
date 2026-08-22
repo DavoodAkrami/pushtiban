@@ -7,6 +7,7 @@ import {
   resolveNotifierBot,
 } from "@/lib/ai/inbox";
 import { loadChatSession, recordChatTurns } from "@/lib/ai/memory";
+import { handlePrivateVerificationMessage } from "@/lib/business-data/private-access";
 import { normalizeKeyword } from "@/lib/automations";
 import { decryptSecret } from "@/lib/crypto/secret-box";
 import {
@@ -605,6 +606,59 @@ const handleWithAssistant = async ({
     return;
   }
 
+  const privateIdentity = {
+    channel: "instagram" as const,
+    connectionId: connection.id,
+    customerExternalId: senderId,
+  };
+  const privateVerification = await handlePrivateVerificationMessage({
+    identity: privateIdentity,
+    message: text,
+    userId: connection.user_id,
+  }).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message.slice(0, 200) : "Unknown error";
+    console.error("Private verification handling failed:", message);
+    return { handled: false as const };
+  });
+  if (privateVerification.handled) {
+    if (!privateVerification.verifiedQuestion || !privateVerification.collectionKey) {
+      await send(privateVerification.reply);
+      return;
+    }
+    const verifiedSession = await loadChatSession({
+      channel: "instagram",
+      connectionId: connection.id,
+      chatId: senderId,
+    });
+    const verifiedReply = await withInstagramTyping({
+      igUserId,
+      recipientId: senderId,
+      token,
+      task: () =>
+        generateAssistantReply(privateVerification.verifiedQuestion!, connection.user_id, {
+          channel: "instagram",
+          handoffEnabled,
+          history: verifiedSession.turns,
+          privateAccess: privateIdentity,
+          verifiedPrivateCollectionKey: privateVerification.collectionKey,
+        }),
+    });
+    await send(
+      verifiedReply.text
+        ? markdownToPlainText(verifiedReply.text)
+        : "امکان بررسی این درخواست در حال حاضر نیست؛ کمی بعد دوباره تلاش کنید."
+    );
+    if (verifiedReply.text) {
+      await recordChatTurns({
+        channel: "instagram",
+        connectionId: connection.id,
+        chatId: senderId,
+        turns: [{ role: "assistant", text: verifiedReply.text }],
+      });
+    }
+    return;
+  }
+
   const session = await loadChatSession({
     channel: "instagram",
     connectionId: connection.id,
@@ -620,16 +674,17 @@ const handleWithAssistant = async ({
         channel: "instagram",
         handoffEnabled,
         history: session.turns,
+        privateAccess: privateIdentity,
       }),
   });
 
-  const remember = (assistantText: string | null) =>
+  const remember = (assistantText: string | null, omitCustomerMessage = false) =>
     recordChatTurns({
       channel: "instagram",
       connectionId: connection.id,
       chatId: senderId,
       turns: [
-        { role: "user", text },
+        ...(omitCustomerMessage ? [] : [{ role: "user" as const, text }]),
         ...(assistantText
           ? [{ role: "assistant" as const, text: assistantText }]
           : []),
@@ -660,7 +715,7 @@ const handleWithAssistant = async ({
       ? markdownToPlainText(reply.text)
       : "در حال حاضر امکان پاسخ‌گویی هوشمند نیست؛ کمی بعد دوباره تلاش کنید."
   );
-  await remember(reply.text);
+  await remember(reply.text, Boolean(reply.retrieval?.privateVerification));
 };
 
 // ---- Handoff ---------------------------------------------------------------

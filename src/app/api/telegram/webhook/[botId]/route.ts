@@ -33,6 +33,7 @@ import {
   type BusinessPersona,
 } from "@/lib/ai/persona";
 import { loadChatSession, recordChatTurns } from "@/lib/ai/memory";
+import { handlePrivateVerificationMessage } from "@/lib/business-data/private-access";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   markdownToTelegramHtml,
@@ -1094,6 +1095,57 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
     return NextResponse.json({ ok: true });
   }
 
+  const privateIdentity = {
+    channel: "telegram" as const,
+    connectionId: connection.id,
+    customerExternalId: String(senderId ?? chatId),
+  };
+  const privateVerification = await handlePrivateVerificationMessage({
+    identity: privateIdentity,
+    message: text,
+    userId: connection.user_id,
+  }).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message.slice(0, 200) : "Unknown error";
+    console.error("Private verification handling failed:", message);
+    return { handled: false as const };
+  });
+  if (privateVerification.handled) {
+    if (!privateVerification.verifiedQuestion || !privateVerification.collectionKey) {
+      const sent = await sendToCustomer({ chat_id: chatId, text: privateVerification.reply });
+      return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+    }
+    const verifiedSession = await loadChatSession({
+      connectionId: connection.id,
+      chatId,
+    });
+    const verifiedReply = await withTelegramTyping({
+      chatId,
+      token,
+      task: () =>
+        generateAssistantReply(privateVerification.verifiedQuestion!, connection.user_id, {
+          channel: "telegram",
+          handoffEnabled,
+          history: verifiedSession.turns,
+          privateAccess: privateIdentity,
+          verifiedPrivateCollectionKey: privateVerification.collectionKey,
+        }),
+    });
+    const sent = verifiedReply.text
+      ? await sendAiTextToCustomer(chatId, verifiedReply.text)
+      : await sendToCustomer({
+          chat_id: chatId,
+          text: "امکان بررسی این درخواست در حال حاضر نیست؛ کمی بعد دوباره تلاش کنید.",
+        });
+    if (verifiedReply.text) {
+      await recordChatTurns({
+        connectionId: connection.id,
+        chatId,
+        turns: [{ role: "assistant", text: verifiedReply.text }],
+      });
+    }
+    return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+  }
+
   // Short-term memory: the turns of this chat's open session, or nothing at all
   // when the customer has been quiet longer than the session window.
   const session = await loadChatSession({
@@ -1109,6 +1161,7 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
         channel: "telegram",
         handoffEnabled,
         history: session.turns,
+        privateAccess: privateIdentity,
       }),
   });
 
@@ -1117,12 +1170,12 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
    * fire-and-forget: on serverless the request can be frozen the moment we
    * return, and a dropped write would cost the next message its context.
    */
-  const remember = (assistantText: string | null) =>
+  const remember = (assistantText: string | null, omitCustomerMessage = false) =>
     recordChatTurns({
       connectionId: connection.id,
       chatId,
       turns: [
-        { role: "user", text },
+        ...(omitCustomerMessage ? [] : [{ role: "user" as const, text }]),
         ...(assistantText
           ? [{ role: "assistant" as const, text: assistantText }]
           : []),
@@ -1171,6 +1224,6 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
         chat_id: chatId,
         text: "در حال حاضر امکان پاسخ‌گویی هوشمند نیست؛ کمی بعد دوباره تلاش کنید.",
       });
-  await remember(aiReply.text);
+  await remember(aiReply.text, Boolean(aiReply.retrieval?.privateVerification));
   return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
 };

@@ -27,6 +27,7 @@ import {
 } from "@/lib/ai/persona";
 import type { ChatTurn } from "@/lib/ai/memory";
 import { checkAiLimits, getGlobalAiSettings, logAiUsage } from "@/lib/ai/usage";
+import type { PrivateAccessIdentity } from "@/lib/business-data/private-access";
 
 const COMPLETION_TIMEOUT_MS = 25_000;
 const DEFAULT_NVIDIA_MODEL = "meta/llama-3.3-70b-instruct";
@@ -63,6 +64,20 @@ const buildFallbackSystemPrompt = (
 /** Truncate by code point, so an emoji is never cut in half. */
 const truncate = (value: string, maxLength: number) =>
   Array.from(value).slice(0, maxLength).join("");
+
+/**
+ * Channel verification input is handled before chat memory and should never be
+ * promoted into model context. This also covers a customer who sends a phone,
+ * email, or labeled one-time code in the same message as an initial request.
+ */
+const redactVerificationInput = (value: string) =>
+  value
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/giu, "[email]")
+    .replace(/(?:\+?98|0098|0)?9[0-9\s()-]{8,14}/g, "[phone]")
+    .replace(
+      /((?:otp|one[- ]?time|verification|رمز(?:\s*عبور)?|کد\s*(?:تأیید|تایید))\s*[:：-]?\s*)[0-9۰-۹]{4,8}/giu,
+      "$1[code]"
+    );
 
 type Provider = {
   id: "openai" | "nvidia-nim";
@@ -327,6 +342,8 @@ export const generateAssistantReply = async (
     channel?: AssistantChannel;
     handoffEnabled?: boolean;
     history?: ChatTurn[];
+    privateAccess?: PrivateAccessIdentity;
+    verifiedPrivateCollectionKey?: string | null;
   } = {}
 ): Promise<AssistantResult> => {
   const maxLength = CHANNEL_MESSAGE_MAX_LENGTH[options.channel ?? "telegram"];
@@ -335,6 +352,9 @@ export const generateAssistantReply = async (
   // is mid-session: the assistant must not re-introduce itself, and the
   // previous message helps the intent call resolve follow-ups.
   const history = options.history ?? [];
+  const safeQuestion = options.privateAccess
+    ? redactVerificationInput(question)
+    : question;
   const continuingSession = history.length > 0;
   const previousUserMessage = [...history]
     .reverse()
@@ -365,9 +385,11 @@ export const generateAssistantReply = async (
     userId ? getBusinessPersona(userId) : Promise.resolve(DEFAULT_PERSONA),
     userId
       ? retrieveRagContext({
-          question,
+          question: safeQuestion,
           userId,
           previousUserMessage,
+          privateAccess: options.privateAccess,
+          verifiedPrivateCollectionKey: options.verifiedPrivateCollectionKey,
         }).catch((error: unknown) => {
           const message =
             error instanceof Error
@@ -382,6 +404,14 @@ export const generateAssistantReply = async (
       : Promise.resolve(null),
   ]);
 
+  if (retrieval?.privateVerification) {
+    return {
+      text: retrieval.privateVerification.message,
+      needsHuman: false,
+      retrieval,
+    };
+  }
+
   let systemPrompt = retrieval
     ? buildRagSystemPrompt(retrieval, persona, { continuingSession })
     : buildFallbackSystemPrompt(persona, { continuingSession });
@@ -395,7 +425,7 @@ export const generateAssistantReply = async (
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: systemPrompt },
     ...history.map((turn) => ({ role: turn.role, content: turn.text })),
-    { role: "user", content: question },
+    { role: "user", content: safeQuestion },
   ];
 
   // The site admin can pin one chat model in /dashboard/admin/settings. It

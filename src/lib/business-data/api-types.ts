@@ -55,6 +55,14 @@ export type BusinessDataCollection = {
 export type BusinessDataCollectionDetail = BusinessDataCollection & {
   fields: BusinessDataField[];
   syncRuns: BusinessDataSyncRun[];
+  privateAccess: BusinessDataPrivateAccessConfig | null;
+};
+
+export type BusinessDataPrivateAccessConfig = {
+  enabled: boolean;
+  locatorFieldId: string;
+  verificationFieldId: string;
+  updatedAt: string;
 };
 
 export type BusinessDataRecord = {

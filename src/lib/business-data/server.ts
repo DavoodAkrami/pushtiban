@@ -10,6 +10,7 @@ import type {
   BusinessDataRecordPage,
   BusinessDataSource,
   BusinessDataSyncRun,
+  BusinessDataPrivateAccessConfig,
 } from "./api-types";
 import { BUSINESS_DATA_LIMITS } from "./limits";
 import type {
@@ -105,6 +106,13 @@ type SyncRunRow = {
   started_at: string | null;
   completed_at: string | null;
   created_at: string;
+};
+
+type PrivateAccessConfigRow = {
+  enabled: boolean;
+  locator_field_id: string;
+  verification_field_id: string;
+  updated_at: string;
 };
 
 const COLLECTION_COLUMNS =
@@ -206,6 +214,18 @@ const mapSyncRun = (row: SyncRunRow): BusinessDataSyncRun => ({
   completedAt: row.completed_at,
   createdAt: row.created_at,
 });
+
+const mapPrivateAccessConfig = (
+  row: PrivateAccessConfigRow | null
+): BusinessDataPrivateAccessConfig | null =>
+  row
+    ? {
+        enabled: row.enabled,
+        locatorFieldId: row.locator_field_id,
+        verificationFieldId: row.verification_field_id,
+        updatedAt: row.updated_at,
+      }
+    : null;
 
 const invalidDefinition = (issues: { path: string }[]) => {
   const first = issues[0]?.path ?? "collection";
@@ -378,6 +398,20 @@ const getSyncRuns = async (
   return ((data ?? []) as SyncRunRow[]).map(mapSyncRun);
 };
 
+const getPrivateAccessConfigRow = async (
+  context: BusinessDataContext,
+  collectionId: string
+): Promise<PrivateAccessConfigRow | null> => {
+  const { data, error } = await context.admin
+    .from("business_data_private_access_configs")
+    .select("enabled, locator_field_id, verification_field_id, updated_at")
+    .eq("collection_id", collectionId)
+    .eq("user_id", context.user.id)
+    .maybeSingle();
+  if (error) throw mapDatabaseFailure(error);
+  return (data as PrivateAccessConfigRow | null) ?? null;
+};
+
 const collectionDefinitionFromRows = (
   collection: CollectionRow,
   fields: FieldRow[]
@@ -416,11 +450,12 @@ export const getCollectionDetail = async (
   collectionId: string
 ): Promise<BusinessDataCollectionDetail> => {
   const collection = await getCollectionRow(context, collectionId);
-  const [fields, sources, counts, syncRuns] = await Promise.all([
+  const [fields, sources, counts, syncRuns, privateAccess] = await Promise.all([
     getFieldRows(context, collectionId),
     getSourceRows(context, collectionId),
     getRecordCounts(context, collectionId),
     getSyncRuns(context, collectionId),
+    getPrivateAccessConfigRow(context, collectionId),
   ]);
   return {
     id: collection.id,
@@ -438,6 +473,7 @@ export const getCollectionDetail = async (
     source: getPrimarySource(sources) ? mapSource(getPrimarySource(sources)!) : null,
     fields: fields.map(mapField),
     syncRuns,
+    privateAccess: mapPrivateAccessConfig(privateAccess),
     createdAt: collection.created_at,
     updatedAt: collection.updated_at,
   };
@@ -486,6 +522,13 @@ export const createCollection = async (
   const result = validateCollectionDefinition(input);
   if (!result.ok) throw invalidDefinition(result.issues);
   const definition = result.value;
+  if (definition.accessScope === "verified_customer" && definition.aiEnabled) {
+    throw new BusinessDataServiceError(
+      "دسترسی دستیار به داده خصوصی را پس از تعیین دو فیلد تأیید فعال کنید.",
+      400,
+      "private_access_configuration_required"
+    );
+  }
 
   const { count, error: countError } = await context.admin
     .from("business_data_collections")
@@ -560,6 +603,17 @@ export const updateCollection = async (
   if (status === "archived") candidate.aiEnabled = false;
   const result = validateCollectionDefinition(candidate);
   if (!result.ok) throw invalidDefinition(result.issues);
+  if (
+    result.value.accessScope === "verified_customer" &&
+    result.value.aiEnabled &&
+    !collection.ai_enabled
+  ) {
+    throw new BusinessDataServiceError(
+      "دسترسی دستیار به داده خصوصی فقط از بخش تأیید مشتری فعال می‌شود.",
+      400,
+      "private_access_configuration_required"
+    );
+  }
 
   const { error } = await context.admin
     .from("business_data_collections")
@@ -573,6 +627,80 @@ export const updateCollection = async (
     .eq("id", collectionId)
     .eq("user_id", context.user.id);
   if (error) throw mapDatabaseFailure(error);
+  invalidateBusinessDataAiCapabilities(context.user.id);
+  return getCollectionDetail(context, collectionId);
+};
+
+export const updatePrivateAccessConfig = async (
+  context: BusinessDataContext,
+  collectionId: string,
+  input: unknown
+): Promise<BusinessDataCollectionDetail> => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new BusinessDataServiceError("اطلاعات قابل خواندن نیست.");
+  }
+  const body = input as Record<string, unknown>;
+  if (
+    typeof body.enabled !== "boolean" ||
+    typeof body.locatorFieldId !== "string" ||
+    typeof body.verificationFieldId !== "string"
+  ) {
+    throw new BusinessDataServiceError("تنظیمات تأیید مشتری کامل نیست.");
+  }
+  const collection = await getCollectionRow(context, collectionId);
+  if (collection.access_scope !== "verified_customer") {
+    throw new BusinessDataServiceError(
+      "تنظیم تأیید فقط برای مجموعه‌های مشتری تأییدشده است.",
+      400,
+      "invalid_access_scope"
+    );
+  }
+  const fields = await getFieldRows(context, collectionId);
+  const locator = fields.find((field) => field.id === body.locatorFieldId);
+  const verifier = fields.find(
+    (field) => field.id === body.verificationFieldId
+  );
+  const isVerificationField = (field: FieldRow | undefined) =>
+    Boolean(
+      field &&
+        field.required &&
+        field.filterable &&
+        field.ai_exposure === "filter_only"
+    );
+  if (
+    !isVerificationField(locator) ||
+    !isVerificationField(verifier) ||
+    !locator ||
+    !verifier ||
+    locator.id === verifier.id
+  ) {
+    throw new BusinessDataServiceError(
+      "هر دو فیلد تأیید باید متفاوت، الزامی، قابل جست‌وجو و فقط برای پیدا کردن رکورد باشند.",
+      400,
+      "invalid_private_access_fields"
+    );
+  }
+
+  const { error: configError } = await context.admin
+    .from("business_data_private_access_configs")
+    .upsert(
+      {
+        collection_id: collectionId,
+        user_id: context.user.id,
+        locator_field_id: locator.id,
+        verification_field_id: verifier.id,
+        enabled: body.enabled,
+      },
+      { onConflict: "collection_id" }
+    );
+  if (configError) throw mapDatabaseFailure(configError);
+
+  const { error: collectionError } = await context.admin
+    .from("business_data_collections")
+    .update({ ai_enabled: body.enabled && collection.status === "active" })
+    .eq("id", collectionId)
+    .eq("user_id", context.user.id);
+  if (collectionError) throw mapDatabaseFailure(collectionError);
   invalidateBusinessDataAiCapabilities(context.user.id);
   return getCollectionDetail(context, collectionId);
 };

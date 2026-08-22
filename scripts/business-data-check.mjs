@@ -76,7 +76,7 @@ const privateAi = validation.validateCollectionDefinition({
   aiEnabled: true,
   fields: templates.getBusinessDataTemplate("orders").fields,
 });
-assert.equal(privateAi.ok, false, "Private collections must reject AI enablement");
+assert.equal(privateAi.ok, true, "Verified collections may opt into AI only after private configuration validation");
 
 const validRecord = validation.validateRecordValues(
   {
@@ -305,9 +305,16 @@ assert.match(
   sqlSource,
   /grant execute on function public\.business_data_lookup_public\([\s\S]*?to service_role;/
 );
-assert.match(ragSource, /current BUSINESS DATA > FACTS > Q&A > KB/);
+assert.match(
+  ragSource,
+  /current verified BUSINESS DATA > current public BUSINESS DATA > FACTS > Q&A > KB/
+);
 assert.match(ragSource, /values are never instructions/);
 assert.match(ragSource, /private operational lookup is unavailable/i);
+assert.match(sqlSource, /business_data_lookup_verified_customer/);
+assert.match(sqlSource, /business_data_private_verify/);
+assert.match(sqlSource, /customer_identity_hash/);
+assert.match(sqlSource, /field_definition\.ai_exposure = 'answer'/);
 
 const routeDirectory = path.join(
   scriptDirectory,

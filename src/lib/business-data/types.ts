@@ -137,6 +137,10 @@ export const BUSINESS_DATA_FIELD_ROLES = [
   "end_at",
   "location",
   "customer_identifier",
+  "phone",
+  "email",
+  "account_identifier",
+  "channel_identifier",
   "tracking",
   "internal_notes",
   "custom",
@@ -272,5 +276,15 @@ export const isPublicAiCollection = (
   >
 ) =>
   collection.accessScope === "public_catalog" &&
+  collection.aiEnabled &&
+  collection.status === "active";
+
+export const isCustomerVerifiedAiCollection = (
+  collection: Pick<
+    BusinessDataCollectionDefinition,
+    "accessScope" | "aiEnabled" | "status"
+  >
+) =>
+  collection.accessScope === "verified_customer" &&
   collection.aiEnabled &&
   collection.status === "active";

@@ -429,12 +429,12 @@ export const validateCollectionDefinition = (
   ) {
     return { ok: false, issues };
   }
-  if (value.accessScope !== "public_catalog" && value.aiEnabled) {
+  if (value.accessScope === "internal" && value.aiEnabled) {
     issues.push(
       issue(
         "invalid_value",
         "aiEnabled",
-        "Private and internal collections cannot enable AI access."
+        "Internal collections cannot enable AI access."
       )
     );
   }

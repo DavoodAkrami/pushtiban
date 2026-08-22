@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint .",
     "test:business-data": "node scripts/business-data-check.mjs",
-    "test:business-data-ai": "node scripts/business-data-ai-evaluation.mjs"
+    "test:business-data-ai": "node scripts/business-data-ai-evaluation.mjs",
+    "test:business-data-private": "node scripts/business-data-private-evaluation.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",

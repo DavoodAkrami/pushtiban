@@ -291,7 +291,11 @@ const AssistantVisibilityModal = ({
   );
   const answerFields = collection.fields.filter((field) => field.aiExposure === "answer");
   const hiddenCount = collection.fields.filter((field) => field.aiExposure === "hidden").length;
-  const eligible = collection.accessScope === "public_catalog";
+  const eligible =
+    collection.accessScope === "public_catalog" ||
+    (collection.accessScope === "verified_customer" &&
+      collection.aiEnabled &&
+      collection.privateAccess?.enabled);
 
   React.useEffect(() => {
     if (!open || !eligible || !answerFields.length) return;
@@ -317,7 +321,9 @@ const AssistantVisibilityModal = ({
     collection.accessScope === "internal"
       ? "این مجموعه داخلی است و هیچ بخشی از آن به دستیار داده نمی‌شود."
       : collection.accessScope === "verified_customer"
-        ? "این مجموعه به تأیید هویت مشتری نیاز دارد؛ تا پیاده‌سازی آن، دستیار به داده دسترسی ندارد."
+        ? collection.aiEnabled && collection.privateAccess?.enabled
+          ? "دستیار فقط پس از تأیید موفق مشتری، پاسخ‌های محدود این مجموعه را دریافت می‌کند. فیلدهای تأیید و پنهان هرگز نمایش داده نمی‌شوند."
+          : "برای این مجموعه هنوز دو فیلد تأیید امن انتخاب نشده است؛ دستیار به داده دسترسی ندارد."
         : !collection.aiEnabled
           ? "اجازه استفاده دستیار برای این مجموعه خاموش است."
           : "اجازه دسترسی ثبت شده است، اما اتصال واقعی داده به پاسخ‌های دستیار در مرحله بعد پیاده‌سازی می‌شود.";
@@ -377,6 +383,119 @@ const AssistantVisibilityModal = ({
         </ModalFooter>
       </ModalContent>
     </Modal>
+  );
+};
+
+const PrivateAccessPanel = ({
+  collection,
+  onSaved,
+}: {
+  collection: BusinessDataCollectionDetail;
+  onSaved: (collection: BusinessDataCollectionDetail) => void;
+}) => {
+  const { toast } = useToast();
+  const eligibleFields = collection.fields.filter(
+    (field) =>
+      field.required && field.filterable && field.aiExposure === "filter_only"
+  );
+  const [locatorFieldId, setLocatorFieldId] = React.useState(
+    collection.privateAccess?.locatorFieldId ?? ""
+  );
+  const [verificationFieldId, setVerificationFieldId] = React.useState(
+    collection.privateAccess?.verificationFieldId ?? ""
+  );
+  const [enabled, setEnabled] = React.useState(
+    collection.privateAccess?.enabled ?? false
+  );
+  const [saving, setSaving] = React.useState(false);
+
+  React.useEffect(() => {
+    setLocatorFieldId(collection.privateAccess?.locatorFieldId ?? "");
+    setVerificationFieldId(collection.privateAccess?.verificationFieldId ?? "");
+    setEnabled(collection.privateAccess?.enabled ?? false);
+  }, [collection.privateAccess]);
+
+  const suggestedLocator = eligibleFields.find((field) => field.role === "reference");
+  const suggestedVerifier = eligibleFields.find(
+    (field) =>
+      field.role === "phone" ||
+      field.role === "email" ||
+      field.role === "customer_identifier" ||
+      field.role === "account_identifier" ||
+      field.role === "channel_identifier"
+  );
+  const options = eligibleFields.map((field) => ({
+    value: field.id,
+    label: field.label,
+    description:
+      field.id === suggestedLocator?.id || field.id === suggestedVerifier?.id
+        ? "پیشنهادی براساس نوع فیلد"
+        : undefined,
+  }));
+
+  const save = async () => {
+    if (!locatorFieldId || !verificationFieldId || locatorFieldId === verificationFieldId) {
+      toast({
+        title: "دو فیلد متفاوت انتخاب کنید",
+        description: "یک شناسه رکورد و یک اطلاعات مشتری لازم است.",
+        variant: "error",
+      });
+      return;
+    }
+    setSaving(true);
+    try {
+      const data = await businessDataRequest<{
+        collection: BusinessDataCollectionDetail;
+      }>(
+        `/api/business-data/collections/${collection.id}/private-access`,
+        jsonRequest("PUT", {
+          enabled,
+          locatorFieldId,
+          verificationFieldId,
+        })
+      );
+      onSaved(data.collection);
+      toast({
+        title: enabled ? "تأیید مشتری فعال شد" : "تأیید مشتری غیرفعال شد",
+        variant: "success",
+      });
+    } catch (caught) {
+      toast({
+        title: "تنظیم تأیید مشتری انجام نشد",
+        description: caught instanceof Error ? caught.message : undefined,
+        variant: "error",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!eligibleFields.length) {
+    return (
+      <Alert
+        variant="warning"
+        title="فیلد تأیید آماده نیست"
+        description="دو فیلد متفاوت بسازید یا ویرایش کنید: هر دو باید الزامی، قابل فیلتر و «فقط برای پیدا کردن رکورد» باشند. برای سفارش معمولاً شناسه سفارش و شماره موبایل مناسب است."
+      />
+    );
+  }
+
+  return (
+    <section aria-labelledby="private-access-heading" className="mt-8 rounded-3xl border border-line bg-surface/20 p-5 sm:p-6">
+      <div className="border-b border-line pb-5">
+        <h2 id="private-access-heading" className="text-base font-bold">تأیید مشتری</h2>
+        <p className="mt-1 text-xs leading-6 text-muted">دستیار فقط وقتی پاسخ این مجموعه را می‌بیند که این دو مورد با یک رکورد مطابقت داشته باشد. هیچ‌یک از این مقادیر در پاسخ نمایش داده نمی‌شود.</p>
+      </div>
+      <div className="mt-5 grid gap-5 sm:grid-cols-2">
+        <Select id="private-locator-field" label="شناسه رکورد" hint="مثلاً شماره سفارش یا کد رزرو" options={options} value={locatorFieldId} onChange={setLocatorFieldId} disabled={saving} />
+        <Select id="private-verification-field" label="اطلاعات تأیید مشتری" hint="مثلاً شماره موبایل، ایمیل یا شناسه حساب" options={options} value={verificationFieldId} onChange={setVerificationFieldId} disabled={saving} />
+      </div>
+      <div className="mt-5 rounded-2xl border border-line bg-surface/35 p-4">
+        <Switch checked={enabled} onChange={(event) => setEnabled(event.target.checked)} disabled={saving} label="اجازه پاسخ‌گویی پس از تأیید مشتری" />
+        <p className="mt-2 text-xs leading-6 text-muted">تأیید فقط برای همین گفت‌وگو و حداکثر ده دقیقه معتبر است. دستیار هرگز داده داخلی یا فیلدهای تأیید را دریافت نمی‌کند.</p>
+      </div>
+      <div className="mt-5 flex justify-end"><Button type="button" loading={saving} onClick={() => void save()}>ذخیره تنظیم تأیید</Button></div>
+    </section>
   );
 };
 
@@ -585,7 +704,7 @@ export const BusinessDataStructurePanel = ({ collectionId }: { collectionId: str
             label="نوع دسترسی"
             options={ACCESS_OPTIONS}
             value={accessScope}
-            onChange={(value) => {
+          onChange={(value) => {
               const scope = value as BusinessDataAccessScope;
               setAccessScope(scope);
               if (scope !== "public_catalog") setAiEnabled(false);
@@ -605,7 +724,7 @@ export const BusinessDataStructurePanel = ({ collectionId }: { collectionId: str
             {accessScope === "public_catalog"
               ? "این اجازه برای اتصال ساخت‌یافته آینده ذخیره می‌شود؛ در این مرحله داده هنوز وارد پاسخ دستیار نمی‌شود."
               : accessScope === "verified_customer"
-                ? "تا زمان تأیید هویت مشتری، دستیار به این مجموعه دسترسی ندارد."
+                ? "تنظیم تأیید مشتری را پایین‌تر کامل کنید؛ تا آن زمان دستیار به این مجموعه دسترسی ندارد."
                 : "مجموعه داخلی همیشه از دستیار پنهان می‌ماند."}
           </p>
         </div>
@@ -613,6 +732,10 @@ export const BusinessDataStructurePanel = ({ collectionId }: { collectionId: str
           <Button type="submit" loading={savingSettings}>ذخیره تنظیمات</Button>
         </div>
       </form>
+
+      {collection.accessScope === "verified_customer" && (
+        <PrivateAccessPanel collection={collection} onSaved={setCollection} />
+      )}
 
       <section aria-labelledby="fields-heading" className="mt-8 rounded-3xl border border-line bg-surface/20 p-5 sm:p-6">
         <div className="flex flex-col gap-4 border-b border-line pb-5 sm:flex-row sm:items-start sm:justify-between">

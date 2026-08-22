@@ -101,9 +101,12 @@ How to use:
 - [x] Business Data milestone 3: shared CSV / Excel ingestion, mapping,
       validation, idempotent bulk import, history, and source-health foundation;
       Google Sheets production OAuth remains an external-configuration checkpoint
-- [ ] Business Data milestone 4: bounded AI structured lookup for public
+- [x] Business Data milestone 4: bounded AI structured lookup for public
       catalogs, preview inspection, token budgets, and strict exclusion of
       verified-customer/private operational data until milestone 5
+- [x] Business Data milestone 5: verified customer private operational lookup
+      with short-lived record-scoped verification, field redaction, attempt
+      limits, and strict exclusion of internal data
 - [ ] Knowledge-base ingestion for PDF and Word — needs a parser dependency and
       a Supabase Storage bucket with its own policies
 - [ ] AI assistant configuration (name, tone, model selection)

@@ -107,9 +107,10 @@ const privateCustomerField = (): TemplateFieldInput => ({
   key: "customer_identifier",
   label: "شناسه مشتری",
   role: "customer_identifier",
+  required: true,
   searchable: false,
   filterable: true,
-  aiExposure: "hidden",
+  aiExposure: "filter_only",
 });
 
 export const BUSINESS_DATA_TEMPLATES: readonly BusinessDataTemplate[] = [

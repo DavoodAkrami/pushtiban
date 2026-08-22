@@ -41,4 +41,9 @@ export const BUSINESS_DATA_LIMITS = {
   aiResultFields: 6,
   aiResultValueChars: 280,
   aiResultChars: 2_800,
+  privateCapabilityCollections: 8,
+  privateCapabilitySummaryChars: 1_200,
+  privateVerificationTtlMs: 10 * 60_000,
+  privateVerificationAttempts: 5,
+  privateVerificationAttemptWindowMs: 15 * 60_000,
 } as const;

@@ -4,8 +4,8 @@
 -- Safe to run multiple times (idempotent).
 --
 -- This file creates the generic collection, field, record, source, credential,
--- and sync-run model plus the bounded public-catalog assistant lookup. It does
--- not implement private customer lookup, connectors, or product/order-specific
+-- and sync-run model plus bounded public-catalog and verified-customer assistant
+-- lookup. It does not implement external connectors or product/order-specific
 -- table families.
 -- Run the repository's auth.sql and onboarding.sql first. This file also
 -- reapplies their narrow profile-update grants as defense in depth.
@@ -1715,6 +1715,638 @@ grant select on table public.business_data_fields to authenticated;
 grant select on table public.business_data_sources to authenticated;
 grant select on table public.business_data_records to authenticated;
 grant select on table public.business_data_sync_runs to authenticated;
+
+-- 13) Verified-customer private access ---------------------------------------
+--
+-- Private customer retrieval is deliberately record-scoped. A verified channel
+-- identity may see only the one record it proved ownership of, for a short
+-- period, and never receives filter-only or hidden values.
+
+do $$
+declare
+  constraint_name text;
+begin
+  select conname into constraint_name
+  from pg_constraint
+  where conrelid = 'public.business_data_collections'::regclass
+    and contype = 'c'
+    and pg_get_constraintdef(oid) like '%ai_enabled%access_scope%'
+  limit 1;
+  if constraint_name is not null then
+    execute format('alter table public.business_data_collections drop constraint %I', constraint_name);
+  end if;
+end;
+$$;
+
+alter table public.business_data_collections
+  drop constraint if exists business_data_collections_ai_scope_check;
+alter table public.business_data_collections
+  add constraint business_data_collections_ai_scope_check
+  check (not ai_enabled or access_scope in ('public_catalog', 'verified_customer'));
+
+do $$
+declare
+  constraint_name text;
+begin
+  select conname into constraint_name
+  from pg_constraint
+  where conrelid = 'public.business_data_fields'::regclass
+    and contype = 'c'
+    and pg_get_constraintdef(oid) like '%semantic_role%'
+  limit 1;
+  if constraint_name is not null then
+    execute format('alter table public.business_data_fields drop constraint %I', constraint_name);
+  end if;
+end;
+$$;
+
+alter table public.business_data_fields
+  drop constraint if exists business_data_fields_semantic_role_check;
+alter table public.business_data_fields
+  add constraint business_data_fields_semantic_role_check
+  check (semantic_role in (
+    'title', 'description', 'category', 'sku', 'price', 'currency',
+    'availability', 'status', 'reference', 'url', 'quantity', 'start_at',
+    'end_at', 'location', 'customer_identifier', 'phone', 'email',
+    'account_identifier', 'channel_identifier', 'tracking', 'internal_notes',
+    'custom'
+  ));
+
+comment on column public.business_data_collections.access_scope is
+  'public_catalog is customer-safe; verified_customer requires an enabled two-field verification configuration; internal is never AI-readable.';
+comment on column public.business_data_collections.ai_enabled is
+  'Customer-facing AI is permitted for public_catalog and, only with valid private-access configuration, verified_customer. Internal remains excluded.';
+
+create table if not exists public.business_data_private_access_configs (
+  collection_id          uuid primary key,
+  user_id                uuid not null references auth.users (id) on delete cascade,
+  locator_field_id       uuid not null,
+  verification_field_id uuid not null,
+  enabled                boolean not null default false,
+  created_at             timestamptz not null default now(),
+  updated_at             timestamptz not null default now(),
+  foreign key (collection_id, user_id)
+    references public.business_data_collections (id, user_id)
+    on delete cascade,
+  foreign key (locator_field_id, collection_id, user_id)
+    references public.business_data_fields (id, collection_id, user_id)
+    on delete restrict,
+  foreign key (verification_field_id, collection_id, user_id)
+    references public.business_data_fields (id, collection_id, user_id)
+    on delete restrict,
+  check (locator_field_id <> verification_field_id)
+);
+
+comment on table public.business_data_private_access_configs is
+  'Owner-selected two-field verification policy for a verified_customer collection. Both fields must remain required, filterable, and filter_only.';
+
+create table if not exists public.business_data_private_verification_challenges (
+  id                     uuid primary key default gen_random_uuid(),
+  user_id                uuid not null references auth.users (id) on delete cascade,
+  collection_id          uuid not null,
+  channel                text not null check (channel in ('telegram', 'instagram')),
+  connection_id          uuid not null,
+  customer_identity_hash text not null check (customer_identity_hash ~ '^[0-9a-f]{64}$'),
+  candidate_record_id    uuid,
+  pending_question       text not null default '' check (char_length(pending_question) <= 600),
+  step                   text not null check (step in ('locator', 'verification')),
+  expires_at             timestamptz not null,
+  created_at             timestamptz not null default now(),
+  updated_at             timestamptz not null default now(),
+  foreign key (collection_id, user_id)
+    references public.business_data_collections (id, user_id)
+    on delete cascade,
+  foreign key (candidate_record_id, collection_id, user_id)
+    references public.business_data_records (id, collection_id, user_id)
+    on delete cascade,
+  unique (user_id, collection_id, channel, connection_id, customer_identity_hash)
+);
+
+comment on table public.business_data_private_verification_challenges is
+  'Short-lived in-progress verification state. It stores a candidate record reference, never a phone, email, OTP, or other proof value.';
+
+create table if not exists public.business_data_verified_customer_sessions (
+  id                     uuid primary key default gen_random_uuid(),
+  user_id                uuid not null references auth.users (id) on delete cascade,
+  collection_id          uuid not null,
+  record_id              uuid not null,
+  channel                text not null check (channel in ('telegram', 'instagram')),
+  connection_id          uuid not null,
+  customer_identity_hash text not null check (customer_identity_hash ~ '^[0-9a-f]{64}$'),
+  verified_at            timestamptz not null default now(),
+  expires_at             timestamptz not null,
+  created_at             timestamptz not null default now(),
+  updated_at             timestamptz not null default now(),
+  foreign key (collection_id, user_id)
+    references public.business_data_collections (id, user_id)
+    on delete cascade,
+  foreign key (record_id, collection_id, user_id)
+    references public.business_data_records (id, collection_id, user_id)
+    on delete cascade,
+  unique (user_id, collection_id, channel, connection_id, customer_identity_hash)
+);
+
+comment on table public.business_data_verified_customer_sessions is
+  'Short-lived record-scoped authorization after private verification. No verification input is retained.';
+
+create table if not exists public.business_data_private_verification_attempts (
+  id                     uuid primary key default gen_random_uuid(),
+  user_id                uuid not null references auth.users (id) on delete cascade,
+  collection_id          uuid not null,
+  channel                text not null check (channel in ('telegram', 'instagram')),
+  connection_id          uuid not null,
+  customer_identity_hash text not null check (customer_identity_hash ~ '^[0-9a-f]{64}$'),
+  outcome                text not null check (outcome in ('success', 'failure', 'limited')),
+  created_at             timestamptz not null default now(),
+  foreign key (collection_id, user_id)
+    references public.business_data_collections (id, user_id)
+    on delete cascade
+);
+
+comment on table public.business_data_private_verification_attempts is
+  'Bounded private-access audit metadata. It intentionally contains no verification values or private record values.';
+
+create index if not exists business_data_private_challenges_expiry_idx
+  on public.business_data_private_verification_challenges (expires_at);
+create index if not exists business_data_verified_customer_sessions_scope_idx
+  on public.business_data_verified_customer_sessions (
+    user_id, collection_id, channel, connection_id, customer_identity_hash, expires_at
+  );
+create index if not exists business_data_private_attempts_limit_idx
+  on public.business_data_private_verification_attempts (
+    user_id, collection_id, channel, connection_id, customer_identity_hash, created_at desc
+  );
+
+drop trigger if exists business_data_private_access_configs_set_updated_at
+  on public.business_data_private_access_configs;
+create trigger business_data_private_access_configs_set_updated_at
+  before update on public.business_data_private_access_configs
+  for each row execute function public.set_updated_at();
+
+drop trigger if exists business_data_private_verification_challenges_set_updated_at
+  on public.business_data_private_verification_challenges;
+create trigger business_data_private_verification_challenges_set_updated_at
+  before update on public.business_data_private_verification_challenges
+  for each row execute function public.set_updated_at();
+
+drop trigger if exists business_data_verified_customer_sessions_set_updated_at
+  on public.business_data_verified_customer_sessions;
+create trigger business_data_verified_customer_sessions_set_updated_at
+  before update on public.business_data_verified_customer_sessions
+  for each row execute function public.set_updated_at();
+
+create or replace function public.business_data_normalize_verification_value(
+  p_value text,
+  p_role text
+)
+returns text
+language plpgsql
+immutable
+set search_path = public, pg_temp
+as $$
+declare
+  normalized text;
+begin
+  normalized := lower(btrim(translate(
+    coalesce(p_value, ''),
+    '۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩',
+    '01234567890123456789'
+  )));
+  if p_role = 'phone' then
+    normalized := regexp_replace(normalized, '[^0-9+]', '', 'g');
+  end if;
+  return normalized;
+end;
+$$;
+
+revoke execute on function public.business_data_normalize_verification_value(text, text)
+  from public, anon, authenticated;
+grant execute on function public.business_data_normalize_verification_value(text, text)
+  to service_role;
+
+create or replace function public.business_data_private_config_is_valid(
+  p_collection_id uuid,
+  p_user_id uuid
+)
+returns boolean
+language sql
+stable
+security invoker
+set search_path = public, pg_temp
+as $$
+  select exists (
+    select 1
+    from public.business_data_private_access_configs config
+    join public.business_data_collections collection
+      on collection.id = config.collection_id
+     and collection.user_id = config.user_id
+    join public.business_data_fields locator
+      on locator.id = config.locator_field_id
+     and locator.collection_id = config.collection_id
+     and locator.user_id = config.user_id
+    join public.business_data_fields verifier
+      on verifier.id = config.verification_field_id
+     and verifier.collection_id = config.collection_id
+     and verifier.user_id = config.user_id
+    where config.collection_id = p_collection_id
+      and config.user_id = p_user_id
+      and config.enabled
+      and collection.access_scope = 'verified_customer'
+      and collection.ai_enabled
+      and collection.status = 'active'
+      and locator.required and locator.filterable and locator.ai_exposure = 'filter_only'
+      and verifier.required and verifier.filterable and verifier.ai_exposure = 'filter_only'
+  );
+$$;
+
+revoke execute on function public.business_data_private_config_is_valid(uuid, uuid)
+  from public, anon, authenticated;
+grant execute on function public.business_data_private_config_is_valid(uuid, uuid)
+  to service_role;
+
+create or replace function public.business_data_guard_private_access_config()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+begin
+  if new.enabled and not exists (
+    select 1
+    from public.business_data_collections collection
+    join public.business_data_fields locator
+      on locator.id = new.locator_field_id
+     and locator.collection_id = new.collection_id
+     and locator.user_id = new.user_id
+    join public.business_data_fields verifier
+      on verifier.id = new.verification_field_id
+     and verifier.collection_id = new.collection_id
+     and verifier.user_id = new.user_id
+    where collection.id = new.collection_id
+      and collection.user_id = new.user_id
+      and collection.access_scope = 'verified_customer'
+      and locator.required and locator.filterable and locator.ai_exposure = 'filter_only'
+      and verifier.required and verifier.filterable and verifier.ai_exposure = 'filter_only'
+      and new.locator_field_id <> new.verification_field_id
+  ) then
+    raise exception 'Private access configuration requires two valid filter-only fields'
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end;
+$$;
+
+revoke execute on function public.business_data_guard_private_access_config()
+  from public, anon, authenticated;
+grant execute on function public.business_data_guard_private_access_config()
+  to service_role;
+
+drop trigger if exists business_data_private_access_config_guard
+  on public.business_data_private_access_configs;
+create trigger business_data_private_access_config_guard
+  before insert or update on public.business_data_private_access_configs
+  for each row execute function public.business_data_guard_private_access_config();
+
+create or replace function public.business_data_disable_invalid_private_access()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+begin
+  update public.business_data_private_access_configs config
+  set enabled = false
+  where config.collection_id = new.collection_id
+    and config.user_id = new.user_id
+    and config.enabled
+    and (config.locator_field_id = new.id or config.verification_field_id = new.id)
+    and not (
+      new.required and new.filterable and new.ai_exposure = 'filter_only'
+    );
+
+  update public.business_data_collections collection
+  set ai_enabled = false
+  where collection.id = new.collection_id
+    and collection.user_id = new.user_id
+    and collection.access_scope = 'verified_customer'
+    and exists (
+      select 1
+      from public.business_data_private_access_configs config
+      where config.collection_id = collection.id
+        and config.user_id = collection.user_id
+        and not config.enabled
+    );
+  return new;
+end;
+$$;
+
+revoke execute on function public.business_data_disable_invalid_private_access()
+  from public, anon, authenticated;
+grant execute on function public.business_data_disable_invalid_private_access()
+  to service_role;
+
+drop trigger if exists business_data_fields_disable_invalid_private_access
+  on public.business_data_fields;
+create trigger business_data_fields_disable_invalid_private_access
+  after update of required, filterable, ai_exposure on public.business_data_fields
+  for each row execute function public.business_data_disable_invalid_private_access();
+
+create or replace function public.business_data_private_find_candidate(
+  p_user_id uuid,
+  p_collection_key text,
+  p_locator_value text
+)
+returns uuid
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  collection_row public.business_data_collections%rowtype;
+  locator_field public.business_data_fields%rowtype;
+  candidate_id uuid;
+  candidate_count integer := 0;
+begin
+  if p_collection_key is null or char_length(p_collection_key) > 64
+    or p_locator_value is null or char_length(p_locator_value) > 200 then
+    return null;
+  end if;
+
+  select collection.* into collection_row
+  from public.business_data_collections collection
+  where collection.user_id = p_user_id
+    and collection.key = p_collection_key
+    and collection.access_scope = 'verified_customer'
+    and collection.ai_enabled
+    and collection.status = 'active';
+  if not found or not public.business_data_private_config_is_valid(collection_row.id, p_user_id) then
+    return null;
+  end if;
+
+  select field_definition.* into locator_field
+  from public.business_data_private_access_configs config
+  join public.business_data_fields field_definition
+    on field_definition.id = config.locator_field_id
+  where config.collection_id = collection_row.id
+    and config.user_id = p_user_id
+    and config.enabled;
+  if not found then return null; end if;
+
+  select count(*) into candidate_count
+  from public.business_data_records record
+  where record.user_id = p_user_id
+    and record.collection_id = collection_row.id
+    and record.status = 'active'
+    and public.business_data_normalize_verification_value(
+      record.values ->> locator_field.key,
+      locator_field.semantic_role
+    ) = public.business_data_normalize_verification_value(p_locator_value, locator_field.semantic_role)
+  ;
+
+  if candidate_count <> 1 then return null; end if;
+
+  select record.id into candidate_id
+  from public.business_data_records record
+  where record.user_id = p_user_id
+    and record.collection_id = collection_row.id
+    and record.status = 'active'
+    and public.business_data_normalize_verification_value(
+      record.values ->> locator_field.key,
+      locator_field.semantic_role
+    ) = public.business_data_normalize_verification_value(p_locator_value, locator_field.semantic_role);
+
+  return candidate_id;
+end;
+$$;
+
+revoke execute on function public.business_data_private_find_candidate(uuid, text, text)
+  from public, anon, authenticated;
+grant execute on function public.business_data_private_find_candidate(uuid, text, text)
+  to service_role;
+
+create or replace function public.business_data_private_verify(
+  p_user_id uuid,
+  p_collection_key text,
+  p_candidate_record_id uuid,
+  p_verification_value text,
+  p_channel text,
+  p_connection_id uuid,
+  p_customer_identity_hash text
+)
+returns boolean
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  collection_row public.business_data_collections%rowtype;
+  verifier_field public.business_data_fields%rowtype;
+  verified boolean := false;
+  failures integer := 0;
+begin
+  if p_collection_key is null or char_length(p_collection_key) > 64
+    or p_verification_value is null or char_length(p_verification_value) > 200
+    or p_channel not in ('telegram', 'instagram')
+    or p_customer_identity_hash !~ '^[0-9a-f]{64}$' then
+    return false;
+  end if;
+
+  select count(*) into failures
+  from public.business_data_private_verification_attempts attempt
+  where attempt.user_id = p_user_id
+    and attempt.collection_id in (
+      select id from public.business_data_collections
+      where user_id = p_user_id and key = p_collection_key
+    )
+    and attempt.channel = p_channel
+    and attempt.connection_id = p_connection_id
+    and attempt.customer_identity_hash = p_customer_identity_hash
+    and attempt.outcome in ('failure', 'limited')
+    and attempt.created_at >= now() - interval '15 minutes';
+  if failures >= 5 then
+    insert into public.business_data_private_verification_attempts (
+      user_id, collection_id, channel, connection_id, customer_identity_hash, outcome
+    )
+    select id, p_channel, p_connection_id, p_customer_identity_hash, 'limited'
+    from public.business_data_collections
+    where user_id = p_user_id and key = p_collection_key;
+    return false;
+  end if;
+
+  select collection.* into collection_row
+  from public.business_data_collections collection
+  where collection.user_id = p_user_id
+    and collection.key = p_collection_key
+    and collection.access_scope = 'verified_customer'
+    and collection.ai_enabled
+    and collection.status = 'active';
+  if found and public.business_data_private_config_is_valid(collection_row.id, p_user_id) then
+    select field_definition.* into verifier_field
+    from public.business_data_private_access_configs config
+    join public.business_data_fields field_definition
+      on field_definition.id = config.verification_field_id
+    where config.collection_id = collection_row.id
+      and config.user_id = p_user_id
+      and config.enabled;
+
+    select exists (
+      select 1
+      from public.business_data_records record
+      where record.id = p_candidate_record_id
+        and record.user_id = p_user_id
+        and record.collection_id = collection_row.id
+        and record.status = 'active'
+        and public.business_data_normalize_verification_value(
+          record.values ->> verifier_field.key,
+          verifier_field.semantic_role
+        ) = public.business_data_normalize_verification_value(
+          p_verification_value,
+          verifier_field.semantic_role
+        )
+    ) into verified;
+  end if;
+
+  insert into public.business_data_private_verification_attempts (
+    user_id, collection_id, channel, connection_id, customer_identity_hash, outcome
+  )
+  select id, p_channel, p_connection_id, p_customer_identity_hash,
+    case when verified then 'success' else 'failure' end
+  from public.business_data_collections
+  where user_id = p_user_id and key = p_collection_key;
+
+  if not verified then return false; end if;
+
+  insert into public.business_data_verified_customer_sessions (
+    user_id, collection_id, record_id, channel, connection_id,
+    customer_identity_hash, verified_at, expires_at
+  ) values (
+    p_user_id, collection_row.id, p_candidate_record_id, p_channel,
+    p_connection_id, p_customer_identity_hash, now(), now() + interval '10 minutes'
+  )
+  on conflict (user_id, collection_id, channel, connection_id, customer_identity_hash)
+  do update set
+    record_id = excluded.record_id,
+    verified_at = excluded.verified_at,
+    expires_at = excluded.expires_at;
+
+  return true;
+end;
+$$;
+
+revoke execute on function public.business_data_private_verify(uuid, text, uuid, text, text, uuid, text)
+  from public, anon, authenticated;
+grant execute on function public.business_data_private_verify(uuid, text, uuid, text, text, uuid, text)
+  to service_role;
+
+create or replace function public.business_data_lookup_verified_customer(
+  p_user_id uuid,
+  p_collection_key text,
+  p_channel text,
+  p_connection_id uuid,
+  p_customer_identity_hash text,
+  p_projection_keys jsonb
+)
+returns table (
+  record_values jsonb,
+  data_updated_at timestamptz
+)
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  collection_row public.business_data_collections%rowtype;
+  session_record_id uuid;
+  projection_key text;
+begin
+  if p_collection_key is null or char_length(p_collection_key) > 64
+    or p_channel not in ('telegram', 'instagram')
+    or p_customer_identity_hash !~ '^[0-9a-f]{64}$'
+    or p_projection_keys is null
+    or jsonb_typeof(p_projection_keys) <> 'array'
+    or jsonb_array_length(p_projection_keys) < 1
+    or jsonb_array_length(p_projection_keys) > 6 then
+    return;
+  end if;
+
+  select collection.* into collection_row
+  from public.business_data_collections collection
+  where collection.user_id = p_user_id
+    and collection.key = p_collection_key
+    and collection.access_scope = 'verified_customer'
+    and collection.ai_enabled
+    and collection.status = 'active';
+  if not found or not public.business_data_private_config_is_valid(collection_row.id, p_user_id) then
+    return;
+  end if;
+
+  select session.record_id into session_record_id
+  from public.business_data_verified_customer_sessions session
+  where session.user_id = p_user_id
+    and session.collection_id = collection_row.id
+    and session.channel = p_channel
+    and session.connection_id = p_connection_id
+    and session.customer_identity_hash = p_customer_identity_hash
+    and session.expires_at > now();
+  if session_record_id is null then return; end if;
+
+  for projection_key in
+    select projection_item.value #>> '{}'
+    from jsonb_array_elements(p_projection_keys) as projection_item(value)
+  loop
+    if projection_key is null or not exists (
+      select 1 from public.business_data_fields field_definition
+      where field_definition.user_id = p_user_id
+        and field_definition.collection_id = collection_row.id
+        and field_definition.key = projection_key
+        and field_definition.ai_exposure = 'answer'
+    ) then
+      return;
+    end if;
+  end loop;
+
+  return query
+  select
+    coalesce(jsonb_object_agg(
+      field_definition.key,
+      record.values -> field_definition.key
+      order by field_definition.position
+    ) filter (where record.values ? field_definition.key), '{}'::jsonb),
+    coalesce(record.source_updated_at, record.updated_at)
+  from public.business_data_records record
+  join public.business_data_fields field_definition
+    on field_definition.user_id = p_user_id
+   and field_definition.collection_id = collection_row.id
+   and field_definition.ai_exposure = 'answer'
+   and field_definition.key in (
+     select projection_item.value #>> '{}'
+     from jsonb_array_elements(p_projection_keys) as projection_item(value)
+   )
+  where record.id = session_record_id
+    and record.user_id = p_user_id
+    and record.collection_id = collection_row.id
+    and record.status = 'active'
+  having count(record.id) > 0;
+end;
+$$;
+
+revoke execute on function public.business_data_lookup_verified_customer(
+  uuid, text, text, uuid, text, jsonb
+) from public, anon, authenticated;
+grant execute on function public.business_data_lookup_verified_customer(
+  uuid, text, text, uuid, text, jsonb
+) to service_role;
+
+alter table public.business_data_private_access_configs enable row level security;
+alter table public.business_data_private_verification_challenges enable row level security;
+alter table public.business_data_verified_customer_sessions enable row level security;
+alter table public.business_data_private_verification_attempts enable row level security;
+
+revoke all on table public.business_data_private_access_configs,
+  public.business_data_private_verification_challenges,
+  public.business_data_verified_customer_sessions,
+  public.business_data_private_verification_attempts
+  from anon, authenticated;
 
 grant select, insert, update, delete
   on table public.business_data_collections to service_role;

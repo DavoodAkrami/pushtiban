@@ -126,17 +126,18 @@ emits **nothing** — only the dials the owner moved cost tokens.
    condenses it into a search query. When the chat has memory, the previous
    customer message is passed in so follow-ups resolve into standalone queries.
    When eligible Business Data exists, the same call may also produce one
-   constrained structured lookup plan; there is no separate planner or
-   summarizer completion. The classifier sees at most **8** active public
-   collection capabilities, **10** searchable/filterable fields per collection,
-   and **3600 characters** of compact metadata. Names and labels are serialized
-   as untrusted data. Toggleable platform-wide by a site admin.
+   constrained public lookup plan and one private collection routing hint; there
+   is no separate planner or summarizer completion. The classifier sees at most
+   **8** active public capabilities and **8** eligible private collection keys;
+   their combined compact metadata remains within **3600 characters**. Names and
+   labels are serialized as untrusted data. Toggleable platform-wide by a site
+   admin.
 2. **Facts** — rows of `ai_knowledge_facts` for the business. Always included,
    never vector-searched. This is the only section with no similarity bar to
    limit it, so it is capped at **20 facts / 1200 characters** (oldest first,
    `src/lib/ai/limits.ts`); the facts editor warns the owner when their list
    exceeds the cap.
-3. **Business Data** — `src/lib/business-data/ai-retrieval.ts` discovers only
+3. **Public Business Data** — `src/lib/business-data/ai-retrieval.ts` discovers only
    collections where `access_scope = public_catalog`, `ai_enabled = true`, and
    `status = active`. The model names a stable collection key and a bounded set
    of search/filter/sort operations; server validation resolves those only
@@ -149,12 +150,32 @@ emits **nothing** — only the dials the owner moved cost tokens.
    The RPC returns no record IDs or source metadata. It projects only fields
    marked `answer`; `filter_only` fields can constrain or sort a lookup but are
    removed before the result crosses the database boundary, and `hidden` fields
-   cannot be searched, filtered, sorted, or returned. The customer-facing path
-   never queries `verified_customer` or `internal` collections. Customer-specific
-   order, reservation, delivery, and account requests are identified as private
-   and receive no structured lookup until identity verification is implemented.
+   cannot be searched, filtered, sorted, or returned.
 
-   One turn performs at most one structured lookup. The normal request is **3**
+   **Verified-customer Business Data** — `src/lib/business-data/private-access.ts`
+   exposes an active `verified_customer` collection only after the owner has
+   selected two distinct required, filterable `filter_only` fields: a record
+   locator and a customer proof. The first private request creates a short-lived
+   verification challenge; locator and proof replies are intercepted before chat
+   memory and the final model, and are never persisted as proof values. A
+   successful match creates a **10-minute**, record-scoped session keyed by the
+   business, channel, connection, hashed external channel identity, collection,
+   and record. Telegram's signed webhook establishes a stable Telegram sender;
+   Instagram's signed webhook establishes a stable IGSID. Neither is treated as
+   proof that the account owns a business record.
+
+   The service-role-only `business_data_private_find_candidate`,
+   `business_data_private_verify`, and `business_data_lookup_verified_customer`
+   RPCs repeat tenant, collection scope, active configuration, session expiry,
+   channel identity, record ownership, and projection checks in PostgreSQL.
+   Only `answer` fields of that one verified record reach the model;
+   `filter_only` values never do, and `hidden` values are not queryable or
+   returned. `internal` collections remain completely excluded. Five failed
+   verification attempts per business/collection/channel identity in 15 minutes
+   receive the same generic failure response, so locator existence and a wrong
+   proof are not distinguished.
+
+   One turn performs at most one public or one private structured lookup. The normal request is **3**
    records and the hard ceiling is **5 records**, **5 filters**, **6 returned
    fields**, **280 characters per string value**, and **2800 serialized
    characters** of Business Data context. Oversized results are reduced
@@ -203,12 +224,13 @@ whose re-index fails keeps the new title with stale vectors: a ranking nuance,
 reported rather than rolled back, and never a broken source.
 
 Thresholds and match counts come from `ai_global_settings` (site admin), and the
-prompt states the source priority explicitly: **current BUSINESS DATA > FACTS >
-Q&A > KB**. Business Data is authoritative for dynamic structured values such as
-current price, stock, and availability; curated facts/Q&A and document chunks
-remain authoritative for policies, explanations, and other long-form knowledge.
-Mixed questions receive both paths without silently merging contradictory
-dynamic values from an older document.
+prompt states the source priority explicitly: **current verified BUSINESS DATA >
+current public BUSINESS DATA > FACTS > Q&A > KB**. Business Data is authoritative
+for dynamic structured values such as current price, stock, availability, order
+status, tracking, reservation time, and subscription state; curated facts/Q&A
+and document chunks remain authoritative for policies, explanations, and other
+long-form knowledge. Mixed questions receive both paths without silently merging
+contradictory dynamic values from an older document.
 
 The two similarity thresholds are deliberately different, and both are
 calibrated for `text-embedding-3-small`, whose cosine scores run well below the
@@ -249,6 +271,10 @@ assistant introduces itself again.
   question is not answered with a second introduction.
 - Reads and writes **fail open** — a memory failure costs context, never a reply.
 
+Verified-customer authorization is deliberately separate from chat memory and
+shorter than it: a 10-minute private session does not outlive the 30-minute
+conversation window, and it is never a permanent customer authorization.
+
 **4. Output** — `src/lib/telegram/format.ts`
 
 The model writes Markdown; Telegram renders none of it. `markdownToTelegramHtml`
@@ -273,8 +299,10 @@ admin usage charts and the sidebar's remaining-message count.
 
 Structured database retrieval is not AI usage and creates no token log. The
 existing intent and final chat completions continue to be logged separately;
-Business Data does not introduce an additional model call. Provider/model
-routing remains unchanged.
+Business Data does not introduce an additional planner/verifier/summarizer model
+call. A verification prompt returns immediately after the existing intent call;
+the answer after a verified lookup uses the usual intent + final completion.
+Provider/model routing remains unchanged.
 
 ### Token discipline
 
@@ -283,8 +311,8 @@ The prompt is deliberately lean, and changes should keep it that way:
 - Retrieval metadata the model cannot act on (similarity scores, per-item
   categories) is **not** sent.
 - Business Data capability discovery and result context have independent hard
-  character/count budgets; internal IDs, source metadata, filter-only values,
-  and hidden values never enter the final prompt.
+  character/count budgets; internal IDs, source metadata, verification inputs,
+  filter-only values, and hidden values never enter the final prompt.
 - Section markers are one short header (`FACTS:`), not open/close banners.
 - Unused capabilities are not described — no handoff, no escalation text.
 - Untouched persona dials cost nothing.
@@ -316,8 +344,9 @@ logs) · `supabase/channel-inbox.sql` (channel column on conversations,
 `supabase/instagram-automations.sql` (Instagram chat sessions, idempotency
 table) · `supabase/instagram-flows.sql` (channel column on `automation_flows`,
 Instagram-specific node/button limit triggers) · `supabase/business-data.sql`
-(collections, fields, records, source/sync foundation, and the service-role-only
-bounded public-catalog lookup RPC).
+(collections, fields, records, source/sync foundation, verified-customer
+configuration/challenges/sessions/attempt audits, and the service-role-only
+bounded public and verified-record lookup RPCs).
 
 ## Notes
 
