@@ -1,6 +1,6 @@
 import "server-only";
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import type {
   BusinessDataCollection,
@@ -9,6 +9,7 @@ import type {
   BusinessDataRecord,
   BusinessDataRecordPage,
   BusinessDataSource,
+  BusinessDataSyncRun,
 } from "./api-types";
 import { BUSINESS_DATA_LIMITS } from "./limits";
 import type {
@@ -36,6 +37,7 @@ import {
 } from "./ingestion";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import { invalidateBusinessDataAiCapabilities } from "./ai-retrieval";
 
 type CollectionRow = {
   id: string;
@@ -93,6 +95,20 @@ type RecordRow = {
   updated_at: string;
 };
 
+type SyncRunRow = {
+  id: string;
+  source_id: string;
+  status: BusinessDataSyncRun["status"];
+  inserted_count: number;
+  updated_count: number;
+  skipped_count: number;
+  failed_count: number;
+  error_summary: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+};
+
 const COLLECTION_COLUMNS =
   "id, user_id, key, name, description, kind, access_scope, ai_enabled, status, schema_version, created_at, updated_at";
 const FIELD_COLUMNS =
@@ -101,6 +117,8 @@ const SOURCE_COLUMNS =
   "id, name, source_type, status, configuration, field_mapping, last_attempted_at, last_succeeded_at, last_error, created_at, updated_at";
 const RECORD_COLUMNS =
   "id, values, status, source_id, source_updated_at, created_at, updated_at";
+const SYNC_RUN_COLUMNS =
+  "id, source_id, status, inserted_count, updated_count, skipped_count, failed_count, error_summary, started_at, completed_at, created_at";
 
 export class BusinessDataServiceError extends Error {
   status: number;
@@ -175,6 +193,20 @@ const mapRecord = (row: RecordRow): BusinessDataRecord => ({
   sourceUpdatedAt: row.source_updated_at,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
+});
+
+const mapSyncRun = (row: SyncRunRow): BusinessDataSyncRun => ({
+  id: row.id,
+  sourceId: row.source_id,
+  status: row.status,
+  insertedCount: row.inserted_count,
+  updatedCount: row.updated_count,
+  skippedCount: row.skipped_count,
+  failedCount: row.failed_count,
+  errorSummary: row.error_summary,
+  startedAt: row.started_at,
+  completedAt: row.completed_at,
+  createdAt: row.created_at,
 });
 
 const invalidDefinition = (issues: { path: string }[]) => {
@@ -288,6 +320,9 @@ const getSourceRows = async (
   return (data ?? []) as SourceRow[];
 };
 
+const getPrimarySource = (sources: SourceRow[]) =>
+  sources.find((source) => source.source_type !== "manual") ?? sources[0] ?? null;
+
 const getRecordCounts = async (
   context: BusinessDataContext,
   collectionId: string
@@ -330,6 +365,21 @@ const getRecordCounts = async (
   };
 };
 
+const getSyncRuns = async (
+  context: BusinessDataContext,
+  collectionId: string
+): Promise<BusinessDataSyncRun[]> => {
+  const { data, error } = await context.admin
+    .from("business_data_sync_runs")
+    .select(SYNC_RUN_COLUMNS)
+    .eq("collection_id", collectionId)
+    .eq("user_id", context.user.id)
+    .order("created_at", { ascending: false })
+    .limit(5);
+  if (error) throw mapDatabaseFailure(error);
+  return ((data ?? []) as SyncRunRow[]).map(mapSyncRun);
+};
+
 const collectionDefinitionFromRows = (
   collection: CollectionRow,
   fields: FieldRow[]
@@ -368,10 +418,11 @@ export const getCollectionDetail = async (
   collectionId: string
 ): Promise<BusinessDataCollectionDetail> => {
   const collection = await getCollectionRow(context, collectionId);
-  const [fields, sources, counts] = await Promise.all([
+  const [fields, sources, counts, syncRuns] = await Promise.all([
     getFieldRows(context, collectionId),
     getSourceRows(context, collectionId),
     getRecordCounts(context, collectionId),
+    getSyncRuns(context, collectionId),
   ]);
   return {
     id: collection.id,
@@ -386,8 +437,9 @@ export const getCollectionDetail = async (
     recordCount: counts.total,
     activeRecordCount: counts.active,
     dataUpdatedAt: counts.latestUpdatedAt,
-    source: sources[0] ? mapSource(sources[0]) : null,
+    source: getPrimarySource(sources) ? mapSource(getPrimarySource(sources)!) : null,
     fields: fields.map(mapField),
+    syncRuns,
     createdAt: collection.created_at,
     updatedAt: collection.updated_at,
   };
@@ -421,7 +473,7 @@ export const listCollections = async (
         recordCount: counts.total,
         activeRecordCount: counts.active,
         dataUpdatedAt: counts.latestUpdatedAt,
-        source: sources[0] ? mapSource(sources[0]) : null,
+        source: getPrimarySource(sources) ? mapSource(getPrimarySource(sources)!) : null,
         createdAt: collection.created_at,
         updatedAt: collection.updated_at,
       };
@@ -480,6 +532,7 @@ export const createCollection = async (
   if (collectionError || typeof collectionId !== "string") {
     throw mapDatabaseFailure(collectionError);
   }
+  invalidateBusinessDataAiCapabilities(context.user.id);
   return getCollectionDetail(context, collectionId);
 };
 
@@ -522,6 +575,7 @@ export const updateCollection = async (
     .eq("id", collectionId)
     .eq("user_id", context.user.id);
   if (error) throw mapDatabaseFailure(error);
+  invalidateBusinessDataAiCapabilities(context.user.id);
   return getCollectionDetail(context, collectionId);
 };
 
@@ -544,6 +598,7 @@ export const deleteCollection = async (
     .eq("id", collectionId)
     .eq("user_id", context.user.id);
   if (error) throw mapDatabaseFailure(error);
+  invalidateBusinessDataAiCapabilities(context.user.id);
 };
 
 export const createField = async (
@@ -570,6 +625,7 @@ export const createField = async (
     .from("business_data_fields")
     .insert(toFieldInsert(context.user.id, collectionId, field));
   if (error) throw mapDatabaseFailure(error);
+  invalidateBusinessDataAiCapabilities(context.user.id);
   return getCollectionDetail(context, collectionId);
 };
 
@@ -620,6 +676,7 @@ export const updateField = async (
     .eq("collection_id", collectionId)
     .eq("user_id", context.user.id);
   if (error) throw mapDatabaseFailure(error);
+  invalidateBusinessDataAiCapabilities(context.user.id);
   return getCollectionDetail(context, collectionId);
 };
 
@@ -644,6 +701,7 @@ export const moveField = async (
     p_direction: direction,
   });
   if (error) throw mapDatabaseFailure(error);
+  invalidateBusinessDataAiCapabilities(context.user.id);
   return getCollectionDetail(context, collectionId);
 };
 
@@ -669,6 +727,7 @@ export const deleteField = async (
     .eq("collection_id", collectionId)
     .eq("user_id", context.user.id);
   if (error) throw mapDatabaseFailure(error);
+  invalidateBusinessDataAiCapabilities(context.user.id);
   return getCollectionDetail(context, collectionId);
 };
 
@@ -875,6 +934,11 @@ const parseIngestionMapping = (value: unknown): IngestionMapping => {
   return mapping;
 };
 
+const idempotencyUuid = (scope: string, key: string) => {
+  const hash = createHash("sha256").update(`${scope}:${key}`).digest("hex");
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
+};
+
 export const previewIngestion = async (
   context: BusinessDataContext,
   input: {
@@ -941,6 +1005,94 @@ export const importIngestion = async (
   });
   if (error || !data || typeof data !== "object") throw mapDatabaseFailure(error);
   return data as {
+    runId: string;
+    insertedCount: number;
+    updatedCount: number;
+    skippedCount: number;
+    failedCount: number;
+    status: "succeeded" | "partial" | "failed";
+    idempotent: boolean;
+  };
+};
+
+export const importNewCollectionIngestion = async (
+  context: BusinessDataContext,
+  input: {
+    definition: unknown;
+    preview: IngestionPreview;
+    mapping: unknown;
+    externalIdField: unknown;
+    idempotencyKey: unknown;
+  }
+) => {
+  const definitionResult = validateCollectionDefinition(input.definition);
+  if (!definitionResult.ok) throw invalidDefinition(definitionResult.issues);
+  const definition = definitionResult.value;
+  if (input.preview.sourceType !== "csv" && input.preview.sourceType !== "excel") {
+    throw new BusinessDataServiceError("این نوع منبع برای ساخت مجموعه پشتیبانی نمی‌شود.", 400, "unsupported_source");
+  }
+  const { count, error: countError } = await context.admin
+    .from("business_data_collections")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", context.user.id);
+  if (countError) throw mapDatabaseFailure(countError);
+  if ((count ?? 0) >= BUSINESS_DATA_LIMITS.collectionsPerUser) {
+    throw new BusinessDataServiceError("حداکثر تعداد مجموعه‌های این حساب ساخته شده است.", 409, "limit_exceeded");
+  }
+  const mapping = parseIngestionMapping(input.mapping);
+  const externalIdField = typeof input.externalIdField === "string" ? input.externalIdField : null;
+  const idempotencyKey = typeof input.idempotencyKey === "string" ? input.idempotencyKey.trim() : "";
+  if (!/^[a-zA-Z0-9_-]{16,120}$/.test(idempotencyKey)) {
+    throw new BusinessDataServiceError("درخواست ورود داده معتبر نیست؛ دوباره تلاش کنید.", 400, "invalid_idempotency");
+  }
+  const outcome = mapAndValidateRows(input.preview, mapping, definition.fields, externalIdField);
+  if (!outcome.valid.length) {
+    throw new BusinessDataServiceError("هیچ ردیف معتبری برای ورود پیدا نشد.", 400, "no_valid_rows");
+  }
+  const stableId = createHash("sha256")
+    .update(`${context.user.id}:${idempotencyKey}`)
+    .digest("hex")
+    .slice(0, 12);
+  const collectionKey = `${definition.kind}_${stableId}`;
+  const { data, error } = await context.admin.rpc("business_data_create_import_collection", {
+    p_user_id: context.user.id,
+    p_key: collectionKey,
+    p_name: definition.name,
+    p_description: definition.description,
+    p_kind: definition.kind,
+    p_access_scope: definition.accessScope,
+    p_ai_enabled: definition.aiEnabled,
+    p_status: definition.status,
+    p_fields: definition.fields.map((field) => ({
+      key: field.key,
+      label: field.label,
+      description: field.description ?? "",
+      data_type: field.type,
+      semantic_role: field.role,
+      required: field.required,
+      searchable: field.searchable,
+      filterable: field.filterable,
+      ai_exposure: field.aiExposure,
+      position: field.position,
+      validation: field.validation ?? {},
+    })),
+    p_source_id: idempotencyUuid(context.user.id, idempotencyKey),
+    p_source_type: input.preview.sourceType,
+    p_source_name: input.preview.sourceName.slice(0, BUSINESS_DATA_LIMITS.sourceNameChars),
+    p_source_configuration: { importedFrom: "file", sheetName: input.preview.sheetName },
+    p_field_mapping: mapping,
+    p_records: outcome.valid.map((record) => ({
+      values: record.values,
+      externalId: record.externalId,
+      checksum: record.checksum,
+    })),
+    p_rejected_count: input.preview.rows.length - outcome.valid.length,
+    p_idempotency_key: idempotencyKey,
+  });
+  if (error || !data || typeof data !== "object") throw mapDatabaseFailure(error);
+  invalidateBusinessDataAiCapabilities(context.user.id);
+  return data as {
+    collectionId: string;
     runId: string;
     insertedCount: number;
     updatedCount: number;

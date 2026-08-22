@@ -19,7 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
-import { SOURCE_STATUS_LABELS } from "@/lib/business-data/api-types";
+import { SOURCE_STATUS_LABELS, SYNC_STATUS_LABELS } from "@/lib/business-data/api-types";
 import { fa } from "@/lib/utils";
 import { useBusinessDataCollection } from "./use-collection";
 import { FileImportFlow } from "./file-import-flow";
@@ -107,18 +107,20 @@ export const BusinessDataSourcePanel = ({ collectionId }: { collectionId: string
           </div>
           <div>
             <dt className="flex items-center gap-2 text-xs text-muted"><CheckCircle2 className="size-3.5" aria-hidden /> آخرین همگام‌سازی</dt>
-            <dd className="mt-2 font-medium">برای منبع دستی کاربرد ندارد</dd>
+            <dd className="mt-2 font-medium">{source?.lastSucceededAt ? formatDate(source.lastSucceededAt) : source?.type === "manual" || !source ? "برای منبع دستی کاربرد ندارد" : "هنوز ثبت نشده"}</dd>
           </div>
         </dl>
         <div className="mt-6 flex flex-wrap gap-2 border-t border-line pt-5">
           <Button type="button" size="sm" startIcon={<FileSpreadsheet className="size-4" />} onClick={() => setFileImportOpen(true)}>
             ورود از فایل CSV یا Excel
           </Button>
-          <Button type="button" size="sm" variant="ghost" startIcon={<Sheet className="size-4" />} onClick={() => { window.location.assign(`/api/business-data/google-sheets/connect?collectionId=${encodeURIComponent(collection.id)}`); }}>
-            اتصال Google Sheets
+          <Button type="button" size="sm" variant="ghost" startIcon={<Sheet className="size-4" />} disabled title="پس از پیکربندی Google OAuth فعال می‌شود">
+            Google Sheets در انتظار پیکربندی
           </Button>
         </div>
       </section>
+
+      {collection.syncRuns.length > 0 && <section aria-labelledby="import-history-heading" className="mt-8 border-t border-line pt-8"><div><h2 id="import-history-heading" className="text-sm font-bold">آخرین ورودها</h2><p className="mt-1 text-xs leading-6 text-muted">نتیجه پنج ورود اخیر این منبع نمایش داده می‌شود.</p></div><ul className="mt-4 divide-y divide-line overflow-hidden rounded-3xl border border-line bg-surface/20">{collection.syncRuns.map((run) => <li key={run.id} className="flex flex-wrap items-center justify-between gap-3 p-4"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><Badge variant={run.status === "succeeded" ? "success" : run.status === "partial" ? "warning" : "error"}>{SYNC_STATUS_LABELS[run.status]}</Badge><span className="text-xs text-muted">{formatDate(run.completedAt ?? run.createdAt)}</span></div><p className="mt-2 text-sm">{fa(run.insertedCount)} وارد شد · {fa(run.updatedCount)} به‌روزرسانی شد · {fa(run.skippedCount)} بدون تغییر</p>{run.failedCount > 0 && <p className="mt-1 text-xs text-warning">{fa(run.failedCount)} ردیف وارد نشد</p>}{run.errorSummary && <p className="mt-1 text-xs text-danger">{run.errorSummary}</p>}</div></li>)}</ul></section>}
 
       <section aria-labelledby="future-sources-heading" className="mt-8 border-t border-line pt-8">
         <h2 id="future-sources-heading" className="text-sm font-bold">راه‌های ورود داده در مرحله‌های بعد</h2>
@@ -129,7 +131,7 @@ export const BusinessDataSourcePanel = ({ collectionId }: { collectionId: string
           {[
             { icon: FileSpreadsheet, label: "فایل CSV و Excel", status: "آماده" },
             { icon: Sheet, label: "Google Sheets", status: "در انتظار اتصال" },
-            { icon: Waypoints, label: "پایگاه‌داده و API" },
+            { icon: Waypoints, label: "پایگاه‌داده و API", status: "بعداً" },
           ].map((item) => (
             <li key={item.label} className="flex items-center gap-3 rounded-2xl border border-line bg-surface/20 p-4 text-sm text-muted">
               <item.icon className="size-4 shrink-0" aria-hidden />

@@ -7,11 +7,13 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "test:business-data": "node scripts/business-data-check.mjs"
+    "test:business-data": "node scripts/business-data-check.mjs",
+    "test:business-data-ai": "node scripts/business-data-ai-evaluation.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",
     "@excel.js/exceljs": "^0.13.0",
+    "@fast-csv/parse": "^5.0.5",
     "@google/genai": "^2.12.0",
     "@openrouter/sdk": "^1.0.2",
     "@radix-ui/react-accordion": "^1.2.16",

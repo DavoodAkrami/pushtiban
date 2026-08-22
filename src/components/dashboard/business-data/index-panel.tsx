@@ -9,6 +9,7 @@ import {
   CircleAlert,
   Database,
   Eye,
+  FileSpreadsheet,
   Plus,
   Waypoints,
 } from "lucide-react";
@@ -49,6 +50,7 @@ import type {
   BusinessDataTemplate,
 } from "@/lib/business-data/types";
 import { cn, fa } from "@/lib/utils";
+import { FileImportFlow } from "./file-import-flow";
 
 const CREATION_STEPS = [
   { id: "template", label: "نوع داده" },
@@ -442,12 +444,14 @@ const CollectionRow = ({ collection }: { collection: BusinessDataCollection }) =
 };
 
 export const BusinessDataIndexPanel = () => {
+  const router = useRouter();
   const [collections, setCollections] = React.useState<BusinessDataCollection[]>([]);
   const [businessCategory, setBusinessCategory] = React.useState("other");
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
   const [creatorOpen, setCreatorOpen] = React.useState(false);
   const [creatorTemplateId, setCreatorTemplateId] = React.useState<string>();
+  const [fileImportOpen, setFileImportOpen] = React.useState(false);
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -486,16 +490,7 @@ export const BusinessDataIndexPanel = () => {
         icon={Database}
         count={collections.length}
         loading={loading}
-        action={
-          <Button
-            type="button"
-            startIcon={<Plus className="size-4" />}
-            onClick={() => openCreator()}
-            className="w-full sm:w-auto"
-          >
-            مجموعه جدید
-          </Button>
-        }
+        action={<div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row"><Button type="button" variant="ghost" startIcon={<FileSpreadsheet className="size-4" />} onClick={() => setFileImportOpen(true)}>ورود از فایل</Button><Button type="button" startIcon={<Plus className="size-4" />} onClick={() => openCreator()}>مجموعه جدید</Button></div>}
       />
 
       {error && (
@@ -585,6 +580,7 @@ export const BusinessDataIndexPanel = () => {
           onOpenChange={setCreatorOpen}
         />
       )}
+      <FileImportFlow open={fileImportOpen} onOpenChange={setFileImportOpen} onImported={(collectionId) => { if (collectionId) router.push(`/dashboard/data/${collectionId}`); else void load(); }} />
     </>
   );
 };

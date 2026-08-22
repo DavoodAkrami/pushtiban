@@ -2,10 +2,9 @@
 
 import * as React from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ChevronDown, Database, FileText, HelpCircle, Search } from "lucide-react";
-import { luxe } from "@/components/motion/reveal";
+import { Database } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { cn, fa } from "@/lib/utils";
+import { fa } from "@/lib/utils";
 
 // Lifted verbatim from the standalone /ai/rag-test playground, which had no
 // dashboard shell and no link from anywhere in the product. It shows exactly
@@ -16,6 +15,9 @@ export type RagIntentView = {
   category: string;
   confidence: number;
   searchQuery?: string | null;
+  knowledgeNeeded?: boolean;
+  businessDataRequested?: boolean;
+  privateDataRequested?: boolean;
 };
 export type RagFactView = { id: string; category: string; factText: string };
 export type RagQaView = {
@@ -34,6 +36,15 @@ export type RagChunkView = {
   similarity: number;
 };
 export type RagSourceView = { id: string; title: string };
+export type BusinessDataRetrievalView = {
+  collectionName: string;
+  collectionKind: string;
+  matchedCount: number;
+  dataUpdatedAt: string | null;
+  payloadChars: number;
+  truncated: boolean;
+  durationMs: number;
+};
 
 // ---- Retrieved context inline panel ----------------------------------------
 
@@ -43,6 +54,7 @@ type RagInspectorProps = {
   sources: RagSourceView[];
   facts: RagFactView[];
   qa: RagQaView[];
+  businessData?: BusinessDataRetrievalView | null;
   embeddingsUnavailable?: boolean;
 };
 
@@ -52,29 +64,30 @@ export const RagInspector = ({
   sources,
   facts,
   qa,
+  businessData,
   embeddingsUnavailable,
 }: RagInspectorProps) => {
   const [expanded, setExpanded] = React.useState(false);
   const reduce = useReducedMotion() ?? false;
 
-  if (embeddingsUnavailable) {
-    return (
-      <div className="mb-3 rounded-2xl border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
-        امبدینگ پیکربندی نشده؛ پاسخ بدون بازیابی از پایگاه دانش است.
-        {(facts.length > 0 || qa.length > 0) && (
-          <span className="mt-1 block">
-            اطلاعات کسب‌وکار و پرسش آماده همچنان تزریق شدند.
-          </span>
-        )}
-      </div>
-    );
-  }
+  const embeddingsNotice = embeddingsUnavailable ? (
+    <div className="mb-3 rounded-2xl border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+      امبدینگ پیکربندی نشده؛ بازیابی از پایگاه دانش انجام نشد.
+      {(facts.length > 0 || businessData) && (
+        <span className="mt-1 block">
+          دادهٔ ساختاریافته و اطلاعات ثابت کسب‌وکار همچنان قابل استفاده بودند.
+        </span>
+      )}
+    </div>
+  ) : null;
 
-  if (!chunks.length && !facts.length && !qa.length) {
+  if (!chunks.length && !facts.length && !qa.length && !businessData) {
     // Nothing matched — still show the intent and the rewritten search query
     // so the user can see WHAT was searched and debug why it found nothing.
     return (
-      <div className="mb-3 rounded-2xl border border-line bg-background/40 p-3 text-xs text-muted">
+      <>
+        {embeddingsNotice}
+        <div className="mb-3 rounded-2xl border border-line bg-background/40 p-3 text-xs text-muted">
         <span className="flex flex-wrap items-center gap-2">
           <Database className="size-3.5 text-accent" />
           داده‌ای بازیابی نشد
@@ -89,14 +102,17 @@ export const RagInspector = ({
             </Badge>
           )}
         </span>
-      </div>
+        </div>
+      </>
     );
   }
 
-  const totalItems = chunks.length + facts.length + qa.length;
+  const totalItems = chunks.length + facts.length + qa.length + (businessData ? 1 : 0);
 
   return (
-    <div className="mb-3 rounded-2xl border border-line bg-background/40 p-3">
+    <>
+      {embeddingsNotice}
+      <div className="mb-3 rounded-2xl border border-line bg-background/40 p-3">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
@@ -128,6 +144,32 @@ export const RagInspector = ({
             className="overflow-hidden"
           >
             <div className="mt-3 space-y-3">
+              {businessData && (
+                <div>
+                  <p className="mb-1.5 text-[10px] font-bold text-accent">
+                    دادهٔ ساختاریافته
+                  </p>
+                  <div className="rounded-xl border border-line bg-surface/50 p-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-bold">{businessData.collectionName}</span>
+                      <Badge variant="accent" className="text-[10px]">
+                        {fa(businessData.matchedCount)} نتیجه
+                      </Badge>
+                      {businessData.truncated && (
+                        <Badge variant="warning" className="text-[10px]">
+                          خروجی محدود شده
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="mt-1 leading-6 text-muted">
+                      {businessData.dataUpdatedAt
+                        ? `تازه‌ترین داده: ${new Date(businessData.dataUpdatedAt).toLocaleString("fa-IR")}`
+                        : "زمان به‌روزرسانی ثبت نشده"}
+                      {` · ${fa(businessData.payloadChars)} نویسه · ${fa(businessData.durationMs)} میلی‌ثانیه`}
+                    </p>
+                  </div>
+                </div>
+              )}
               {/* Standing facts */}
               {facts.length > 0 && (
                 <div>
@@ -232,6 +274,7 @@ export const RagInspector = ({
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
+      </div>
+    </>
   );
 };

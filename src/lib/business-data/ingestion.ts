@@ -1,6 +1,5 @@
-import "server-only";
-
-import { Workbook, type Worksheet } from "@excel.js/exceljs";
+import ExcelJs, { type Worksheet } from "@excel.js/exceljs";
+import { parseString } from "@fast-csv/parse";
 import { BUSINESS_DATA_LIMITS } from "./limits";
 import type {
   BusinessDataFieldDefinition,
@@ -233,6 +232,20 @@ const worksheetRows = (worksheet: Worksheet) => {
   return rows;
 };
 
+const parseCsvRows = async (buffer: Buffer): Promise<unknown[][]> => {
+  const source = buffer.toString("utf8");
+  if (source.includes("\uFFFD")) {
+    throw new BusinessDataIngestionError("کدگذاری فایل CSV قابل خواندن نیست.", "invalid_encoding");
+  }
+  return new Promise((resolve, reject) => {
+    const rows: unknown[][] = [];
+    parseString(source, { headers: false, ignoreEmpty: false, trim: false })
+      .on("error", () => reject(new BusinessDataIngestionError("فایل CSV ساختار درستی ندارد.", "malformed_file")))
+      .on("data", (row: string[]) => rows.push(row))
+      .on("end", () => resolve(rows));
+  });
+};
+
 export const parseFileForPreview = async (file: File, selectedSheet?: string | null): Promise<IngestionPreview> => {
   if (file.size <= 0) throw new BusinessDataIngestionError("فایل خالی است.", "empty_file");
   if (file.size > BUSINESS_DATA_LIMITS.importBytes) {
@@ -244,37 +257,44 @@ export const parseFileForPreview = async (file: File, selectedSheet?: string | n
     throw new BusinessDataIngestionError("فقط فایل CSV یا Excel با پسوند XLSX پذیرفته می‌شود.", "unsupported_file");
   }
   const buffer = Buffer.from(await file.arrayBuffer());
-  const workbook = new Workbook();
+  let rows: unknown[][];
+  let sheetName: string | null = null;
+  let sheetNames: string[] = [];
   try {
     if (extension === "csv") {
-      await workbook.csv.load(buffer);
+      rows = await parseCsvRows(buffer);
     } else {
+      const workbook = new ExcelJs.Workbook();
       await workbook.xlsx.load(buffer, { ignoreNodes: ["drawing", "extLst"] });
+      if (workbook.worksheets.length === 0 || workbook.worksheets.length > BUSINESS_DATA_LIMITS.importWorkbookSheets) {
+        throw new BusinessDataIngestionError("تعداد برگه‌های فایل قابل استفاده نیست.", "sheet_limit");
+      }
+      const worksheet = selectedSheet
+        ? workbook.worksheets.find((item) => item.name === selectedSheet)
+        : workbook.worksheets[0];
+      if (!worksheet) throw new BusinessDataIngestionError("برگه انتخاب‌شده در فایل پیدا نشد.", "sheet_not_found");
+      rows = worksheetRows(worksheet);
+      sheetName = worksheet.name;
+      sheetNames = workbook.worksheets.map((item) => item.name);
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof BusinessDataIngestionError) throw error;
     throw new BusinessDataIngestionError("فایل قابل خواندن نیست یا ساختار درستی ندارد.", "malformed_file");
   }
-  if (workbook.worksheets.length === 0 || workbook.worksheets.length > BUSINESS_DATA_LIMITS.importWorkbookSheets) {
-    throw new BusinessDataIngestionError("تعداد برگه‌های فایل قابل استفاده نیست.", "sheet_limit");
-  }
-  const worksheet = selectedSheet
-    ? workbook.worksheets.find((item) => item.name === selectedSheet)
-    : workbook.worksheets[0];
-  if (!worksheet) throw new BusinessDataIngestionError("برگه انتخاب‌شده در فایل پیدا نشد.", "sheet_not_found");
   return makePreview(
-    worksheetRows(worksheet),
+    rows,
     extension === "csv" ? "csv" : "excel",
     name,
-    worksheet.name,
-    workbook.worksheets.map((item) => item.name)
+    sheetName,
+    sheetNames
   );
 };
 
 export const parseGoogleRowsForPreview = (input: { spreadsheetName: string; sheetName: string; rows: unknown[][] }) =>
   makePreview(input.rows, "google_sheets", input.spreadsheetName, input.sheetName, [input.sheetName]);
 
-export const suggestedFieldDefinitions = (preview: IngestionPreview): BusinessDataFieldDefinition[] =>
-  preview.columns.map((column, position) => ({
+export const suggestedFieldDefinitions = (preview: IngestionPreview): BusinessDataFieldDefinition[] => {
+  const definitions: BusinessDataFieldDefinition[] = preview.columns.map((column, position) => ({
     key: column.key,
     label: column.label,
     type: column.type,
@@ -285,6 +305,11 @@ export const suggestedFieldDefinitions = (preview: IngestionPreview): BusinessDa
     aiExposure: ["customer_identifier", "internal_notes"].includes(column.role) ? "hidden" : "answer",
     position,
   }));
+  if (!definitions.some((field) => field.role === "title") && definitions[0]) {
+    definitions[0] = { ...definitions[0], role: "title", required: true };
+  }
+  return definitions;
+};
 
 export const suggestedMapping = (preview: IngestionPreview, fields: BusinessDataFieldDefinition[]): IngestionMapping => {
   const used = new Set<string>();
@@ -326,6 +351,7 @@ export const mapAndValidateRows = (
   const fieldByKey = new Map(fields.map((field) => [field.key, field]));
   const valid: Array<{ rowNumber: number; values: BusinessDataRecordValues; externalId: string | null; checksum: string }> = [];
   const rejected: Array<{ rowNumber: number; message: string }> = [];
+  const externalIds = new Set<string>();
   for (const row of preview.rows) {
     const values: Record<string, unknown> = {};
     for (const [sourceKey, targetKey] of Object.entries(mapping)) {
@@ -343,6 +369,11 @@ export const mapAndValidateRows = (
     const externalId = typeof rawExternalId === "string" && rawExternalId.trim()
       ? normalizeExternalId(rawExternalId).slice(0, BUSINESS_DATA_LIMITS.externalIdChars)
       : null;
+    if (externalId && externalIds.has(externalId)) {
+      rejected.push({ rowNumber: row.rowNumber, message: "شناسه یکتای این ردیف در همین فایل تکراری است." });
+      continue;
+    }
+    if (externalId) externalIds.add(externalId);
     valid.push({
       rowNumber: row.rowNumber,
       values: result.value,

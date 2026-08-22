@@ -98,11 +98,12 @@ How to use:
       an idempotent tenant-isolated Supabase schema
 - [x] Business Data milestone 2: authenticated collection, field, record, and
       source APIs plus manual management in the dashboard
-- [ ] Business Data milestone 3: CSV / Excel import, Google Sheets,
-      synchronization, and source health
+- [x] Business Data milestone 3: shared CSV / Excel ingestion, mapping,
+      validation, idempotent bulk import, history, and source-health foundation;
+      Google Sheets production OAuth remains an external-configuration checkpoint
 - [ ] Business Data milestone 4: bounded AI structured lookup for public
-      catalogs, preview inspection, and verified customer access before private
-      order, reservation, or delivery lookup
+      catalogs, preview inspection, token budgets, and strict exclusion of
+      verified-customer/private operational data until milestone 5
 - [ ] Knowledge-base ingestion for PDF and Word — needs a parser dependency and
       a Supabase Storage bucket with its own policies
 - [ ] AI assistant configuration (name, tone, model selection)

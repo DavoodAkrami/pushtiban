@@ -17,8 +17,9 @@ import {
 import { Select } from "@/components/ui/select";
 import { Steps } from "@/components/ui/steps";
 import { businessDataRequest } from "@/lib/business-data/client";
-import type { BusinessDataCollectionDetail } from "@/lib/business-data/api-types";
+import type { BusinessDataCollectionDetail, BusinessDataField } from "@/lib/business-data/api-types";
 import { FIELD_TYPE_LABELS } from "@/lib/business-data/api-types";
+import type { BusinessDataAccessScope } from "@/lib/business-data/types";
 import { fa } from "@/lib/utils";
 
 type ImportPreview = {
@@ -63,16 +64,19 @@ export const FileImportFlow = ({
   onOpenChange,
   onImported,
 }: {
-  collection: BusinessDataCollectionDetail;
+  collection?: BusinessDataCollectionDetail;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onImported: () => void;
+  onImported: (collectionId?: string) => void;
 }) => {
   const [file, setFile] = React.useState<File | null>(null);
   const [sheetName, setSheetName] = React.useState("");
   const [preview, setPreview] = React.useState<ImportPreview | null>(null);
   const [mapping, setMapping] = React.useState<Record<string, string | null>>({});
+  const [fields, setFields] = React.useState<BusinessDataField[]>(collection?.fields ?? []);
   const [externalIdField, setExternalIdField] = React.useState<string>("");
+  const [collectionName, setCollectionName] = React.useState("");
+  const [accessScope, setAccessScope] = React.useState<BusinessDataAccessScope>("internal");
   const [step, setStep] = React.useState(0);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
@@ -89,7 +93,10 @@ export const FileImportFlow = ({
     setSheetName("");
     setPreview(null);
     setMapping({});
+    setFields(collection?.fields ?? []);
     setExternalIdField("");
+    setCollectionName("");
+    setAccessScope("internal");
     setStep(0);
     setBusy(false);
     setError("");
@@ -114,14 +121,16 @@ export const FileImportFlow = ({
     try {
       const form = new FormData();
       form.set("file", nextFile);
-      form.set("collectionId", collection.id);
+      if (collection) form.set("collectionId", collection.id);
       if (nextSheet) form.set("sheetName", nextSheet);
       const response = await businessDataRequest<{
         preview: ImportPreview;
+        fields: BusinessDataField[];
         mapping: Record<string, string | null>;
         externalIdField: string | null;
       }>("/api/business-data/imports/file/preview", { method: "POST", body: form });
       setPreview(response.preview);
+      setFields(response.fields);
       setMapping(response.mapping);
       setExternalIdField(response.externalIdField ?? "");
       setSheetName(response.preview.sheetName ?? "");
@@ -140,22 +149,49 @@ export const FileImportFlow = ({
 
   const confirm = async () => {
     if (!file || !preview) return;
+    if (!collection && !collectionName.trim()) {
+      setError("نام مجموعه جدید را وارد کنید.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
       const form = new FormData();
       form.set("file", file);
-      form.set("collectionId", collection.id);
+      if (collection) form.set("collectionId", collection.id);
       form.set("sheetName", sheetName);
       form.set("mapping", JSON.stringify(mapping));
       form.set("externalIdField", externalIdField);
       form.set("idempotencyKey", idempotencyRef.current);
+      if (!collection) {
+        form.set("collectionDefinition", JSON.stringify({
+          name: collectionName,
+          description: "",
+          kind: "custom",
+          accessScope,
+          status: "active",
+          aiEnabled: false,
+          fields: fields.map((field) => ({
+            key: field.key,
+            label: field.label,
+            ...(field.description ? { description: field.description } : {}),
+            type: field.type,
+            role: field.role,
+            required: field.required,
+            searchable: field.searchable,
+            filterable: field.filterable,
+            aiExposure: field.aiExposure,
+            position: field.position,
+            ...(field.validation ? { validation: field.validation } : {}),
+          })),
+        }));
+      }
       const response = await businessDataRequest<{
-        result: { insertedCount: number; updatedCount: number; skippedCount: number; failedCount: number };
+        result: { collectionId?: string; insertedCount: number; updatedCount: number; skippedCount: number; failedCount: number };
       }>("/api/business-data/imports/file/commit", { method: "POST", body: form });
       setResult(response.result);
       setStep(2);
-      onImported();
+      onImported(response.result.collectionId);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "ورود داده انجام نشد.");
     } finally {
@@ -175,6 +211,7 @@ export const FileImportFlow = ({
           {error && <Alert variant="error" title="عملیات انجام نشد" description={error} className="mb-5" />}
           {step === 0 && (
             <div className="mx-auto max-w-xl">
+              {!collection && <div className="mb-5 text-start"><Input id="import-collection-name" label="نام مجموعه جدید" value={collectionName} onChange={(event) => setCollectionName(event.target.value)} placeholder="مثلاً فهرست محصولات" /><Select id="import-access-scope" label="سطح دسترسی" className="mt-4" value={accessScope} onChange={(value) => setAccessScope(value as BusinessDataAccessScope)} options={[{ value: "internal", label: "فقط داخل کسب‌وکار" }, { value: "public_catalog", label: "اطلاعات عمومی" }, { value: "verified_customer", label: "فقط مشتری تأییدشده" }]} /></div>}
               <div className="rounded-3xl border border-dashed border-line bg-surface/25 p-6 text-center sm:p-8">
                 <FileSpreadsheet className="mx-auto size-8 text-accent" aria-hidden />
                 <h3 className="mt-4 text-base font-bold">فایل CSV یا Excel را انتخاب کنید</h3>
@@ -197,16 +234,17 @@ export const FileImportFlow = ({
               <section aria-labelledby="mapping-heading">
                 <h3 id="mapping-heading" className="text-sm font-bold">تطبیق اطلاعات</h3>
                 <p className="mt-1 text-xs leading-6 text-muted">هر ستون فایل را به یکی از فیلدهای همین مجموعه وصل کنید یا آن را نادیده بگیرید.</p>
+                <p className="mt-1 text-xs leading-6 text-muted">پس از هر تغییر، نتیجه نهایی پیش از ورود دوباره اعتبارسنجی می‌شود.</p>
                 <div className="mt-3 divide-y divide-line overflow-hidden rounded-3xl border border-line bg-surface/20">
                   {preview.columns.map((column) => (
                     <div key={column.key} className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] sm:items-center">
                       <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="font-medium">{column.label}</span><Badge variant={column.confidence === "high" ? "success" : column.confidence === "medium" ? "warning" : "muted"}>{confidenceLabel(column.confidence)}</Badge></div><p className="mt-1 text-xs text-muted">نوع پیشنهادی: {FIELD_TYPE_LABELS[column.type]}{column.uniqueCandidate ? " · شناسه احتمالی" : ""}</p></div>
-                      <Select id={`mapping-${column.key}`} label={`فیلد پشتیبان برای ${column.label}`} value={mapping[column.key] ?? ""} onChange={(value) => setMapping((current) => ({ ...current, [column.key]: value || null }))} options={[{ value: "", label: "نادیده گرفتن این ستون" }, ...collection.fields.map((field) => ({ value: field.key, label: field.label }))]} />
+                      <Select id={`mapping-${column.key}`} label={`فیلد پشتیبان برای ${column.label}`} value={mapping[column.key] ?? ""} onChange={(value) => setMapping((current) => ({ ...current, [column.key]: value || null }))} options={[{ value: "", label: "نادیده گرفتن این ستون" }, ...fields.map((field) => ({ value: field.key, label: field.label }))]} />
                     </div>
                   ))}
                 </div>
               </section>
-              <Select id="import-identifier" label="شناسه یکتا برای به‌روزرسانی بعدی" value={externalIdField} onChange={setExternalIdField} options={[{ value: "", label: "شناسه قابل اتکا ندارم" }, ...collection.fields.map((field) => ({ value: field.key, label: field.label }))]} hint="اگر یک شناسه ثابت مثل کد محصول یا شماره سفارش انتخاب کنید، ورودهای بعدی همان رکورد را به‌روزرسانی می‌کنند." />
+              <Select id="import-identifier" label="شناسه یکتا برای به‌روزرسانی بعدی" value={externalIdField} onChange={setExternalIdField} options={[{ value: "", label: "شناسه قابل اتکا ندارم" }, ...fields.map((field) => ({ value: field.key, label: field.label }))]} hint="اگر یک شناسه ثابت مثل کد محصول یا شماره سفارش انتخاب کنید، ورودهای بعدی همان رکورد را به‌روزرسانی می‌کنند." />
               <section aria-labelledby="sample-heading" className="overflow-hidden rounded-3xl border border-line"><h3 id="sample-heading" className="border-b border-line px-4 py-3 text-sm font-bold">نمونه داده</h3><div className="overflow-x-auto"><table className="min-w-full text-right text-xs"><thead className="bg-surface/45 text-muted"><tr>{preview.columns.map((column) => <th key={column.key} className="whitespace-nowrap px-3 py-3 font-medium">{column.label}</th>)}</tr></thead><tbody className="divide-y divide-line">{preview.sampleRows.map((row) => <tr key={row.rowNumber}>{preview.columns.map((column) => <td key={column.key} className="max-w-40 truncate px-3 py-3">{row.values[column.key] || "—"}</td>)}</tr>)}</tbody></table></div></section>
               {preview.rejectedRows.length > 0 && <Alert variant="warning" title="نمونه ردیف‌های واردنشده" description={preview.rejectedRows.map((row) => `ردیف ${fa(row.rowNumber)}: ${row.message}`).join(" · ")} />}
             </div>

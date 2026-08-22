@@ -3,9 +3,10 @@
 -- Paste and run this whole file in Supabase Dashboard -> SQL Editor.
 -- Safe to run multiple times (idempotent).
 --
--- This milestone creates the generic collection, field, record, source,
--- credential, and sync-run model. It does not expose Business Data to the AI,
--- implement connectors, or create product/order-specific table families.
+-- This file creates the generic collection, field, record, source, credential,
+-- and sync-run model plus the bounded public-catalog assistant lookup. It does
+-- not implement private customer lookup, connectors, or product/order-specific
+-- table families.
 -- Run the repository's auth.sql and onboarding.sql first. This file also
 -- reapplies their narrow profile-update grants as defense in depth.
 -- =============================================================================
@@ -49,7 +50,7 @@ comment on table public.business_data_collections is
 comment on column public.business_data_collections.access_scope is
   'public_catalog is customer-safe; verified_customer requires a future identity layer; internal is never AI-readable.';
 comment on column public.business_data_collections.ai_enabled is
-  'Current foundation permits AI intent only for public_catalog. Verified-customer support requires a deliberate future schema and runtime migration.';
+  'Customer-facing AI lookup is permitted only for public_catalog. Verified-customer support requires a deliberate future identity and runtime migration.';
 
 -- 2) Field definitions --------------------------------------------------------
 
@@ -990,6 +991,11 @@ begin
     select * into run_row
     from public.business_data_sync_runs
     where source_id = p_source_id and idempotency_key = p_idempotency_key;
+    update public.business_data_sources
+    set status = case when run_row.status = 'failed' then 'error' else 'ready' end
+    where id = p_source_id
+      and user_id = p_user_id
+      and collection_id = p_collection_id;
     return jsonb_build_object(
       'runId', run_row.id,
       'insertedCount', run_row.inserted_count,
@@ -1091,7 +1097,476 @@ grant execute on function public.business_data_import_records(
   uuid, uuid, uuid, text, text, jsonb, jsonb, jsonb, integer, text
 ) to service_role;
 
--- 11) Row Level Security and explicit grants ----------------------------------
+create or replace function public.business_data_create_import_collection(
+  p_user_id uuid,
+  p_key text,
+  p_name text,
+  p_description text,
+  p_kind text,
+  p_access_scope text,
+  p_ai_enabled boolean,
+  p_status text,
+  p_fields jsonb,
+  p_source_id uuid,
+  p_source_type text,
+  p_source_name text,
+  p_source_configuration jsonb,
+  p_field_mapping jsonb,
+  p_records jsonb,
+  p_rejected_count integer,
+  p_idempotency_key text
+)
+returns jsonb
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  collection_id uuid;
+  import_result jsonb;
+begin
+  if p_fields is null or jsonb_typeof(p_fields) <> 'array' or jsonb_array_length(p_fields) = 0 then
+    raise exception 'Business Data import fields are invalid' using errcode = 'check_violation';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(p_user_id::text || ':' || p_key, 0));
+
+  select id into collection_id
+  from public.business_data_collections
+  where user_id = p_user_id and key = p_key;
+
+  if collection_id is not null then
+    import_result := public.business_data_import_records(
+      p_user_id,
+      collection_id,
+      p_source_id,
+      p_source_type,
+      p_source_name,
+      p_source_configuration,
+      p_field_mapping,
+      p_records,
+      p_rejected_count,
+      p_idempotency_key
+    );
+    return import_result || jsonb_build_object('collectionId', collection_id);
+  end if;
+
+  insert into public.business_data_collections (
+    user_id, key, name, description, kind, access_scope, ai_enabled, status
+  ) values (
+    p_user_id, p_key, btrim(p_name), coalesce(p_description, ''), p_kind,
+    p_access_scope, p_ai_enabled, p_status
+  ) returning id into collection_id;
+
+  insert into public.business_data_fields (
+    user_id, collection_id, key, label, description, data_type, semantic_role,
+    required, searchable, filterable, ai_exposure, position, validation
+  )
+  select
+    p_user_id,
+    collection_id,
+    item ->> 'key',
+    item ->> 'label',
+    coalesce(item ->> 'description', ''),
+    item ->> 'data_type',
+    item ->> 'semantic_role',
+    coalesce((item ->> 'required')::boolean, false),
+    coalesce((item ->> 'searchable')::boolean, false),
+    coalesce((item ->> 'filterable')::boolean, false),
+    item ->> 'ai_exposure',
+    coalesce((item ->> 'position')::integer, position - 1),
+    coalesce(item -> 'validation', '{}'::jsonb)
+  from jsonb_array_elements(p_fields) with ordinality as fields(item, position);
+
+  import_result := public.business_data_import_records(
+    p_user_id,
+    collection_id,
+    p_source_id,
+    p_source_type,
+    p_source_name,
+    p_source_configuration,
+    p_field_mapping,
+    p_records,
+    p_rejected_count,
+    p_idempotency_key
+  );
+
+  return import_result || jsonb_build_object('collectionId', collection_id);
+end;
+$$;
+
+revoke execute on function public.business_data_create_import_collection(
+  uuid, text, text, text, text, text, boolean, text, jsonb, uuid, text,
+  text, jsonb, jsonb, jsonb, integer, text
+) from public, anon, authenticated;
+grant execute on function public.business_data_create_import_collection(
+  uuid, text, text, text, text, text, boolean, text, jsonb, uuid, text,
+  text, jsonb, jsonb, jsonb, integer, text
+) to service_role;
+
+-- 11) Bounded public-catalog lookup for the assistant --------------------------
+
+create or replace function public.business_data_lookup_public(
+  p_user_id uuid,
+  p_collection_key text,
+  p_query text,
+  p_filters jsonb,
+  p_sort jsonb,
+  p_projection_keys jsonb,
+  p_limit integer
+)
+returns table (
+  record_values jsonb,
+  data_updated_at timestamptz,
+  matched_count bigint
+)
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  v_collection_id uuid;
+  v_filter jsonb;
+  v_filter_field public.business_data_fields%rowtype;
+  v_filter_operator text;
+  v_query text;
+  v_sort_field public.business_data_fields%rowtype;
+  v_sort_key text;
+  v_sort_type text;
+  v_sort_direction text;
+  v_projection_key text;
+begin
+  if p_collection_key is null or char_length(p_collection_key) > 64 then
+    raise exception 'Invalid Business Data collection key'
+      using errcode = 'invalid_parameter_value';
+  end if;
+  if p_limit is null or p_limit < 1 or p_limit > 5 then
+    raise exception 'Invalid Business Data result limit'
+      using errcode = 'invalid_parameter_value';
+  end if;
+  if p_filters is null then
+    p_filters := '[]'::jsonb;
+  end if;
+  if jsonb_typeof(p_filters) <> 'array' or jsonb_array_length(p_filters) > 5 then
+    raise exception 'Invalid Business Data filters'
+      using errcode = 'invalid_parameter_value';
+  end if;
+  if p_projection_keys is null
+    or jsonb_typeof(p_projection_keys) <> 'array'
+    or jsonb_array_length(p_projection_keys) < 1
+    or jsonb_array_length(p_projection_keys) > 6 then
+    raise exception 'Invalid Business Data projection'
+      using errcode = 'invalid_parameter_value';
+  end if;
+
+  select collection.id into v_collection_id
+  from public.business_data_collections collection
+  where collection.user_id = p_user_id
+    and collection.key = p_collection_key
+    and collection.access_scope = 'public_catalog'
+    and collection.ai_enabled
+    and collection.status = 'active';
+
+  -- Missing, private, disabled, and cross-tenant collections are deliberately
+  -- indistinguishable and return no rows.
+  if v_collection_id is null then
+    return;
+  end if;
+
+  v_query := nullif(btrim(coalesce(p_query, '')), '');
+  if v_query is not null and char_length(v_query) > 160 then
+    raise exception 'Invalid Business Data search query'
+      using errcode = 'invalid_parameter_value';
+  end if;
+  if v_query is not null and not exists (
+    select 1
+    from public.business_data_fields field_definition
+    where field_definition.user_id = p_user_id
+      and field_definition.collection_id = v_collection_id
+      and field_definition.searchable
+      and field_definition.ai_exposure in ('answer', 'filter_only')
+  ) then
+    raise exception 'Collection is not searchable'
+      using errcode = 'invalid_parameter_value';
+  end if;
+
+  for v_filter in select value from jsonb_array_elements(p_filters)
+  loop
+    if jsonb_typeof(v_filter) <> 'object'
+      or exists (
+        select 1
+        from jsonb_object_keys(v_filter) as filter_key(key)
+        where filter_key.key not in ('field', 'op', 'value')
+      ) then
+      raise exception 'Invalid Business Data filter shape'
+        using errcode = 'invalid_parameter_value';
+    end if;
+
+    select * into v_filter_field
+    from public.business_data_fields field_definition
+    where field_definition.user_id = p_user_id
+      and field_definition.collection_id = v_collection_id
+      and field_definition.key = v_filter ->> 'field'
+      and field_definition.filterable
+      and field_definition.ai_exposure in ('answer', 'filter_only');
+    if not found then
+      raise exception 'Invalid Business Data filter field'
+        using errcode = 'invalid_parameter_value';
+    end if;
+
+    v_filter_operator := v_filter ->> 'op';
+    if v_filter_operator is null or not (
+      (v_filter_field.data_type in ('number', 'currency', 'date', 'datetime')
+        and v_filter_operator in ('eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'between'))
+      or (v_filter_field.data_type in ('text', 'long_text', 'url')
+        and v_filter_operator in ('eq', 'neq', 'contains'))
+      or (v_filter_field.data_type = 'select'
+        and v_filter_operator in ('eq', 'neq'))
+      or (v_filter_field.data_type = 'boolean' and v_filter_operator = 'eq')
+    ) then
+      raise exception 'Invalid Business Data filter operator'
+        using errcode = 'invalid_parameter_value';
+    end if;
+
+    if v_filter_operator = 'between' then
+      if jsonb_typeof(v_filter -> 'value') <> 'array'
+        or jsonb_array_length(v_filter -> 'value') <> 2
+        or (
+          v_filter_field.data_type in ('number', 'currency')
+          and exists (
+            select 1
+            from jsonb_array_elements(v_filter -> 'value') as range_item(value)
+            where jsonb_typeof(range_item.value) <> 'number'
+          )
+        )
+        or (
+          v_filter_field.data_type in ('date', 'datetime')
+          and exists (
+            select 1
+            from jsonb_array_elements(v_filter -> 'value') as range_item(value)
+            where jsonb_typeof(range_item.value) <> 'string'
+              or char_length(range_item.value #>> '{}') > 200
+          )
+        )
+        or (
+          v_filter_field.data_type in ('number', 'currency')
+          and ((v_filter -> 'value' -> 0) #>> '{}')::numeric
+            > ((v_filter -> 'value' -> 1) #>> '{}')::numeric
+        )
+        or (
+          v_filter_field.data_type = 'date'
+          and exists (
+            select 1
+            from jsonb_array_elements(v_filter -> 'value') as range_item(value)
+            where range_item.value #>> '{}' !~ '^\d{4}-\d{2}-\d{2}$'
+          )
+        )
+        or (
+          v_filter_field.data_type = 'datetime'
+          and exists (
+            select 1
+            from jsonb_array_elements(v_filter -> 'value') as range_item(value)
+            where range_item.value #>> '{}' !~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$'
+          )
+        ) then
+        raise exception 'Invalid Business Data range value'
+          using errcode = 'invalid_parameter_value';
+      end if;
+    elsif (
+      v_filter_field.data_type in ('number', 'currency')
+      and jsonb_typeof(v_filter -> 'value') <> 'number'
+    ) or (
+      v_filter_field.data_type = 'boolean'
+      and jsonb_typeof(v_filter -> 'value') <> 'boolean'
+    ) or (
+      v_filter_field.data_type not in ('number', 'currency', 'boolean')
+      and (
+        jsonb_typeof(v_filter -> 'value') <> 'string'
+        or char_length(v_filter ->> 'value') > 200
+      )
+    ) or (
+      v_filter_field.data_type = 'date'
+      and v_filter ->> 'value' !~ '^\d{4}-\d{2}-\d{2}$'
+    ) or (
+      v_filter_field.data_type = 'datetime'
+      and v_filter ->> 'value' !~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$'
+    ) then
+      raise exception 'Invalid Business Data filter value'
+        using errcode = 'invalid_parameter_value';
+    end if;
+  end loop;
+
+  v_sort_key := null;
+  v_sort_type := null;
+  v_sort_direction := null;
+  if p_sort is not null and p_sort <> 'null'::jsonb then
+    if jsonb_typeof(p_sort) <> 'object'
+      or exists (
+        select 1
+        from jsonb_object_keys(p_sort) as sort_key(key)
+        where sort_key.key not in ('field', 'direction')
+      )
+      or p_sort ->> 'direction' is null
+      or p_sort ->> 'direction' not in ('asc', 'desc') then
+      raise exception 'Invalid Business Data sort'
+        using errcode = 'invalid_parameter_value';
+    end if;
+    select * into v_sort_field
+    from public.business_data_fields field_definition
+    where field_definition.user_id = p_user_id
+      and field_definition.collection_id = v_collection_id
+      and field_definition.key = p_sort ->> 'field'
+      and field_definition.filterable
+      and field_definition.ai_exposure in ('answer', 'filter_only');
+    if not found then
+      raise exception 'Invalid Business Data sort field'
+        using errcode = 'invalid_parameter_value';
+    end if;
+    v_sort_key := v_sort_field.key;
+    v_sort_type := v_sort_field.data_type;
+    v_sort_direction := p_sort ->> 'direction';
+  end if;
+
+  for v_projection_key in
+    select projection_item.value #>> '{}'
+    from jsonb_array_elements(p_projection_keys) as projection_item(value)
+  loop
+    if not exists (
+      select 1
+      from public.business_data_fields field_definition
+      where field_definition.user_id = p_user_id
+        and field_definition.collection_id = v_collection_id
+        and field_definition.key = v_projection_key
+        and field_definition.ai_exposure = 'answer'
+    ) then
+      raise exception 'Invalid Business Data answer projection'
+        using errcode = 'invalid_parameter_value';
+    end if;
+  end loop;
+
+  return query
+  select
+    projected.record_values,
+    coalesce(record.source_updated_at, record.updated_at) as data_updated_at,
+    count(*) over () as matched_count
+  from public.business_data_records record
+  cross join lateral (
+    select coalesce(
+      jsonb_object_agg(
+        field_definition.key,
+        record.values -> field_definition.key
+        order by field_definition.position
+      ) filter (where record.values ? field_definition.key),
+      '{}'::jsonb
+    ) as record_values
+    from public.business_data_fields field_definition
+    where field_definition.user_id = p_user_id
+      and field_definition.collection_id = v_collection_id
+      and field_definition.ai_exposure = 'answer'
+      and field_definition.key in (
+        select projection_item.value #>> '{}'
+        from jsonb_array_elements(p_projection_keys) as projection_item(value)
+      )
+  ) projected
+  where record.user_id = p_user_id
+    and record.collection_id = v_collection_id
+    and record.status = 'active'
+    and (
+      v_query is null
+      or not exists (
+        select 1
+        from regexp_split_to_table(lower(v_query), '\s+') as search_token(token)
+        where search_token.token <> ''
+          and position(search_token.token in lower(record.search_text)) = 0
+      )
+    )
+    and not exists (
+      select 1
+      from jsonb_array_elements(p_filters) as filter_entry(filter_item)
+      join public.business_data_fields field_definition
+        on field_definition.user_id = p_user_id
+       and field_definition.collection_id = v_collection_id
+       and field_definition.key = filter_item ->> 'field'
+      where not (
+        record.values ? field_definition.key
+        and record.values -> field_definition.key <> 'null'::jsonb
+        and case filter_item ->> 'op'
+          when 'eq' then
+            case
+              when field_definition.data_type in ('number', 'currency')
+                then (record.values ->> field_definition.key)::numeric = (filter_item -> 'value' #>> '{}')::numeric
+              when field_definition.data_type = 'boolean'
+                then (record.values ->> field_definition.key)::boolean = (filter_item -> 'value' #>> '{}')::boolean
+              else lower(record.values ->> field_definition.key) = lower(filter_item ->> 'value')
+            end
+          when 'neq' then
+            case
+              when field_definition.data_type in ('number', 'currency')
+                then (record.values ->> field_definition.key)::numeric <> (filter_item -> 'value' #>> '{}')::numeric
+              else lower(record.values ->> field_definition.key) <> lower(filter_item ->> 'value')
+            end
+          when 'contains' then
+            position(lower(filter_item ->> 'value') in lower(record.values ->> field_definition.key)) > 0
+          when 'gt' then
+            case
+              when field_definition.data_type in ('number', 'currency')
+                then (record.values ->> field_definition.key)::numeric > (filter_item -> 'value' #>> '{}')::numeric
+              else record.values ->> field_definition.key > filter_item ->> 'value'
+            end
+          when 'gte' then
+            case
+              when field_definition.data_type in ('number', 'currency')
+                then (record.values ->> field_definition.key)::numeric >= (filter_item -> 'value' #>> '{}')::numeric
+              else record.values ->> field_definition.key >= filter_item ->> 'value'
+            end
+          when 'lt' then
+            case
+              when field_definition.data_type in ('number', 'currency')
+                then (record.values ->> field_definition.key)::numeric < (filter_item -> 'value' #>> '{}')::numeric
+              else record.values ->> field_definition.key < filter_item ->> 'value'
+            end
+          when 'lte' then
+            case
+              when field_definition.data_type in ('number', 'currency')
+                then (record.values ->> field_definition.key)::numeric <= (filter_item -> 'value' #>> '{}')::numeric
+              else record.values ->> field_definition.key <= filter_item ->> 'value'
+            end
+          when 'between' then
+            case
+              when field_definition.data_type in ('number', 'currency') then
+                (record.values ->> field_definition.key)::numeric between
+                  ((filter_item -> 'value' -> 0) #>> '{}')::numeric and
+                  ((filter_item -> 'value' -> 1) #>> '{}')::numeric
+              else
+                record.values ->> field_definition.key between
+                  filter_item -> 'value' ->> 0 and filter_item -> 'value' ->> 1
+            end
+          else false
+        end
+      )
+    )
+  order by
+    case when v_sort_direction = 'asc' and v_sort_type in ('number', 'currency')
+      then (record.values ->> v_sort_key)::numeric end asc nulls last,
+    case when v_sort_direction = 'desc' and v_sort_type in ('number', 'currency')
+      then (record.values ->> v_sort_key)::numeric end desc nulls last,
+    case when v_sort_direction = 'asc' and v_sort_type not in ('number', 'currency')
+      then lower(record.values ->> v_sort_key) end asc nulls last,
+    case when v_sort_direction = 'desc' and v_sort_type not in ('number', 'currency')
+      then lower(record.values ->> v_sort_key) end desc nulls last,
+    record.updated_at desc
+  limit p_limit;
+end;
+$$;
+
+revoke execute on function public.business_data_lookup_public(
+  uuid, text, text, jsonb, jsonb, jsonb, integer
+) from public, anon, authenticated;
+grant execute on function public.business_data_lookup_public(
+  uuid, text, text, jsonb, jsonb, jsonb, integer
+) to service_role;
+
+-- 12) Row Level Security and explicit grants ----------------------------------
 
 alter table public.business_data_collections enable row level security;
 alter table public.business_data_fields enable row level security;

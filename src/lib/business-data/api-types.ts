@@ -9,6 +9,7 @@ import type {
   BusinessDataFieldValidation,
   BusinessDataRecordStatus,
   BusinessDataRecordValues,
+  BusinessDataSyncStatus,
   BusinessDataSourceStatus,
   BusinessDataSourceType,
 } from "./types";
@@ -53,6 +54,7 @@ export type BusinessDataCollection = {
 
 export type BusinessDataCollectionDetail = BusinessDataCollection & {
   fields: BusinessDataField[];
+  syncRuns: BusinessDataSyncRun[];
 };
 
 export type BusinessDataRecord = {
@@ -71,6 +73,20 @@ export type BusinessDataRecordPage = {
   pageSize: number;
   total: number;
   totalPages: number;
+};
+
+export type BusinessDataSyncRun = {
+  id: string;
+  sourceId: string;
+  status: BusinessDataSyncStatus;
+  insertedCount: number;
+  updatedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  errorSummary: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
 };
 
 export type BusinessDataFieldDraft = {
@@ -137,4 +153,13 @@ export const SOURCE_STATUS_LABELS: Record<BusinessDataSourceStatus, string> = {
   paused: "متوقف",
   error: "نیازمند بررسی",
   disconnected: "قطع‌شده",
+};
+
+export const SYNC_STATUS_LABELS: Record<BusinessDataSyncStatus, string> = {
+  pending: "در انتظار",
+  running: "در حال انجام",
+  succeeded: "موفق",
+  partial: "با چند ردیف واردنشده",
+  failed: "ناموفق",
+  cancelled: "لغوشده",
 };

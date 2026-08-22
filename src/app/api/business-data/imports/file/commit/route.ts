@@ -3,7 +3,11 @@ import {
   BusinessDataIngestionError,
   parseFileForPreview,
 } from "@/lib/business-data/ingestion";
-import { getBusinessDataContext, importIngestion } from "@/lib/business-data/server";
+import {
+  getBusinessDataContext,
+  importIngestion,
+  importNewCollectionIngestion,
+} from "@/lib/business-data/server";
 import {
   businessDataErrorResponse,
   hasValidBusinessDataOrigin,
@@ -22,17 +26,22 @@ export const POST = async (request: NextRequest) => {
     const form = await readFormBody(request);
     const file = form.get("file");
     const collectionId = form.get("collectionId");
-    if (!(file instanceof File) || typeof collectionId !== "string") {
-      return NextResponse.json({ error: "فایل و مجموعه را انتخاب کنید.", code: "missing_input" }, { status: 400 });
+    if (!(file instanceof File)) {
+      return NextResponse.json({ error: "فایل CSV یا Excel را انتخاب کنید.", code: "missing_input" }, { status: 400 });
     }
     const preview = await parseFileForPreview(file, typeof form.get("sheetName") === "string" ? String(form.get("sheetName")) : null);
-    const result = await importIngestion(context, {
-      collectionId,
+    const shared = {
       preview,
       mapping: parseFormJson(form.get("mapping"), "تطبیق ستون‌ها"),
       externalIdField: form.get("externalIdField"),
       idempotencyKey: form.get("idempotencyKey"),
-    });
+    };
+    const result = typeof collectionId === "string"
+      ? await importIngestion(context, { collectionId, ...shared })
+      : await importNewCollectionIngestion(context, {
+          definition: parseFormJson(form.get("collectionDefinition"), "اطلاعات مجموعه"),
+          ...shared,
+        });
     return NextResponse.json({ result });
   } catch (error) {
     if (error instanceof BusinessDataIngestionError) {

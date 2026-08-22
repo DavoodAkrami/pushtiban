@@ -3,6 +3,7 @@ import {
   BusinessDataIngestionError,
   buildImportPreview,
   parseFileForPreview,
+  suggestedFieldDefinitions,
   suggestedMapping,
 } from "@/lib/business-data/ingestion";
 import { getBusinessDataContext, getCollectionDetail } from "@/lib/business-data/server";
@@ -24,16 +25,17 @@ export const POST = async (request: NextRequest) => {
     const file = form.get("file");
     const collectionId = form.get("collectionId");
     const sheetName = form.get("sheetName");
-    if (!(file instanceof File) || typeof collectionId !== "string") {
-      return NextResponse.json({ error: "فایل و مجموعه را انتخاب کنید.", code: "missing_input" }, { status: 400 });
+    if (!(file instanceof File)) {
+      return NextResponse.json({ error: "فایل CSV یا Excel را انتخاب کنید.", code: "missing_input" }, { status: 400 });
     }
-    const [preview, collection] = await Promise.all([
-      parseFileForPreview(file, typeof sheetName === "string" ? sheetName : null),
-      getCollectionDetail(context, collectionId),
-    ]);
-    const mapping = suggestedMapping(preview, collection.fields);
+    const preview = await parseFileForPreview(file, typeof sheetName === "string" ? sheetName : null);
+    const collection = typeof collectionId === "string"
+      ? await getCollectionDetail(context, collectionId)
+      : null;
+    const fields = collection?.fields ?? suggestedFieldDefinitions(preview);
+    const mapping = suggestedMapping(preview, fields);
     const identifier = preview.columns.find((column) => column.uniqueCandidate);
-    const result = buildImportPreview(preview, collection.fields, mapping, identifier ? mapping[identifier.key] ?? null : null);
+    const result = buildImportPreview(preview, fields, mapping, identifier ? mapping[identifier.key] ?? null : null);
     return NextResponse.json({
       preview: {
         sourceType: result.sourceType,
@@ -49,7 +51,7 @@ export const POST = async (request: NextRequest) => {
         rejectedRows: result.rejectedRows,
         hasStableIdentifier: result.hasStableIdentifier,
       },
-      fields: collection.fields,
+      fields,
       mapping,
       externalIdField: identifier ? mapping[identifier.key] ?? null : null,
     });

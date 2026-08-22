@@ -19,4 +19,7 @@ declare module "@excel.js/exceljs" {
       ) => Promise<Workbook>;
     };
   }
+
+  const ExcelJs: { Workbook: typeof Workbook };
+  export default ExcelJs;
 }
