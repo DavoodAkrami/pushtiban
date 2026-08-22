@@ -315,7 +315,12 @@ export const suggestedFieldDefinitions = (preview: IngestionPreview): BusinessDa
 export const suggestedMapping = (preview: IngestionPreview, fields: BusinessDataFieldDefinition[]): IngestionMapping => {
   const used = new Set<string>();
   return Object.fromEntries(preview.columns.map((column) => {
-    const candidate = fields.find((field) => !used.has(field.key) && (field.key === column.key || field.role === column.role || normalizeHeader(field.label) === normalizeHeader(column.label)));
+    const candidate = fields.find((field) =>
+      !used.has(field.key) &&
+      (field.key === column.key ||
+        normalizeHeader(field.label) === normalizeHeader(column.label) ||
+        (column.role !== "custom" && field.role === column.role))
+    );
     if (candidate) used.add(candidate.key);
     return [column.key, candidate?.key ?? null];
   }));

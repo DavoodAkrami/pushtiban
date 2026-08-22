@@ -1097,6 +1097,142 @@ grant execute on function public.business_data_import_records(
   uuid, uuid, uuid, text, text, jsonb, jsonb, jsonb, integer, text
 ) to service_role;
 
+create or replace function public.business_data_import_records_with_fields(
+  p_user_id uuid,
+  p_collection_id uuid,
+  p_source_id uuid,
+  p_source_type text,
+  p_source_name text,
+  p_source_configuration jsonb,
+  p_field_mapping jsonb,
+  p_new_fields jsonb,
+  p_records jsonb,
+  p_rejected_count integer,
+  p_idempotency_key text
+)
+returns jsonb
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  new_field jsonb;
+  new_field_key text;
+begin
+  if not exists (
+    select 1 from public.business_data_collections
+    where id = p_collection_id and user_id = p_user_id
+  ) then
+    raise exception 'Business Data collection was not found' using errcode = 'foreign_key_violation';
+  end if;
+
+  -- Let the existing import transaction resolve retries before attempting to
+  -- recreate fields from the same idempotent request.
+  if exists (
+    select 1
+    from public.business_data_sync_runs
+    where source_id = p_source_id
+      and idempotency_key = p_idempotency_key
+  ) then
+    return public.business_data_import_records(
+      p_user_id,
+      p_collection_id,
+      p_source_id,
+      p_source_type,
+      p_source_name,
+      p_source_configuration,
+      p_field_mapping,
+      p_records,
+      p_rejected_count,
+      p_idempotency_key
+    );
+  end if;
+
+  if p_new_fields is null
+    or jsonb_typeof(p_new_fields) <> 'array'
+    or jsonb_array_length(p_new_fields) > 100
+  then
+    raise exception 'Business Data proposed fields are invalid' using errcode = 'check_violation';
+  end if;
+
+  if exists (
+    select 1
+    from jsonb_array_elements(p_new_fields) as fields(item)
+    where jsonb_typeof(fields.item) <> 'object'
+      or jsonb_typeof(fields.item -> 'key') <> 'string'
+      or (fields.item ->> 'key') !~ '^[a-z][a-z0-9_]{0,63}$'
+      or jsonb_typeof(fields.item -> 'label') <> 'string'
+      or char_length(btrim(fields.item ->> 'label')) not between 1 and 120
+      or jsonb_typeof(fields.item -> 'data_type') <> 'string'
+      or jsonb_typeof(fields.item -> 'semantic_role') <> 'string'
+  ) then
+    raise exception 'Business Data proposed fields are invalid' using errcode = 'check_violation';
+  end if;
+
+  if (
+    select count(*) from jsonb_array_elements(p_new_fields)
+  ) <> (
+    select count(distinct item ->> 'key') from jsonb_array_elements(p_new_fields) as fields(item)
+  ) then
+    raise exception 'Business Data proposed fields contain duplicates' using errcode = 'unique_violation';
+  end if;
+
+  if exists (
+    select 1
+    from jsonb_array_elements(p_new_fields) as fields(item)
+    join public.business_data_fields existing_field
+      on existing_field.collection_id = p_collection_id
+     and existing_field.user_id = p_user_id
+     and existing_field.key = fields.item ->> 'key'
+  ) then
+    raise exception 'Business Data field already exists' using errcode = 'unique_violation';
+  end if;
+
+  for new_field in select value from jsonb_array_elements(p_new_fields)
+  loop
+    new_field_key := new_field ->> 'key';
+    insert into public.business_data_fields (
+      user_id, collection_id, key, label, description, data_type, semantic_role,
+      required, searchable, filterable, ai_exposure, position, validation
+    ) values (
+      p_user_id,
+      p_collection_id,
+      new_field_key,
+      new_field ->> 'label',
+      coalesce(new_field ->> 'description', ''),
+      new_field ->> 'data_type',
+      new_field ->> 'semantic_role',
+      coalesce((new_field ->> 'required')::boolean, false),
+      coalesce((new_field ->> 'searchable')::boolean, false),
+      coalesce((new_field ->> 'filterable')::boolean, false),
+      coalesce(new_field ->> 'ai_exposure', 'hidden'),
+      coalesce((new_field ->> 'position')::integer, 0),
+      coalesce(new_field -> 'validation', '{}'::jsonb)
+    );
+  end loop;
+
+  return public.business_data_import_records(
+    p_user_id,
+    p_collection_id,
+    p_source_id,
+    p_source_type,
+    p_source_name,
+    p_source_configuration,
+    p_field_mapping,
+    p_records,
+    p_rejected_count,
+    p_idempotency_key
+  );
+end;
+$$;
+
+revoke execute on function public.business_data_import_records_with_fields(
+  uuid, uuid, uuid, text, text, jsonb, jsonb, jsonb, jsonb, integer, text
+) from public, anon, authenticated;
+grant execute on function public.business_data_import_records_with_fields(
+  uuid, uuid, uuid, text, text, jsonb, jsonb, jsonb, jsonb, integer, text
+) to service_role;
+
 create or replace function public.business_data_create_import_collection(
   p_user_id uuid,
   p_key text,
@@ -1203,6 +1339,54 @@ grant execute on function public.business_data_create_import_collection(
   uuid, text, text, text, text, text, boolean, text, jsonb, uuid, text,
   text, jsonb, jsonb, jsonb, integer, text
 ) to service_role;
+
+create or replace function public.business_data_delete_collection(
+  p_user_id uuid,
+  p_collection_id uuid
+)
+returns void
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+begin
+  if not exists (
+    select 1
+    from public.business_data_collections
+    where id = p_collection_id and user_id = p_user_id
+  ) then
+    raise exception 'Business Data collection was not found' using errcode = 'foreign_key_violation';
+  end if;
+
+  -- Delete collection-owned state in dependency order. The explicit order keeps
+  -- restrictive field/source relationships safe while preserving tenant scope.
+  delete from public.business_data_private_verification_challenges
+  where collection_id = p_collection_id and user_id = p_user_id;
+  delete from public.business_data_verified_customer_sessions
+  where collection_id = p_collection_id and user_id = p_user_id;
+  delete from public.business_data_private_verification_attempts
+  where collection_id = p_collection_id and user_id = p_user_id;
+  delete from public.business_data_private_access_configs
+  where collection_id = p_collection_id and user_id = p_user_id;
+  delete from public.business_data_sync_runs
+  where collection_id = p_collection_id and user_id = p_user_id;
+  delete from public.business_data_records
+  where collection_id = p_collection_id and user_id = p_user_id;
+  delete from public.business_data_source_secrets
+  where collection_id = p_collection_id and user_id = p_user_id;
+  delete from public.business_data_sources
+  where collection_id = p_collection_id and user_id = p_user_id;
+  delete from public.business_data_fields
+  where collection_id = p_collection_id and user_id = p_user_id;
+  delete from public.business_data_collections
+  where id = p_collection_id and user_id = p_user_id;
+end;
+$$;
+
+revoke execute on function public.business_data_delete_collection(uuid, uuid)
+  from public, anon, authenticated;
+grant execute on function public.business_data_delete_collection(uuid, uuid)
+  to service_role;
 
 -- 11) Bounded public-catalog lookup for the assistant --------------------------
 

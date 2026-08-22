@@ -33,6 +33,9 @@ export const POST = async (request: NextRequest) => {
     const shared = {
       preview,
       mapping: parseFormJson(form.get("mapping"), "تطبیق ستون‌ها"),
+      newFields: form.has("newFields")
+        ? parseFormJson(form.get("newFields"), "فیلدهای جدید")
+        : [],
       externalIdField: form.get("externalIdField"),
       idempotencyKey: form.get("idempotencyKey"),
     };

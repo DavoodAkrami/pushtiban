@@ -19,7 +19,11 @@ import { Steps } from "@/components/ui/steps";
 import { businessDataRequest } from "@/lib/business-data/client";
 import type { BusinessDataCollectionDetail, BusinessDataField } from "@/lib/business-data/api-types";
 import { FIELD_TYPE_LABELS } from "@/lib/business-data/api-types";
-import type { BusinessDataAccessScope } from "@/lib/business-data/types";
+import type {
+  BusinessDataAccessScope,
+  BusinessDataFieldDefinition,
+  BusinessDataFieldType,
+} from "@/lib/business-data/types";
 import { fa } from "@/lib/utils";
 
 type ImportPreview = {
@@ -74,6 +78,7 @@ export const FileImportFlow = ({
   const [preview, setPreview] = React.useState<ImportPreview | null>(null);
   const [mapping, setMapping] = React.useState<Record<string, string | null>>({});
   const [fields, setFields] = React.useState<BusinessDataField[]>(collection?.fields ?? []);
+  const [newFields, setNewFields] = React.useState<BusinessDataFieldDefinition[]>([]);
   const [externalIdField, setExternalIdField] = React.useState<string>("");
   const [collectionName, setCollectionName] = React.useState("");
   const [accessScope, setAccessScope] = React.useState<BusinessDataAccessScope>("internal");
@@ -94,6 +99,7 @@ export const FileImportFlow = ({
     setPreview(null);
     setMapping({});
     setFields(collection?.fields ?? []);
+    setNewFields([]);
     setExternalIdField("");
     setCollectionName("");
     setAccessScope("internal");
@@ -126,11 +132,13 @@ export const FileImportFlow = ({
       const response = await businessDataRequest<{
         preview: ImportPreview;
         fields: BusinessDataField[];
+        newFields: BusinessDataFieldDefinition[];
         mapping: Record<string, string | null>;
         externalIdField: string | null;
       }>("/api/business-data/imports/file/preview", { method: "POST", body: form });
       setPreview(response.preview);
       setFields(response.fields);
+      setNewFields(response.newFields ?? []);
       setMapping(response.mapping);
       setExternalIdField(response.externalIdField ?? "");
       setSheetName(response.preview.sheetName ?? "");
@@ -161,6 +169,8 @@ export const FileImportFlow = ({
       if (collection) form.set("collectionId", collection.id);
       form.set("sheetName", sheetName);
       form.set("mapping", JSON.stringify(mapping));
+      const selectedNewFields = newFields.filter((field) => Object.values(mapping).includes(field.key));
+      form.set("newFields", JSON.stringify(selectedNewFields));
       form.set("externalIdField", externalIdField);
       form.set("idempotencyKey", idempotencyRef.current);
       if (!collection) {
@@ -171,7 +181,7 @@ export const FileImportFlow = ({
           accessScope,
           status: "active",
           aiEnabled: false,
-          fields: fields.map((field) => ({
+          fields: selectedNewFields.map((field) => ({
             key: field.key,
             label: field.label,
             ...(field.description ? { description: field.description } : {}),
@@ -197,6 +207,21 @@ export const FileImportFlow = ({
     } finally {
       setBusy(false);
     }
+  };
+
+  const selectedNewFields = newFields.filter((field) => Object.values(mapping).includes(field.key));
+  const allFields = [...fields, ...selectedNewFields];
+  const newFieldKeys = new Set(newFields.map((field) => field.key));
+  const updateMapping = (columnKey: string, value: string) => {
+    const nextMapping = { ...mapping, [columnKey]: value || null };
+    if (externalIdField && externalIdField === mapping[columnKey] && externalIdField !== value) {
+      setExternalIdField("");
+    }
+    setMapping(nextMapping);
+  };
+
+  const updateNewFieldType = (key: string, type: BusinessDataFieldType) => {
+    setNewFields((current) => current.map((field) => field.key === key ? { ...field, type } : field));
   };
 
   return (
@@ -233,18 +258,23 @@ export const FileImportFlow = ({
               </section>
               <section aria-labelledby="mapping-heading">
                 <h3 id="mapping-heading" className="text-sm font-bold">تطبیق اطلاعات</h3>
-                <p className="mt-1 text-xs leading-6 text-muted">هر ستون فایل را به یکی از فیلدهای همین مجموعه وصل کنید یا آن را نادیده بگیرید.</p>
+                <p className="mt-1 text-xs leading-6 text-muted">هر ستون فایل را به یکی از فیلدهای همین مجموعه وصل کنید، به‌عنوان فیلد جدید بسازید یا نادیده بگیرید.</p>
                 <p className="mt-1 text-xs leading-6 text-muted">پس از هر تغییر، نتیجه نهایی پیش از ورود دوباره اعتبارسنجی می‌شود.</p>
                 <div className="mt-3 divide-y divide-line overflow-hidden rounded-3xl border border-line bg-surface/20">
                   {preview.columns.map((column) => (
                     <div key={column.key} className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] sm:items-center">
                       <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="font-medium">{column.label}</span><Badge variant={column.confidence === "high" ? "success" : column.confidence === "medium" ? "warning" : "muted"}>{confidenceLabel(column.confidence)}</Badge></div><p className="mt-1 text-xs text-muted">نوع پیشنهادی: {FIELD_TYPE_LABELS[column.type]}{column.uniqueCandidate ? " · شناسه احتمالی" : ""}</p></div>
-                      <Select id={`mapping-${column.key}`} label={`فیلد پشتیبان برای ${column.label}`} value={mapping[column.key] ?? ""} onChange={(value) => setMapping((current) => ({ ...current, [column.key]: value || null }))} options={[{ value: "", label: "نادیده گرفتن این ستون" }, ...fields.map((field) => ({ value: field.key, label: field.label }))]} />
+                      <div className="space-y-3">
+                        <Select id={`mapping-${column.key}`} label={`فیلد پشتیبان برای ${column.label}`} value={mapping[column.key] ?? ""} onChange={(value) => updateMapping(column.key, value)} options={[{ value: "", label: "نادیده گرفتن این ستون" }, ...fields.map((field) => ({ value: field.key, label: field.label })), ...newFields.map((field) => ({ value: field.key, label: `ایجاد فیلد جدید: ${field.label}` }))]} />
+                        {mapping[column.key] && newFieldKeys.has(mapping[column.key]!) && (
+                          <Select id={`new-field-type-${column.key}`} label="نوع فیلد جدید" value={newFields.find((field) => field.key === mapping[column.key])?.type ?? column.type} onChange={(value) => updateNewFieldType(mapping[column.key]!, value as BusinessDataFieldType)} options={Object.entries(FIELD_TYPE_LABELS).map(([value, label]) => ({ value, label }))} />
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
               </section>
-              <Select id="import-identifier" label="شناسه یکتا برای به‌روزرسانی بعدی" value={externalIdField} onChange={setExternalIdField} options={[{ value: "", label: "شناسه قابل اتکا ندارم" }, ...fields.map((field) => ({ value: field.key, label: field.label }))]} hint="اگر یک شناسه ثابت مثل کد محصول یا شماره سفارش انتخاب کنید، ورودهای بعدی همان رکورد را به‌روزرسانی می‌کنند." />
+              <Select id="import-identifier" label="شناسه یکتا برای به‌روزرسانی بعدی" value={externalIdField} onChange={setExternalIdField} options={[{ value: "", label: "شناسه قابل اتکا ندارم" }, ...allFields.map((field) => ({ value: field.key, label: field.label }))]} hint="اگر یک شناسه ثابت مثل کد محصول یا شماره سفارش انتخاب کنید، ورودهای بعدی همان رکورد را به‌روزرسانی می‌کنند." />
               <section aria-labelledby="sample-heading" className="overflow-hidden rounded-3xl border border-line"><h3 id="sample-heading" className="border-b border-line px-4 py-3 text-sm font-bold">نمونه داده</h3><div className="overflow-x-auto"><table className="min-w-full text-right text-xs"><thead className="bg-surface/45 text-muted"><tr>{preview.columns.map((column) => <th key={column.key} className="whitespace-nowrap px-3 py-3 font-medium">{column.label}</th>)}</tr></thead><tbody className="divide-y divide-line">{preview.sampleRows.map((row) => <tr key={row.rowNumber}>{preview.columns.map((column) => <td key={column.key} className="max-w-40 truncate px-3 py-3">{row.values[column.key] || "—"}</td>)}</tr>)}</tbody></table></div></section>
               {preview.rejectedRows.length > 0 && <Alert variant="warning" title="نمونه ردیف‌های واردنشده" description={preview.rejectedRows.map((row) => `ردیف ${fa(row.rowNumber)}: ${row.message}`).join(" · ")} />}
             </div>

@@ -541,7 +541,7 @@ const DeleteCollectionModal = ({
         <ModalHeader>
           <ModalTitle>حذف همیشگی مجموعه؟</ModalTitle>
           <ModalDescription>
-            تمام فیلدها و {fa(collection.recordCount)} رکورد حذف می‌شود. برای تأیید، نام مجموعه را دقیق بنویسید.
+            با حذف این مجموعه، تمام فیلدها، {fa(collection.recordCount)} رکورد، منابع ورود و اطلاعات مرتبط با آن نیز برای همیشه حذف می‌شوند و قابل بازگشت نیستند. برای تأیید، نام مجموعه را دقیق بنویسید.
           </ModalDescription>
         </ModalHeader>
         <Input

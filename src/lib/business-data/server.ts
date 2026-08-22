@@ -718,11 +718,10 @@ export const deleteCollection = async (
       "confirmation_required"
     );
   }
-  const { error } = await context.admin
-    .from("business_data_collections")
-    .delete()
-    .eq("id", collectionId)
-    .eq("user_id", context.user.id);
+  const { error } = await context.admin.rpc("business_data_delete_collection", {
+    p_user_id: context.user.id,
+    p_collection_id: collectionId,
+  });
   if (error) throw mapDatabaseFailure(error);
   invalidateBusinessDataAiCapabilities(context.user.id);
 };
@@ -1060,6 +1059,13 @@ const parseIngestionMapping = (value: unknown): IngestionMapping => {
   return mapping;
 };
 
+const parseProposedImportFields = (value: unknown): BusinessDataFieldDefinition[] => {
+  if (value === undefined || value === null) return [];
+  const result = validateFieldDefinitions(value);
+  if (!result.ok) throw invalidDefinition(result.issues);
+  return result.value;
+};
+
 const idempotencyUuid = (scope: string, key: string) => {
   const hash = createHash("sha256").update(`${scope}:${key}`).digest("hex");
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
@@ -1088,6 +1094,7 @@ export const importIngestion = async (
     collectionId: string;
     preview: IngestionPreview;
     mapping: unknown;
+    newFields: unknown;
     externalIdField: unknown;
     idempotencyKey: unknown;
   }
@@ -1096,6 +1103,23 @@ export const importIngestion = async (
   const collection = await getCollectionRow(context, input.collectionId);
   assertCollectionWritable(collection);
   const fields = (await getFieldRows(context, collection.id)).map(mapField);
+  const proposedFields = parseProposedImportFields(input.newFields);
+  const existingDefinitions: BusinessDataFieldDefinition[] = fields.map((field) => ({
+    key: field.key,
+    label: field.label,
+    ...(field.description ? { description: field.description } : {}),
+    type: field.type,
+    role: field.role,
+    required: field.required,
+    searchable: field.searchable,
+    filterable: field.filterable,
+    aiExposure: field.aiExposure,
+    position: field.position,
+    ...(field.validation ? { validation: field.validation } : {}),
+  }));
+  const allFieldsResult = validateFieldDefinitions([...existingDefinitions, ...proposedFields]);
+  if (!allFieldsResult.ok) throw invalidDefinition(allFieldsResult.issues);
+  const importFields = allFieldsResult.value;
   const mapping = parseIngestionMapping(input.mapping);
   const externalIdField = typeof input.externalIdField === "string" ? input.externalIdField : null;
   const idempotencyKey = typeof input.idempotencyKey === "string"
@@ -1104,7 +1128,7 @@ export const importIngestion = async (
   if (!/^[a-zA-Z0-9_-]{16,120}$/.test(idempotencyKey)) {
     throw new BusinessDataServiceError("درخواست ورود داده معتبر نیست؛ دوباره تلاش کنید.", 400, "invalid_idempotency");
   }
-  const outcome = mapAndValidateRows(input.preview, mapping, fields, externalIdField);
+  const outcome = mapAndValidateRows(input.preview, mapping, importFields, externalIdField);
   if (!outcome.valid.length) {
     throw new BusinessDataServiceError("هیچ ردیف معتبری برای ورود پیدا نشد.", 400, "no_valid_rows");
   }
@@ -1112,7 +1136,7 @@ export const importIngestion = async (
   const sources = await getSourceRows(context, collection.id);
   const matchingSource = sources.find((source) => source.source_type === sourceType);
   const sourceId = matchingSource?.id ?? randomUUID();
-  const { data, error } = await context.admin.rpc("business_data_import_records", {
+  const { data, error } = await context.admin.rpc("business_data_import_records_with_fields", {
     p_user_id: context.user.id,
     p_collection_id: collection.id,
     p_source_id: sourceId,
@@ -1123,6 +1147,19 @@ export const importIngestion = async (
       importedFrom: sourceType === "google_sheets" ? "google_sheets" : "file",
     },
     p_field_mapping: mapping,
+    p_new_fields: proposedFields.map((field) => ({
+      key: field.key,
+      label: field.label,
+      description: field.description ?? "",
+      data_type: field.type,
+      semantic_role: field.role,
+      required: field.required,
+      searchable: field.searchable,
+      filterable: field.filterable,
+      ai_exposure: field.aiExposure,
+      position: field.position,
+      validation: field.validation ?? {},
+    })),
     p_records: outcome.valid.map((record) => ({
       values: record.values,
       externalId: record.externalId,

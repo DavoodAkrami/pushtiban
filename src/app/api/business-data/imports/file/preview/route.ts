@@ -6,6 +6,7 @@ import {
   suggestedFieldDefinitions,
   suggestedMapping,
 } from "@/lib/business-data/ingestion";
+import type { BusinessDataFieldDefinition } from "@/lib/business-data/types";
 import { getBusinessDataContext, getCollectionDetail } from "@/lib/business-data/server";
 import {
   businessDataErrorResponse,
@@ -34,8 +35,33 @@ export const POST = async (request: NextRequest) => {
       : null;
     const fields = collection?.fields ?? suggestedFieldDefinitions(preview);
     const mapping = suggestedMapping(preview, fields);
+    const newFields: BusinessDataFieldDefinition[] = [];
+    if (collection) {
+      const suggested = suggestedFieldDefinitions(preview);
+      const usedKeys = new Set(fields.map((field) => field.key));
+      for (const column of preview.columns) {
+        if (mapping[column.key]) continue;
+        const candidate = suggested.find((field) => field.key === column.key);
+        if (!candidate) continue;
+        const normalizedCandidate =
+          fields.some((field) => field.role === "title") && candidate.role === "title"
+            ? { ...candidate, role: "custom" as const, required: false }
+            : candidate;
+        let key = normalizedCandidate.key;
+        let suffix = 2;
+        while (usedKeys.has(key)) {
+          key = `${normalizedCandidate.key}_${suffix}`;
+          suffix += 1;
+        }
+        const definition = { ...normalizedCandidate, key, position: fields.length + newFields.length };
+        newFields.push(definition);
+        usedKeys.add(key);
+        mapping[column.key] = key;
+      }
+    }
+    const importFields = collection ? [...fields, ...newFields] : fields;
     const identifier = preview.columns.find((column) => column.uniqueCandidate);
-    const result = buildImportPreview(preview, fields, mapping, identifier ? mapping[identifier.key] ?? null : null);
+    const result = buildImportPreview(preview, importFields, mapping, identifier ? mapping[identifier.key] ?? null : null);
     return NextResponse.json({
       preview: {
         sourceType: result.sourceType,
@@ -51,7 +77,8 @@ export const POST = async (request: NextRequest) => {
         rejectedRows: result.rejectedRows,
         hasStableIdentifier: result.hasStableIdentifier,
       },
-      fields,
+      fields: collection ? fields : [],
+      newFields: collection ? newFields : fields,
       mapping,
       externalIdField: identifier ? mapping[identifier.key] ?? null : null,
     });

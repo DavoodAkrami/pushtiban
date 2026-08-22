@@ -46,6 +46,14 @@ const ragSource = fs.readFileSync(
   path.join(scriptDirectory, "..", "src", "lib", "ai", "rag.ts"),
   "utf8"
 );
+const importFlowSource = fs.readFileSync(
+  path.join(scriptDirectory, "..", "src", "components", "dashboard", "business-data", "file-import-flow.tsx"),
+  "utf8"
+);
+const structurePanelSource = fs.readFileSync(
+  path.join(scriptDirectory, "..", "src", "components", "dashboard", "business-data", "structure-panel.tsx"),
+  "utf8"
+);
 
 assert.equal(templates.BUSINESS_DATA_TEMPLATES.length, 22);
 for (const template of templates.BUSINESS_DATA_TEMPLATES) {
@@ -139,8 +147,13 @@ assert.doesNotMatch(
 );
 assert.match(serverSource, /\.rpc\(\s*"business_data_create_manual_collection"/);
 assert.match(serverSource, /\.rpc\("business_data_move_field"/);
-assert.match(serverSource, /\.rpc\("business_data_import_records"/);
+assert.match(serverSource, /\.rpc\("business_data_import_records_with_fields"/);
 assert.match(serverSource, /\.rpc\("business_data_create_import_collection"/);
+assert.match(serverSource, /\.rpc\("business_data_delete_collection"/);
+assert.match(importFlowSource, /ایجاد فیلد جدید/);
+assert.match(importFlowSource, /نادیده گرفتن این ستون/);
+assert.match(importFlowSource, /newFields/);
+assert.match(structurePanelSource, /منابع ورود و اطلاعات مرتبط/);
 assert.match(
   sqlSource,
   /revoke execute on function public\.business_data_create_manual_collection\([\s\S]*?from public, anon, authenticated;/
@@ -156,6 +169,19 @@ assert.match(
 assert.match(
   sqlSource,
   /revoke execute on function public\.business_data_import_records\([\s\S]*?from public, anon, authenticated;/
+);
+assert.match(
+  sqlSource,
+  /create or replace function public\.business_data_import_records_with_fields\([\s\S]*?p_new_fields jsonb[\s\S]*?return public\.business_data_import_records\(/,
+  "Existing collection imports must create proposed fields inside the import transaction"
+);
+assert.match(
+  sqlSource,
+  /revoke execute on function public\.business_data_import_records_with_fields\([\s\S]*?from public, anon, authenticated;/
+);
+assert.match(
+  sqlSource,
+  /create or replace function public\.business_data_delete_collection\([\s\S]*?delete from public\.business_data_records[\s\S]*?delete from public\.business_data_collections/
 );
 assert.match(
   sqlSource,
@@ -375,6 +401,55 @@ const runIngestionChecks = async () => {
   assert.equal(outcome.valid.length, 2, "Persian numeric values should normalize for currency fields");
   assert.equal(outcome.valid[0].values.price, 125000);
   assert.equal(outcome.valid[0].externalId, "SKU-1");
+
+  const expandedPreview = ingestion.parseGoogleRowsForPreview({
+    spreadsheetName: "نمونه",
+    sheetName: "فیلدهای جدید",
+    rows: [
+      ["نام محصول", "قیمت", "رنگ", "موجود"],
+      ["قهوه", "125000", "قهوه‌ای", "بله"],
+    ],
+  });
+  const existingFieldsWithoutAvailability = productFields.filter((field) => field.key !== "available");
+  const expandedMapping = ingestion.suggestedMapping(expandedPreview, existingFieldsWithoutAvailability);
+  assert.equal(expandedMapping.field_3, null, "Unmatched columns must remain available as new fields");
+  assert.equal(expandedMapping.field_4, null, "Multiple unmatched columns must remain available as new fields");
+  const proposedFields = ingestion.suggestedFieldDefinitions(expandedPreview).filter(
+    (field) => expandedMapping[field.key] === null
+  );
+  assert.equal(proposedFields.find((field) => field.label === "موجود")?.type, "boolean", "Inferred types must be preserved for proposed fields");
+  const expandedOutcome = ingestion.mapAndValidateRows(
+    expandedPreview,
+    { ...expandedMapping, field_3: "field_3", field_4: "field_4" },
+    [...existingFieldsWithoutAvailability, ...proposedFields],
+    null
+  );
+  assert.equal(expandedOutcome.valid.length, 1, "Existing collections must import rows after accepting new fields");
+  assert.equal(
+    validation.validateFieldDefinitions([...existingFieldsWithoutAvailability, ...proposedFields]).ok,
+    true,
+    "Accepted inferred fields must validate with the existing collection"
+  );
+  assert.equal(
+    validation.validateFieldDefinitions([...existingFieldsWithoutAvailability, proposedFields[0], proposedFields[0]]).ok,
+    false,
+    "Duplicate proposed fields must fail before the import boundary"
+  );
+  assert.equal(
+    validation.validateFieldDefinitions([
+      ...existingFieldsWithoutAvailability,
+      { ...proposedFields[0], key: "1bad" },
+    ]).ok,
+    false,
+    "Invalid proposed field keys must fail before any schema mutation"
+  );
+  const ignoredOutcome = ingestion.mapAndValidateRows(
+    expandedPreview,
+    { ...expandedMapping, field_3: null, field_4: null },
+    existingFieldsWithoutAvailability,
+    null
+  );
+  assert.equal(ignoredOutcome.valid.length, 1, "Ignored columns must not block a valid import");
 
   const duplicateIdentifierOutcome = ingestion.mapAndValidateRows(
     ingestion.parseGoogleRowsForPreview({
