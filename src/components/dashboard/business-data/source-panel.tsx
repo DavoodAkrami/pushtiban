@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowRight,
   CheckCircle2,
@@ -45,7 +45,16 @@ export const BusinessDataSourcePanel = ({ collectionId }: { collectionId: string
   const [supabaseOpen, setSupabaseOpen] = React.useState(false);
   const [syncingSupabase, setSyncingSupabase] = React.useState(false);
   const [syncError, setSyncError] = React.useState("");
+  const searchParams = useSearchParams();
   useDashboardTitle(collection?.name ?? null);
+
+  React.useEffect(() => {
+    if (collection && searchParams.get("connect") === "supabase") {
+      router.replace(`/dashboard/data/${collectionId}/source`);
+      const timer = window.setTimeout(() => setSupabaseOpen(true), 0);
+      return () => window.clearTimeout(timer);
+    }
+  }, [collection, collectionId, router, searchParams]);
 
   if (loading) {
     return (
