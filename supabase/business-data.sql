@@ -939,7 +939,7 @@ begin
     raise exception 'Business Data collection was not found' using errcode = 'foreign_key_violation';
   end if;
 
-  if p_source_type not in ('csv', 'excel', 'google_sheets')
+  if p_source_type not in ('csv', 'excel', 'google_sheets', 'supabase')
     or p_source_name is null
     or char_length(btrim(p_source_name)) = 0
     or p_source_configuration is null
