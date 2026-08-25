@@ -10,7 +10,8 @@
     "test:business-data": "node scripts/business-data-check.mjs",
     "test:business-data-connector": "node scripts/business-data-supabase-connector-check.mjs",
     "test:business-data-ai": "node scripts/business-data-ai-evaluation.mjs",
-    "test:business-data-private": "node scripts/business-data-private-evaluation.mjs"
+    "test:business-data-private": "node scripts/business-data-private-evaluation.mjs",
+    "test:ai-actions": "node scripts/ai-actions-check.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",

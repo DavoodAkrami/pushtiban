@@ -110,6 +110,9 @@ How to use:
 - [x] Business Data connector milestone 1: encrypted server-side Supabase
       connection, table discovery, field mapping, bounded manual sync, and
       sanitized sync history through the existing source architecture
+- [x] AI Actions milestone 2: explicit server-side action registry, validated
+      model requests, tenant authorization, confirmation state, idempotent
+      execution, sanitized audit history, and one support-request reference action
 - [ ] Knowledge-base ingestion for PDF and Word — needs a parser dependency and
       a Supabase Storage bucket with its own policies
 - [ ] AI assistant configuration (name, tone, model selection)

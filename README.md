@@ -290,6 +290,31 @@ schema and its instruction are omitted entirely, since that path is unreachable.
 An explicit «با پشتیبان صحبت کنم» is caught by a phrase list *before* any LLM
 call — a free escalation.
 
+**6. Actions** — `src/lib/ai/actions/`, table `business_action_executions`
+
+The existing intent completion may select one compact action request from the
+server's explicit registry; there is no second planner call. Model output is
+untrusted: the server validates the registered key, exact argument schema,
+tenant and channel connection, business configuration, customer verification,
+and confirmation state before a handler can run. Business Data and connector
+values are never instructions and cannot authorize an action.
+
+Confirmation-required actions are stored server-side for five minutes and are
+bound to the business, channel connection, hashed customer identity,
+conversation, exact action, and exact validated arguments. A model claim that
+the customer confirmed or is verified has no authority. Webhook delivery IDs
+produce deterministic server-controlled idempotency keys, while handlers receive
+the execution ID for downstream deduplication. The audit stores bounded
+arguments/results and sanitized failure codes—not chain-of-thought, credentials,
+or raw customer identifiers.
+
+The first registered mutation is `create_support_request`. It accepts no
+model-authored payload and reuses `support_conversations` / `support_messages` to
+place the customer's original message in the existing inbox. It requires the
+owner's human-handoff setting and does not require confirmation because opening a
+support request is low risk. No action can run arbitrary SQL, choose a table or
+column, invent an API URL, or write through the read-only Supabase connector.
+
 ### Gates on every message
 
 `ai_assistant_settings.is_enabled` (owner) → `ai_global_settings.ai_enabled`
@@ -302,7 +327,9 @@ existing intent and final chat completions continue to be logged separately;
 Business Data does not introduce an additional planner/verifier/summarizer model
 call. A verification prompt returns immediately after the existing intent call;
 the answer after a verified lookup uses the usual intent + final completion.
-Provider/model routing remains unchanged.
+Actions reuse that intent call; a handled action returns its server-authored
+result without an additional answer completion. Provider/model routing remains
+unchanged.
 
 ### Token discipline
 
@@ -346,7 +373,9 @@ table) · `supabase/instagram-flows.sql` (channel column on `automation_flows`,
 Instagram-specific node/button limit triggers) · `supabase/business-data.sql`
 (collections, fields, records, source/sync foundation, verified-customer
 configuration/challenges/sessions/attempt audits, and the service-role-only
-bounded public and verified-record lookup RPCs).
+bounded public and verified-record lookup RPCs) · `supabase/ai-actions.sql`
+(server-only action confirmation, idempotency, audit state, and support-message
+execution links).
 
 ## Notes
 

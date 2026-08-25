@@ -34,6 +34,7 @@ import {
 } from "@/lib/ai/persona";
 import { loadChatSession, recordChatTurns } from "@/lib/ai/memory";
 import { handlePrivateVerificationMessage } from "@/lib/business-data/private-access";
+import { handleActionConfirmation } from "@/lib/ai/actions/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   markdownToTelegramHtml,
@@ -1072,6 +1073,44 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
     (aiSettings as { human_handoff_enabled?: boolean }).human_handoff_enabled ===
     true;
 
+  const actionContext =
+    typeof update.update_id === "number"
+      ? {
+          channel: "telegram" as const,
+          connectionId: connection.id,
+          customerExternalId: String(senderId ?? chatId),
+          conversationId: String(chatId),
+          deliveryId: `telegram-update:${update.update_id}`,
+          customerUsername: senderUsername,
+          customerDisplayName: senderFirstName,
+        }
+      : undefined;
+
+  if (actionContext) {
+    const confirmation = await handleActionConfirmation({
+      context: {
+        ...actionContext,
+        userId: connection.user_id,
+        customerMessage: text,
+      },
+      message: text,
+    });
+    if (confirmation.handled) {
+      const replyText =
+        confirmation.text ?? "امکان انجام این درخواست در حال حاضر نیست.";
+      const sent = await sendToCustomer({ chat_id: chatId, text: replyText });
+      await recordChatTurns({
+        connectionId: connection.id,
+        chatId,
+        turns: [
+          { role: "user", text },
+          { role: "assistant", text: replyText },
+        ],
+      });
+      return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+    }
+  }
+
   // Explicit request to reach a human. Detected before any LLM call, so we
   // don't spend a completion on a message that is asking to be escalated. Only
   // acts when handoff is enabled; otherwise it falls through to a normal reply.
@@ -1128,6 +1167,7 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
           history: verifiedSession.turns,
           privateAccess: privateIdentity,
           verifiedPrivateCollectionKey: privateVerification.collectionKey,
+          actionContext,
         }),
     });
     const sent = verifiedReply.text
@@ -1162,6 +1202,7 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
         handoffEnabled,
         history: session.turns,
         privateAccess: privateIdentity,
+        actionContext,
       }),
   });
 

@@ -62,6 +62,7 @@ const connectionColumnFor = (channel: SupportChannel) =>
 export type SupportMessageRow = {
   id: string;
   conversation_id: string;
+  action_execution_id?: string | null;
   role: "customer" | "owner" | "assistant" | "system";
   content: string;
   sender_telegram_id: number | null;
@@ -116,12 +117,14 @@ export const createSupportConversation = async ({
   customerDisplayName,
   messageText,
   queuedReason,
+  actionExecutionId,
 }: ConversationKey & {
   userId: string;
   customerUsername?: string | null;
   customerDisplayName?: string | null;
   messageText: string;
   queuedReason: SupportConversationRow["queued_reason"];
+  actionExecutionId?: string;
 }): Promise<SupportConversationRow> => {
   const admin = createAdminClient();
 
@@ -152,11 +155,17 @@ export const createSupportConversation = async ({
 
   const conv = conversation as SupportConversationRow;
 
-  await admin.from("support_messages").insert({
+  const { error: messageError } = await admin.from("support_messages").insert({
     conversation_id: conv.id,
     role: "customer",
     content: messageText,
+    ...(actionExecutionId
+      ? { action_execution_id: actionExecutionId }
+      : {}),
   });
+  if (messageError) {
+    throw new Error("Failed to record support request message.");
+  }
 
   return conv;
 };
@@ -168,16 +177,24 @@ export const createSupportConversation = async ({
 export const appendCustomerMessage = async ({
   conversationId,
   messageText,
+  actionExecutionId,
 }: {
   conversationId: string;
   messageText: string;
+  actionExecutionId?: string;
 }): Promise<void> => {
   const admin = createAdminClient();
-  await admin.from("support_messages").insert({
+  const { error: messageError } = await admin.from("support_messages").insert({
     conversation_id: conversationId,
     role: "customer",
     content: messageText,
+    ...(actionExecutionId
+      ? { action_execution_id: actionExecutionId }
+      : {}),
   });
+  if (messageError) {
+    throw new Error("Failed to record support request message.");
+  }
   await admin
     .from("support_conversations")
     .update({
@@ -202,12 +219,14 @@ export const upsertConversationForCustomer = async ({
   customerDisplayName,
   messageText,
   queuedReason,
+  actionExecutionId,
 }: ConversationKey & {
   userId: string;
   customerUsername?: string | null;
   customerDisplayName?: string | null;
   messageText: string;
   queuedReason: SupportConversationRow["queued_reason"];
+  actionExecutionId?: string;
 }): Promise<SupportConversationRow> => {
   const existing = await findOpenConversation({
     channel,
@@ -218,6 +237,7 @@ export const upsertConversationForCustomer = async ({
     await appendCustomerMessage({
       conversationId: existing.id,
       messageText,
+      actionExecutionId,
     });
     return { ...existing, last_customer_message_text: messageText };
   }
@@ -230,6 +250,7 @@ export const upsertConversationForCustomer = async ({
     customerDisplayName,
     messageText,
     queuedReason,
+    actionExecutionId,
   });
 };
 
