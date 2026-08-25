@@ -8,6 +8,7 @@ import {
 } from "@/lib/ai/inbox";
 import { loadChatSession, recordChatTurns } from "@/lib/ai/memory";
 import { handlePrivateVerificationMessage } from "@/lib/business-data/private-access";
+import { handleActionConfirmation } from "@/lib/ai/actions/server";
 import { normalizeKeyword } from "@/lib/automations";
 import { decryptSecret } from "@/lib/crypto/secret-box";
 import {
@@ -547,7 +548,13 @@ const handleMessaging = async ({
   }
 
   // ---- Assistant ----------------------------------------------------------
-  await handleWithAssistant({ connection, senderId, text, token });
+  await handleWithAssistant({
+    connection,
+    deliveryId: message.mid,
+    senderId,
+    text,
+    token,
+  });
 };
 
 /**
@@ -556,11 +563,13 @@ const handleMessaging = async ({
  */
 const handleWithAssistant = async ({
   connection,
+  deliveryId,
   senderId,
   text,
   token,
 }: {
   connection: Connection;
+  deliveryId: string;
   senderId: string;
   text: string;
   token: string;
@@ -598,6 +607,37 @@ const handleWithAssistant = async ({
       text: body,
       token,
     });
+
+  const actionContext = {
+    channel: "instagram" as const,
+    connectionId: connection.id,
+    customerExternalId: senderId,
+    conversationId: senderId,
+    deliveryId: `instagram-message:${deliveryId}`,
+  };
+  const confirmation = await handleActionConfirmation({
+    context: {
+      ...actionContext,
+      userId: connection.user_id,
+      customerMessage: text,
+    },
+    message: text,
+  });
+  if (confirmation.handled) {
+    const replyText =
+      confirmation.text ?? "امکان انجام این درخواست در حال حاضر نیست.";
+    await send(replyText);
+    await recordChatTurns({
+      channel: "instagram",
+      connectionId: connection.id,
+      chatId: senderId,
+      turns: [
+        { role: "user", text },
+        { role: "assistant", text: replyText },
+      ],
+    });
+    return;
+  }
 
   // An explicit «با پشتیبان صحبت کنم» is caught before any completion — a free
   // escalation, exactly as on Telegram.
@@ -641,6 +681,7 @@ const handleWithAssistant = async ({
           history: verifiedSession.turns,
           privateAccess: privateIdentity,
           verifiedPrivateCollectionKey: privateVerification.collectionKey,
+          actionContext,
         }),
     });
     await send(
@@ -675,6 +716,7 @@ const handleWithAssistant = async ({
         handoffEnabled,
         history: session.turns,
         privateAccess: privateIdentity,
+        actionContext,
       }),
   });
 

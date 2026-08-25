@@ -66,11 +66,13 @@ const makeIdempotencyKey = () =>
 
 export const FileImportFlow = ({
   collection,
+  sourceType,
   open,
   onOpenChange,
   onImported,
 }: {
   collection?: BusinessDataCollectionDetail;
+  sourceType?: "csv" | "excel";
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onImported: (collectionId?: string) => void;
@@ -188,6 +190,17 @@ export const FileImportFlow = ({
       position: field.position,
       ...(field.validation ? { validation: field.validation } : {}),
     }));
+    const selectedNewFields = selectProposedImportFields(newFields, mapping, fields.map((field) => ({
+      key: field.key,
+      label: field.label,
+      type: field.type,
+      role: field.role,
+      required: field.required,
+      searchable: field.searchable,
+      filterable: field.filterable,
+      aiExposure: field.aiExposure,
+      position: field.position,
+    })));
     const finalFields = collection ? [...existingDefinitions, ...selectedNewFields] : selectedNewFields;
     const schemaResult = validateFieldDefinitions(finalFields);
     if (!schemaResult.ok) {
@@ -209,17 +222,6 @@ export const FileImportFlow = ({
       if (collection) form.set("collectionId", collection.id);
       form.set("sheetName", sheetName);
       form.set("mapping", JSON.stringify(mapping));
-      const selectedNewFields = selectProposedImportFields(newFields, mapping, fields.map((field) => ({
-        key: field.key,
-        label: field.label,
-        type: field.type,
-        role: field.role,
-        required: field.required,
-        searchable: field.searchable,
-        filterable: field.filterable,
-        aiExposure: field.aiExposure,
-        position: field.position,
-      })));
       form.set("newFields", JSON.stringify(selectedNewFields));
       form.set("externalIdField", externalIdField);
       form.set("idempotencyKey", idempotencyRef.current);
@@ -314,9 +316,11 @@ export const FileImportFlow = ({
               {!collection && <div className="mb-5 text-start"><Input id="import-collection-name" label="نام مجموعه جدید" value={collectionName} onChange={(event) => setCollectionName(event.target.value)} placeholder="مثلاً فهرست محصولات" /><Select id="import-access-scope" label="سطح دسترسی" className="mt-4" value={accessScope} onChange={(value) => setAccessScope(value as BusinessDataAccessScope)} options={[{ value: "internal", label: "فقط داخل کسب‌وکار" }, { value: "public_catalog", label: "اطلاعات عمومی" }, { value: "verified_customer", label: "فقط مشتری تأییدشده" }]} /></div>}
               <div className="rounded-3xl border border-dashed border-line bg-surface/25 p-6 text-center sm:p-8">
                 <FileSpreadsheet className="mx-auto size-8 text-accent" aria-hidden />
-                <h3 className="mt-4 text-base font-bold">فایل CSV یا Excel را انتخاب کنید</h3>
+                <h3 className="mt-4 text-base font-bold">
+                  {sourceType === "csv" ? "فایل CSV را انتخاب کنید" : sourceType === "excel" ? "فایل Excel را انتخاب کنید" : "فایل CSV یا Excel را انتخاب کنید"}
+                </h3>
                 <p className="mt-2 text-sm leading-7 text-muted">تا {fa(5)} مگابایت و {fa(2000)} ردیف. فایل فقط برای همین ورود خوانده می‌شود و ذخیره نمی‌شود.</p>
-                <Input id="business-data-import-file" className="mt-5 text-start" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" label="فایل داده" onChange={(event) => { const next = event.target.files?.[0] ?? null; setFile(next); setError(""); }} />
+                <Input id="business-data-import-file" className="mt-5 text-start" type="file" accept={sourceType === "csv" ? ".csv,text/csv" : sourceType === "excel" ? ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : ".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"} label="فایل داده" onChange={(event) => { const next = event.target.files?.[0] ?? null; setFile(next); setError(""); }} />
                 {file && <p className="mt-3 text-xs text-muted">{file.name} · {fa(Math.ceil(file.size / 1024))} کیلوبایت</p>}
               </div>
             </div>

@@ -365,7 +365,10 @@ const getSourceRows = async (
 };
 
 const getPrimarySource = (sources: SourceRow[]) =>
-  sources.find((source) => source.source_type !== "manual") ?? sources[0] ?? null;
+  sources.find((source) => source.source_type === "supabase") ??
+  sources.find((source) => source.source_type !== "manual") ??
+  sources[0] ??
+  null;
 
 const getRecordCounts = async (
   context: BusinessDataContext,
@@ -1180,8 +1183,17 @@ export const importIngestion = async (
     p_source_type: sourceType,
     p_source_name: input.preview.sourceName.slice(0, BUSINESS_DATA_LIMITS.sourceNameChars),
     p_source_configuration: {
+      ...(sourceType === "supabase" && matchingSource?.configuration
+        ? matchingSource.configuration
+        : {}),
       sheetName: input.preview.sheetName,
-      importedFrom: sourceType === "google_sheets" ? "google_sheets" : "file",
+      importedFrom:
+        sourceType === "google_sheets"
+          ? "google_sheets"
+          : sourceType === "supabase"
+            ? "supabase"
+            : "file",
+      ...(sourceType === "supabase" ? { externalIdField } : {}),
     },
     p_field_mapping: mapping,
     p_new_fields: proposedFields.map((field) => ({

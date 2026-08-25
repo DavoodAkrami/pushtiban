@@ -480,7 +480,7 @@ export const BusinessDataRecordsPanel = ({ collectionId }: { collectionId: strin
   }
 
   const titleField = collection.fields.find((field) => field.role === "title") ?? collection.fields[0];
-  const visibleFields = [titleField, ...collection.fields.filter((field) => field.id !== titleField.id)].slice(0, 5);
+  const visibleFields = [titleField, ...collection.fields.filter((field) => field.id !== titleField.id)];
   const searchSupported = collection.fields.some(
     (field) => field.searchable && field.aiExposure !== "hidden"
   );
@@ -629,7 +629,7 @@ export const BusinessDataRecordsPanel = ({ collectionId }: { collectionId: strin
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-bold">{displayValue(titleField, record.values[titleField.key] ?? null)}</p>
                     <dl className="mt-3 space-y-2">
-                      {visibleFields.slice(1, 4).map((field) => (
+                      {visibleFields.slice(1).map((field) => (
                         <div key={field.id} className="flex gap-3 text-xs"><dt className="w-24 shrink-0 text-muted">{field.label}</dt><dd className="min-w-0 flex-1 truncate">{displayValue(field, record.values[field.key] ?? null)}</dd></div>
                       ))}
                     </dl>

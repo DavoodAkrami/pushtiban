@@ -28,6 +28,9 @@ import {
 import type { ChatTurn } from "@/lib/ai/memory";
 import { checkAiLimits, getGlobalAiSettings, logAiUsage } from "@/lib/ai/usage";
 import type { PrivateAccessIdentity } from "@/lib/business-data/private-access";
+import type { ActionExecutionContext } from "@/lib/ai/actions/core";
+import { describeAvailableActions } from "@/lib/ai/actions/registry";
+import { executeModelAction } from "@/lib/ai/actions/server";
 
 const COMPLETION_TIMEOUT_MS = 25_000;
 const DEFAULT_NVIDIA_MODEL = "meta/llama-3.3-70b-instruct";
@@ -270,6 +273,10 @@ export const customerRequestedHuman = (text: string): boolean => {
 export type AssistantResult = {
   text: string | null;
   needsHuman: boolean;
+  action?: {
+    key?: string;
+    status: "pending_confirmation" | "executing" | "succeeded" | "failed" | "expired" | "rejected";
+  };
   /**
    * What retrieval found for this message. The channel webhooks ignore it — it
    * is here so the dashboard preview can show the owner exactly which facts,
@@ -344,6 +351,10 @@ export const generateAssistantReply = async (
     history?: ChatTurn[];
     privateAccess?: PrivateAccessIdentity;
     verifiedPrivateCollectionKey?: string | null;
+    actionContext?: Omit<
+      ActionExecutionContext,
+      "userId" | "customerMessage"
+    >;
   } = {}
 ): Promise<AssistantResult> => {
   const maxLength = CHANNEL_MESSAGE_MAX_LENGTH[options.channel ?? "telegram"];
@@ -365,6 +376,10 @@ export const generateAssistantReply = async (
   // sending the tool schema or its instructions saves those input tokens on
   // every single message.
   const escalationAvailable = options.handoffEnabled !== false;
+  const actionCapabilities = describeAvailableActions({
+    actionContextAvailable: Boolean(options.actionContext),
+    handoffEnabled: options.handoffEnabled === true,
+  });
 
   // Platform-wide kill switch and per-business monthly caps, both managed
   // from /dashboard/admin. When either gate rejects the call, no LLM request
@@ -390,6 +405,7 @@ export const generateAssistantReply = async (
           previousUserMessage,
           privateAccess: options.privateAccess,
           verifiedPrivateCollectionKey: options.verifiedPrivateCollectionKey,
+          actionCapabilities: actionCapabilities || undefined,
         }).catch((error: unknown) => {
           const message =
             error instanceof Error
@@ -410,6 +426,31 @@ export const generateAssistantReply = async (
       needsHuman: false,
       retrieval,
     };
+  }
+
+  if (
+    retrieval?.actionRequest != null &&
+    userId &&
+    options.actionContext
+  ) {
+    const action = await executeModelAction({
+      request: retrieval.actionRequest,
+      context: {
+        ...options.actionContext,
+        userId,
+        customerMessage: question,
+      },
+    });
+    if (action.handled) {
+      return {
+        text: action.text,
+        needsHuman: false,
+        action: action.status
+          ? { key: action.actionKey, status: action.status }
+          : undefined,
+        retrieval,
+      };
+    }
   }
 
   let systemPrompt = retrieval

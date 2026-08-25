@@ -12,7 +12,7 @@ import {
   validateRecordValues,
 } from "./validation";
 
-export type IngestionSourceType = "csv" | "excel" | "google_sheets";
+export type IngestionSourceType = "csv" | "excel" | "google_sheets" | "supabase";
 
 export type NormalizedSourceRow = {
   rowNumber: number;
@@ -294,6 +294,38 @@ export const parseFileForPreview = async (file: File, selectedSheet?: string | n
 export const parseGoogleRowsForPreview = (input: { spreadsheetName: string; sheetName: string; rows: unknown[][] }) =>
   makePreview(input.rows, "google_sheets", input.spreadsheetName, input.sheetName, [input.sheetName]);
 
+const normalizeSupabaseValue = (value: unknown) => {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "";
+    }
+  }
+  return value;
+};
+
+export const parseSupabaseRowsForPreview = (input: {
+  tableName: string;
+  rows: Array<Record<string, unknown>>;
+  columns?: string[];
+}) => {
+  const columns = input.columns?.length
+    ? input.columns
+    : Array.from(new Set(input.rows.flatMap((row) => Object.keys(row))));
+  return makePreview(
+    [
+      columns,
+      ...input.rows.map((row) => columns.map((column) => normalizeSupabaseValue(row[column]))),
+    ],
+    "supabase",
+    input.tableName,
+    input.tableName,
+    [input.tableName]
+  );
+};
+
 export const suggestedFieldDefinitions = (
   preview: IngestionPreview,
   options: { fallbackTitle?: boolean } = {}
@@ -433,8 +465,12 @@ export const mapAndValidateRows = (
       continue;
     }
     const rawExternalId = externalIdField ? result.value[externalIdField] : null;
-    const externalId = typeof rawExternalId === "string" && rawExternalId.trim()
-      ? normalizeExternalId(rawExternalId).slice(0, BUSINESS_DATA_LIMITS.externalIdChars)
+    const externalIdValue =
+      typeof rawExternalId === "string" || typeof rawExternalId === "number"
+        ? String(rawExternalId)
+        : "";
+    const externalId = externalIdValue.trim()
+      ? normalizeExternalId(externalIdValue).slice(0, BUSINESS_DATA_LIMITS.externalIdChars)
       : null;
     if (externalId && externalIds.has(externalId)) {
       rejected.push({ rowNumber: row.rowNumber, message: "شناسه یکتای این ردیف در همین فایل تکراری است." });

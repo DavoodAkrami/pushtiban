@@ -10,7 +10,9 @@ import {
   Database,
   Eye,
   FileSpreadsheet,
+  FileText,
   Plus,
+  Pencil,
   Waypoints,
 } from "lucide-react";
 import { DashboardPageHeader } from "@/components/dashboard/page-header";
@@ -53,10 +55,45 @@ import { cn, fa } from "@/lib/utils";
 import { FileImportFlow } from "./file-import-flow";
 
 const CREATION_STEPS = [
+  { id: "source", label: "منبع داده" },
   { id: "template", label: "نوع داده" },
   { id: "name", label: "نام مجموعه" },
   { id: "fields", label: "فیلدهای اولیه" },
   { id: "access", label: "دسترسی" },
+];
+
+type CreationSource = "manual" | "csv" | "excel" | "supabase";
+
+const CREATION_SOURCES: Array<{
+  value: CreationSource;
+  label: string;
+  description: string;
+  icon: typeof Pencil;
+}> = [
+  {
+    value: "manual",
+    label: "ساخت دستی",
+    description: "ساختار و رکوردها را داخل پشتیبان مدیریت کنید.",
+    icon: Pencil,
+  },
+  {
+    value: "csv",
+    label: "فایل CSV",
+    description: "ستون‌های فایل را بررسی و به فیلدهای مجموعه تبدیل کنید.",
+    icon: FileText,
+  },
+  {
+    value: "excel",
+    label: "فایل Excel",
+    description: "یک برگه از فایل Excel را وارد و بعداً به‌روزرسانی کنید.",
+    icon: FileSpreadsheet,
+  },
+  {
+    value: "supabase",
+    label: "Supabase",
+    description: "یک جدول Supabase را به مجموعه متصل و همگام کنید.",
+    icon: Database,
+  },
 ];
 
 const ACCESS_OPTIONS = [
@@ -100,11 +137,13 @@ const CreationModal = ({
   initialTemplateId,
   open,
   onOpenChange,
+  onFileSourceSelected,
 }: {
   businessCategory: string;
   initialTemplateId?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onFileSourceSelected: (sourceType: "csv" | "excel") => void;
 }) => {
   const router = useRouter();
   const { toast } = useToast();
@@ -112,7 +151,8 @@ const CreationModal = ({
   const initialTemplate = initialTemplateId
     ? getBusinessDataTemplate(initialTemplateId)
     : null;
-  const [step, setStep] = React.useState(initialTemplate ? 1 : 0);
+  const [step, setStep] = React.useState(initialTemplate ? 2 : 0);
+  const [sourceType, setSourceType] = React.useState<CreationSource>("manual");
   const [templateId, setTemplateId] = React.useState(initialTemplate?.id ?? "");
   const [name, setName] = React.useState(initialTemplate?.label ?? "");
   const [description, setDescription] = React.useState(initialTemplate?.description ?? "");
@@ -144,9 +184,24 @@ const CreationModal = ({
   };
 
   const canContinue =
-    (step === 0 && Boolean(selected)) ||
-    (step === 1 && Boolean(name.trim())) ||
-    step >= 2;
+    (step === 0 && Boolean(sourceType)) ||
+    (step === 1 && Boolean(selected)) ||
+    (step === 2 && Boolean(name.trim())) ||
+    step >= 3;
+
+  const continueCreation = () => {
+    if (step === 0) {
+      if (sourceType === "csv" || sourceType === "excel") {
+        onOpenChange(false);
+        onFileSourceSelected(sourceType);
+        return;
+      }
+      setStep(1);
+      return;
+    }
+    if (step < CREATION_STEPS.length - 1) setStep(step + 1);
+    else void create();
+  };
 
   const create = async () => {
     if (!selected) return;
@@ -169,7 +224,11 @@ const CreationModal = ({
       );
       toast({ title: "مجموعه ساخته شد", variant: "success" });
       onOpenChange(false);
-      router.push(`/dashboard/data/${collection.id}`);
+      router.push(
+        sourceType === "supabase"
+          ? `/dashboard/data/${collection.id}/source?connect=supabase`
+          : `/dashboard/data/${collection.id}`
+      );
       router.refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "ساخت مجموعه انجام نشد.");
@@ -195,7 +254,10 @@ const CreationModal = ({
             current={step}
             orientation="horizontal"
             label="مراحل ساخت مجموعه"
-            onSelect={(_item, index) => setStep(index)}
+            onSelect={(_item, index) => {
+              if ((sourceType === "csv" || sourceType === "excel") && index > 0) return;
+              setStep(index);
+            }}
             className="mt-5"
           />
         </ModalHeader>
@@ -213,6 +275,47 @@ const CreationModal = ({
               transition={{ duration: reduce ? 0 : 0.24, ease: luxe }}
             >
               {step === 0 && (
+                <div>
+                  <p className="text-sm font-bold">داده را از کجا وارد می‌کنید؟</p>
+                  <p className="mt-1 text-xs leading-6 text-muted">
+                    می‌توانید ساختار را دستی بسازید یا آن را از یک فایل و جدول موجود شروع کنید.
+                  </p>
+                  <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                    {CREATION_SOURCES.map((source) => {
+                      const SourceIcon = source.icon;
+                      const active = sourceType === source.value;
+                      return (
+                        <button
+                          key={source.value}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() => setSourceType(source.value)}
+                          className={cn(
+                            "rounded-2xl border p-4 text-start transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+                            active ? "border-accent/50 bg-accent/10" : "border-line bg-surface/35 hover:bg-surface/65"
+                          )}
+                        >
+                          <span className="flex items-center gap-2 text-sm font-bold">
+                            <SourceIcon className="size-4 text-accent" aria-hidden />
+                            {source.label}
+                          </span>
+                          <span className="mt-1 block text-xs leading-6 text-muted">{source.description}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {sourceType === "supabase" && (
+                    <Alert
+                      variant="default"
+                      title="یک ساختار اولیه انتخاب کنید"
+                      description="بعد از ساخت مجموعه، فرم اتصال Supabase برای انتخاب جدول و تطبیق ستون‌ها باز می‌شود."
+                      className="mt-4"
+                    />
+                  )}
+                </div>
+              )}
+
+              {step === 1 && (
                 <div>
                   <p className="text-sm font-bold">پیشنهاد برای کسب‌وکار شما</p>
                   <div className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -269,7 +372,7 @@ const CreationModal = ({
                 </div>
               )}
 
-              {step === 1 && (
+              {step === 2 && (
                 <div className="space-y-5">
                   <Input
                     id="collection-name"
@@ -291,7 +394,7 @@ const CreationModal = ({
                 </div>
               )}
 
-              {step === 2 && selected && (
+              {step === 3 && selected && (
                 <div>
                   <p className="text-sm font-bold">فیلدهای شروع</p>
                   <p className="mt-1 text-xs leading-6 text-muted">
@@ -311,7 +414,7 @@ const CreationModal = ({
                 </div>
               )}
 
-              {step === 3 && (
+              {step === 4 && (
                 <div className="space-y-5">
                   <Select
                     id="collection-access"
@@ -370,10 +473,10 @@ const CreationModal = ({
             type="button"
             loading={saving}
             disabled={!canContinue}
-            onClick={() => (step < CREATION_STEPS.length - 1 ? setStep(step + 1) : void create())}
+            onClick={continueCreation}
             className="w-full sm:w-auto"
           >
-            {step < CREATION_STEPS.length - 1 ? "ادامه" : "ساخت مجموعه"}
+            {step < CREATION_STEPS.length - 1 ? "ادامه" : sourceType === "supabase" ? "ساخت و اتصال Supabase" : "ساخت مجموعه"}
           </Button>
         </ModalFooter>
       </ModalContent>
@@ -452,6 +555,7 @@ export const BusinessDataIndexPanel = () => {
   const [creatorOpen, setCreatorOpen] = React.useState(false);
   const [creatorTemplateId, setCreatorTemplateId] = React.useState<string>();
   const [fileImportOpen, setFileImportOpen] = React.useState(false);
+  const [fileImportSourceType, setFileImportSourceType] = React.useState<"csv" | "excel">("csv");
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -578,9 +682,13 @@ export const BusinessDataIndexPanel = () => {
           initialTemplateId={creatorTemplateId}
           open
           onOpenChange={setCreatorOpen}
+          onFileSourceSelected={(sourceType) => {
+            setFileImportSourceType(sourceType);
+            setFileImportOpen(true);
+          }}
         />
       )}
-      <FileImportFlow open={fileImportOpen} onOpenChange={setFileImportOpen} onImported={(collectionId) => { if (collectionId) router.push(`/dashboard/data/${collectionId}`); else void load(); }} />
+      <FileImportFlow sourceType={fileImportSourceType} open={fileImportOpen} onOpenChange={setFileImportOpen} onImported={(collectionId) => { if (collectionId) router.push(`/dashboard/data/${collectionId}`); else void load(); }} />
     </>
   );
 };
