@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Pushtiban logo mark — light mode</title>
+  <desc id="desc">Minimal P-shaped chat bubble with three dots.</desc>
+  <defs>
+    <linearGradient id="g" x1="104" y1="96" x2="410" y2="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4F5BFF"/>
+      <stop offset="0.55" stop-color="#4258F4"/>
+      <stop offset="1" stop-color="#6A4DFF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Outer P / chat-bubble silhouette with inner speech cutout -->
+  <path fill="url(#g)" fill-rule="evenodd" d="
+    M140 90
+    H312
+    C383 90 430 137 430 206
+    C430 275 383 322 312 322
+    H226
+    L160 388
+    C147 401 126 392 126 374
+    V134
+    C126 110 136 96 140 90
+    Z
+
+    M184 146
+    H309
+    C350 146 376 171 376 206
+    C376 241 350 266 309 266
+    H223
+    L180 309
+    V160
+    C180 152 181 149 184 146
+    Z" />
+
+  <!-- Chat dots -->
+  <circle cx="234" cy="206" r="11" fill="#4A59F7"/>
+  <circle cx="280" cy="206" r="11" fill="#4A59F7"/>
+  <circle cx="326" cy="206" r="11" fill="#4A59F7"/>
+</svg>

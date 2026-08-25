@@ -35,14 +35,30 @@ export const Logo = ({
   const content = (
     <>
       {(variant === "default" || variant === "icon" || variant === "full") && (
-        <Image
-          src="/logo.webp"
-          alt=""
-          width={32}
-          height={32}
-          className={cn("flex-shrink-0 rounded-xl", sizeClasses[size])}
-          priority
-        />
+        <>
+          <Image
+            src="/brand/pushtiban-logo-light.svg"
+            alt=""
+            width={32}
+            height={32}
+            className={cn(
+              "flex-shrink-0 rounded-xl dark:hidden",
+              sizeClasses[size],
+            )}
+            priority
+          />
+          <Image
+            src="/brand/pushtiban-logo-dark.svg"
+            alt=""
+            width={32}
+            height={32}
+            className={cn(
+              "hidden flex-shrink-0 rounded-xl dark:block",
+              sizeClasses[size],
+            )}
+            priority
+          />
+        </>
       )}
       {(variant === "default" || variant === "text" || variant === "full") && (
         <span className={cn("hidden md:inline", textSizeClasses[size])}>

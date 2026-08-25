@@ -16,6 +16,21 @@ export const metadata: Metadata = {
   title: "پشتیبان — پلتفرم هوش مصنوعی پشتیبانی مشتریان",
   description:
     "دانش کسب‌وکارتان را متصل کنید؛ پشتیبان در چند دقیقه یک دستیار هوشمند و ربات تلگرام می‌سازد که به مشتریان شما پاسخ فوری و دقیق می‌دهد.",
+  icons: {
+    icon: [
+      {
+        url: "/brand/pushtiban-logo-light.svg",
+        type: "image/svg+xml",
+        media: "(prefers-color-scheme: light)",
+      },
+      {
+        url: "/brand/pushtiban-logo-dark.svg",
+        type: "image/svg+xml",
+        media: "(prefers-color-scheme: dark)",
+      },
+    ],
+    apple: "/brand/pushtiban-logo-light.svg",
+  },
 };
 
 export default function RootLayout({
