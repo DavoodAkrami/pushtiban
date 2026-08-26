@@ -98,6 +98,16 @@ const actionStore: ActionExecutionStore = {
       execution: toExecution(existing.data as ExecutionRow),
     };
   },
+  findByIdempotency: async (userId, idempotencyKey) => {
+    const { data, error } = await createAdminClient()
+      .from("business_action_executions")
+      .select(executionSelect)
+      .eq("user_id", userId)
+      .eq("idempotency_key", idempotencyKey)
+      .maybeSingle();
+    if (error) throw new Error("Action idempotency lookup failed.");
+    return data ? toExecution(data as ExecutionRow) : null;
+  },
   findPending: async (scope) => {
     const { data, error } = await createAdminClient()
       .from("business_action_executions")
@@ -141,7 +151,7 @@ const actionStore: ActionExecutionStore = {
     return Boolean(data);
   },
   markSucceeded: async (executionId, result) => {
-    const { error } = await createAdminClient()
+    const { data, error } = await createAdminClient()
       .from("business_action_executions")
       .update({
         status: "succeeded",
@@ -151,8 +161,10 @@ const actionStore: ActionExecutionStore = {
         failure_reason: null,
       })
       .eq("id", executionId)
-      .eq("status", "executing");
-    if (error) throw new Error("Action success audit failed.");
+      .eq("status", "executing")
+      .select("id")
+      .maybeSingle();
+    if (error || !data) throw new Error("Action success audit failed.");
   },
   markFailed: async (executionId, failureCode) => {
     const { error } = await createAdminClient()

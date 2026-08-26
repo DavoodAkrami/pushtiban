@@ -1,6 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret-box";
 import type { BusinessDataFieldDefinition } from "./types";
 import {
@@ -206,17 +207,24 @@ export const saveSupabaseConnection = async (
   return preview;
 };
 
-const loadCredentials = async (
-  context: BusinessDataContext,
-  collectionId: string,
-  sourceId: string
+export const loadSupabaseSourceCredentials = async ({
+  admin,
+  collectionId,
+  sourceId,
+  userId,
+}: {
+  admin: SupabaseClient;
+  collectionId: string;
+  sourceId: string;
+  userId: string;
+}
 ): Promise<SupabaseConnectorCredentials> => {
-  const { data, error } = await context.admin
+  const { data, error } = await admin
     .from("business_data_source_secrets")
     .select("secret_ciphertext")
     .eq("source_id", sourceId)
     .eq("collection_id", collectionId)
-    .eq("user_id", context.user.id)
+    .eq("user_id", userId)
     .maybeSingle();
   if (error || typeof data?.secret_ciphertext !== "string") {
     throw new BusinessDataServiceError(
@@ -299,7 +307,12 @@ export const syncSupabaseConnection = async (
     );
   }
   try {
-    const credentials = await loadCredentials(context, input.collectionId, source.id);
+    const credentials = await loadSupabaseSourceCredentials({
+      admin: context.admin,
+      collectionId: input.collectionId,
+      sourceId: source.id,
+      userId: context.user.id,
+    });
     const tableName =
       typeof source.configuration.tableName === "string"
         ? source.configuration.tableName

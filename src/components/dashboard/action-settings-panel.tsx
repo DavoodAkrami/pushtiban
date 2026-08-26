@@ -2,12 +2,21 @@
 
 import * as React from "react";
 import { motion, useReducedMotion } from "framer-motion";
-import { Check, ShieldCheck, UserCheck } from "lucide-react";
+import { Check, Database, ShieldCheck, UserCheck } from "lucide-react";
 import { luxe } from "@/components/motion/reveal";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/checkbox";
 import { Icon } from "@/components/ui/icon";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
@@ -20,6 +29,44 @@ type ActionSettingsItem = {
   registryRequiresVerification: boolean;
   registryRequiresConfirmation: boolean;
   requireConfirmation: boolean;
+  capabilityAvailable: boolean;
+  configurationRequired: boolean;
+  configuration: ActionConfiguration | null;
+};
+
+type ActionConfiguration = {
+  collectionId: string;
+  relatedCollectionId: string | null;
+  fieldMapping: Record<string, string>;
+  cancellationValue: string | null;
+};
+
+type ActionCatalogCollection = {
+  id: string;
+  name: string;
+  kind: string;
+  accessScope: string;
+  aiEnabled: boolean;
+  fields: Array<{ key: string; label: string; type: string; role: string }>;
+  source: { id: string; name: string; tableName: string } | null;
+  privateAccessReady: boolean;
+};
+
+type ActionConfigurationSpec = {
+  primaryLabel: string;
+  primaryKinds: string[];
+  primaryAccessScopes?: string[];
+  relatedLabel?: string;
+  relatedKinds?: string[];
+  relatedAccessScopes?: string[];
+  fields: Array<{
+    key: string;
+    label: string;
+    side: "primary" | "related";
+    required: boolean;
+    types: string[];
+  }>;
+  cancellationValue?: boolean;
 };
 
 type ActionSettingsResponse = {
@@ -27,6 +74,8 @@ type ActionSettingsResponse = {
   action?: ActionSettingsItem;
   error?: string;
   setupRequired?: boolean;
+  catalog?: ActionCatalogCollection[];
+  configurationSpecs?: Record<string, ActionConfigurationSpec>;
 };
 
 export const ActionSettingsPanel = () => {
@@ -36,6 +85,10 @@ export const ActionSettingsPanel = () => {
   const [error, setError] = React.useState<string | null>(null);
   const [setupRequired, setSetupRequired] = React.useState(false);
   const [savingKey, setSavingKey] = React.useState<string | null>(null);
+  const [catalog, setCatalog] = React.useState<ActionCatalogCollection[]>([]);
+  const [configurationSpecs, setConfigurationSpecs] = React.useState<
+    Record<string, ActionConfigurationSpec>
+  >({});
 
   React.useEffect(() => {
     const load = async () => {
@@ -46,6 +99,8 @@ export const ActionSettingsPanel = () => {
           throw new Error(result.error || "تنظیمات اقدامات بارگذاری نشد.");
         }
         setActions(result.actions);
+        setCatalog(Array.isArray(result.catalog) ? result.catalog : []);
+        setConfigurationSpecs(result.configurationSpecs ?? {});
       } catch (loadError) {
         setError(
           loadError instanceof Error
@@ -59,7 +114,8 @@ export const ActionSettingsPanel = () => {
 
   const save = async (
     previous: ActionSettingsItem,
-    next: ActionSettingsItem
+    next: ActionSettingsItem,
+    configuration?: ActionConfiguration
   ) => {
     setActions((current) =>
       current?.map((item) => (item.key === next.key ? next : item)) ?? null
@@ -76,6 +132,7 @@ export const ActionSettingsPanel = () => {
           requireConfirmation: next.registryRequiresConfirmation
             ? false
             : next.requireConfirmation,
+          ...(configuration ? { configuration } : {}),
         }),
       });
       const result = (await response.json().catch(() => ({}))) as ActionSettingsResponse;
@@ -87,7 +144,11 @@ export const ActionSettingsPanel = () => {
         current?.map((item) => (item.key === next.key ? result.action! : item)) ?? null
       );
       toast({
-        title: result.action.enabled ? "اقدام فعال شد" : "اقدام غیرفعال شد",
+        title: configuration
+          ? "پیکربندی ذخیره شد"
+          : result.action.enabled
+            ? "اقدام فعال شد"
+            : "اقدام غیرفعال شد",
         description: result.action.name,
         variant: "success",
       });
@@ -144,7 +205,11 @@ export const ActionSettingsPanel = () => {
             saving={savingKey === action.key}
             disabled={Boolean(error) || setupRequired}
             reduce={reduce}
-            onChange={(next) => void save(action, next)}
+            catalog={catalog}
+            configurationSpec={configurationSpecs[action.key]}
+            onChange={(next, configuration) =>
+              void save(action, next, configuration)
+            }
           />
         ))
       )}
@@ -157,13 +222,20 @@ const ActionCard = ({
   saving,
   disabled,
   reduce,
+  catalog,
+  configurationSpec,
   onChange,
 }: {
   action: ActionSettingsItem;
   saving: boolean;
   disabled: boolean;
   reduce: boolean;
-  onChange: (action: ActionSettingsItem) => void;
+  catalog: ActionCatalogCollection[];
+  configurationSpec?: ActionConfigurationSpec;
+  onChange: (
+    action: ActionSettingsItem,
+    configuration?: ActionConfiguration
+  ) => void;
 }) => {
   const titleId = React.useId();
   const confirmationIsLocked = action.registryRequiresConfirmation;
@@ -202,6 +274,9 @@ const ActionCard = ({
             <Badge variant={action.enabled ? "success" : "muted"} dot>
               {action.enabled ? "فعال" : "غیرفعال"}
             </Badge>
+            {action.configurationRequired && !action.capabilityAvailable && (
+              <Badge variant="warning">نیاز به پیکربندی</Badge>
+            )}
           </div>
           <p className="mt-2 max-w-xl text-sm leading-7 text-muted">
             {action.description}
@@ -209,7 +284,11 @@ const ActionCard = ({
         </div>
         <Switch
           checked={action.enabled}
-          disabled={disabled || saving}
+          disabled={
+            disabled ||
+            saving ||
+            (action.configurationRequired && !action.capabilityAvailable)
+          }
           aria-label={`${action.enabled ? "غیرفعال کردن" : "فعال کردن"} ${action.name}`}
           aria-busy={saving}
           onChange={(event) => onChange({ ...action, enabled: event.target.checked })}
@@ -244,7 +323,252 @@ const ActionCard = ({
           }
         />
       </div>
+
+      {action.configurationRequired && configurationSpec && (
+        <ActionConfigurationEditor
+          key={`${action.key}:${JSON.stringify(action.configuration)}`}
+          action={action}
+          catalog={catalog}
+          configurationSpec={configurationSpec}
+          disabled={disabled || saving}
+          saving={saving}
+          onSave={(configuration) => onChange(action, configuration)}
+        />
+      )}
     </section>
+  );
+};
+
+const ActionConfigurationEditor = ({
+  action,
+  catalog,
+  configurationSpec,
+  disabled,
+  saving,
+  onSave,
+}: {
+  action: ActionSettingsItem;
+  catalog: ActionCatalogCollection[];
+  configurationSpec: ActionConfigurationSpec;
+  disabled: boolean;
+  saving: boolean;
+  onSave: (configuration: ActionConfiguration) => void;
+}) => {
+  const [draft, setDraft] = React.useState<ActionConfiguration>(() =>
+    action.configuration ?? {
+      collectionId: "",
+      relatedCollectionId: null,
+      fieldMapping: {},
+      cancellationValue: configurationSpec.cancellationValue ? "cancelled" : null,
+    }
+  );
+
+  const primaryCandidates = catalog.filter(
+    (collection) =>
+      Boolean(collection.source) &&
+      configurationSpec.primaryKinds.includes(collection.kind) &&
+      (!configurationSpec.primaryAccessScopes ||
+        configurationSpec.primaryAccessScopes.includes(collection.accessScope)) &&
+      (!configurationSpec.primaryAccessScopes?.includes("verified_customer") ||
+        (collection.privateAccessReady && collection.aiEnabled))
+  );
+  const relatedCandidates = configurationSpec.relatedKinds
+    ? catalog.filter(
+        (collection) =>
+          configurationSpec.relatedKinds!.includes(collection.kind) &&
+          (!configurationSpec.relatedAccessScopes ||
+            configurationSpec.relatedAccessScopes.includes(collection.accessScope)) &&
+          collection.aiEnabled
+      )
+    : [];
+  const primary = catalog.find((collection) => collection.id === draft.collectionId);
+  const related = catalog.find(
+    (collection) => collection.id === draft.relatedCollectionId
+  );
+  const requiredFields = configurationSpec.fields.filter((field) => field.required);
+  const complete =
+    Boolean(primary?.source) &&
+    (!configurationSpec.relatedKinds || Boolean(related)) &&
+    requiredFields.every((field) => Boolean(draft.fieldMapping[field.key])) &&
+    (!configurationSpec.cancellationValue ||
+      Boolean(draft.cancellationValue?.trim()));
+
+  const updateCollection = (collectionId: string) => {
+    const primaryKeys = new Set(
+      configurationSpec.fields
+        .filter((field) => field.side === "primary")
+        .map((field) => field.key)
+    );
+    setDraft((current) => ({
+      ...current,
+      collectionId,
+      fieldMapping: Object.fromEntries(
+        Object.entries(current.fieldMapping).filter(([key]) => !primaryKeys.has(key))
+      ),
+    }));
+  };
+
+  const updateRelatedCollection = (relatedCollectionId: string) => {
+    const relatedKeys = new Set(
+      configurationSpec.fields
+        .filter((field) => field.side === "related")
+        .map((field) => field.key)
+    );
+    setDraft((current) => ({
+      ...current,
+      relatedCollectionId: relatedCollectionId || null,
+      fieldMapping: Object.fromEntries(
+        Object.entries(current.fieldMapping).filter(([key]) => !relatedKeys.has(key))
+      ),
+    }));
+  };
+
+  return (
+    <Accordion
+      type="single"
+      collapsible
+      defaultValue={action.capabilityAvailable ? undefined : "configuration"}
+      className="mt-5 border-t border-line pt-4"
+    >
+      <AccordionItem
+        value="configuration"
+        className="rounded-2xl border border-line bg-background/35 px-4 shadow-none"
+      >
+        <AccordionTrigger className="py-4 text-sm hover:text-foreground">
+          <span className="flex items-center gap-2">
+            <Database className="size-4 text-muted" aria-hidden />
+            منبع و فیلدهای عملیات
+          </span>
+        </AccordionTrigger>
+        <AccordionContent className="space-y-5 pb-4">
+          {!primaryCandidates.length ? (
+            <p className="rounded-2xl bg-warning/10 p-4 text-sm leading-7 text-warning">
+              مجموعه فعال و متصل به Supabase با ساختار مناسب پیدا نشد. ابتدا
+              اتصال داده این عملیات را در بخش داده‌های کسب‌وکار آماده کنید.
+            </p>
+          ) : (
+            <>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Select
+                  id={`${action.key}-primary-collection`}
+                  label={configurationSpec.primaryLabel}
+                  value={draft.collectionId}
+                  disabled={disabled}
+                  searchable={primaryCandidates.length > 6}
+                  options={primaryCandidates.map((collection) => ({
+                    value: collection.id,
+                    label: collection.name,
+                    description: collection.source
+                      ? `${collection.source.name} · ${collection.source.tableName}`
+                      : undefined,
+                  }))}
+                  onChange={updateCollection}
+                />
+                {configurationSpec.relatedKinds && (
+                  <Select
+                    id={`${action.key}-related-collection`}
+                    label={configurationSpec.relatedLabel}
+                    value={draft.relatedCollectionId ?? ""}
+                    disabled={disabled}
+                    searchable={relatedCandidates.length > 6}
+                    options={relatedCandidates.map((collection) => ({
+                      value: collection.id,
+                      label: collection.name,
+                    }))}
+                    onChange={updateRelatedCollection}
+                  />
+                )}
+              </div>
+
+              {primary?.source && (
+                <div className="flex flex-wrap gap-x-6 gap-y-2 rounded-2xl bg-surface/55 px-4 py-3 text-xs text-muted">
+                  <span>منبع: {primary.source.name}</span>
+                  <span dir="ltr">Table: {primary.source.tableName}</span>
+                </div>
+              )}
+
+              {(primary || related) && (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {configurationSpec.fields.map((concept) => {
+                    const collection =
+                      concept.side === "primary" ? primary : related;
+                    if (!collection) return null;
+                    return (
+                      <Select
+                        key={concept.key}
+                        id={`${action.key}-${concept.key}`}
+                        label={`${concept.label}${concept.required ? "" : " (اختیاری)"}`}
+                        value={draft.fieldMapping[concept.key] ?? ""}
+                        disabled={disabled}
+                        options={[
+                          ...(!concept.required
+                            ? [{ value: "", label: "استفاده نشود" }]
+                            : []),
+                          ...collection.fields
+                            .filter((field) => concept.types.includes(field.type))
+                            .map((field) => ({
+                              value: field.key,
+                              label: field.label,
+                            })),
+                        ]}
+                        onChange={(fieldKey) =>
+                          setDraft((current) => ({
+                            ...current,
+                            fieldMapping: fieldKey
+                              ? {
+                                  ...current.fieldMapping,
+                                  [concept.key]: fieldKey,
+                                }
+                              : Object.fromEntries(
+                                  Object.entries(current.fieldMapping).filter(
+                                    ([key]) => key !== concept.key
+                                  )
+                                ),
+                          }))
+                        }
+                      />
+                    );
+                  })}
+                </div>
+              )}
+
+              {configurationSpec.cancellationValue && (
+                <Input
+                  id={`${action.key}-cancellation-value`}
+                  label="مقدار وضعیت پس از لغو"
+                  hint="همان مقداری که سیستم متصل برای وضعیت لغوشده می‌پذیرد."
+                  value={draft.cancellationValue ?? ""}
+                  disabled={disabled}
+                  maxLength={80}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      cancellationValue: event.target.value,
+                    }))
+                  }
+                />
+              )}
+
+              <div className="flex items-center justify-between gap-4 border-t border-line pt-4">
+                <p className="text-xs leading-6 text-muted">
+                  نام جدول و ستون‌ها از تنظیم ذخیره‌شده خوانده می‌شوند و در اختیار
+                  دستیار قرار نمی‌گیرند.
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  loading={saving}
+                  disabled={disabled || !complete}
+                  onClick={() => onSave(draft)}
+                >
+                  ذخیره پیکربندی
+                </Button>
+              </div>
+            </>
+          )}
+        </AccordionContent>
+      </AccordionItem>
+    </Accordion>
   );
 };
 

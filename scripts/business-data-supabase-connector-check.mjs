@@ -68,7 +68,13 @@ const openApi = {
         name: { type: "string" },
       },
     },
-    orders: { properties: { id: { type: "string", format: "uuid" } } },
+    orders: {
+      properties: {
+        id: { type: "string", format: "uuid" },
+        execution_id: { type: "string", format: "uuid" },
+        status: { type: "string" },
+      },
+    },
   },
 };
 
@@ -92,6 +98,29 @@ globalThis.fetch = async (input, init = {}) => {
       headers: { "Content-Type": "application/json" },
     });
   }
+  if (url.includes("/rest/v1/orders?") && init.method === "POST") {
+    return new Response(
+      JSON.stringify([
+        {
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          execution_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          status: "pending",
+        },
+      ]),
+      { status: 201, headers: { "Content-Type": "application/json" } }
+    );
+  }
+  if (url.includes("/rest/v1/orders?") && init.method === "PATCH") {
+    return new Response(
+      JSON.stringify([
+        {
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          status: "cancelled",
+        },
+      ]),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  }
   return new Response(null, { status: 404 });
 };
 
@@ -112,6 +141,40 @@ try {
   assert.deepEqual(table.rows, [{ id: 1, name: "Coffee" }]);
   assert.deepEqual(table.columns, ["id", "name"]);
   await assert.rejects(() => connector.readSupabaseTable(credentials, "private_table"));
+  const actionRows = await connector.readSupabaseActionRows({
+    credentials,
+    tableName: "products",
+    columns: ["id", "name"],
+    filters: [{ column: "name", value: "Coffee" }],
+    limit: 1,
+  });
+  assert.deepEqual(actionRows, [{ id: 1, name: "Coffee" }]);
+  await assert.rejects(() =>
+    connector.readSupabaseActionRows({
+      credentials,
+      tableName: "products",
+      columns: ["password"],
+      filters: [],
+      limit: 1,
+    })
+  );
+  const inserted = await connector.insertSupabaseActionRow({
+    credentials,
+    tableName: "orders",
+    values: {
+      execution_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      status: "pending",
+    },
+    returningColumns: ["id"],
+  });
+  assert.equal(inserted.id, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+  const updated = await connector.updateSupabaseActionRow({
+    credentials,
+    tableName: "orders",
+    match: { column: "id", value: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" },
+    values: { status: "cancelled" },
+  });
+  assert.equal(updated.status, "cancelled");
   assert.ok(requests.every((request) => request.init.headers.apikey === secretKey));
   assert.ok(
     requests.every((request) => !("Authorization" in request.init.headers)),
@@ -134,7 +197,8 @@ assert.doesNotMatch(connectorSource, /console\.(?:log|error|warn)/);
 assert.match(syncSource, /encryptSecret\(JSON\.stringify\(\{ projectUrl, apiKey \}\)\)/);
 assert.match(syncSource, /decryptSecret\(data\.secret_ciphertext\)/);
 assert.ok(
-  (syncSource.match(/\.eq\("user_id", context\.user\.id\)/g) ?? []).length >= 4,
+  (syncSource.match(/\.eq\("user_id", context\.user\.id\)/g) ?? []).length >= 3 &&
+    (syncSource.match(/\.eq\("user_id", userId\)/g) ?? []).length >= 1,
   "Every connector source and secret lookup must retain an owner predicate"
 );
 assert.match(syncSource, /error_summary: "همگام‌سازی Supabase کامل نشد\."/);

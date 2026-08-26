@@ -29,7 +29,14 @@ export type SupabaseDiscoveredTable = {
 };
 
 export class SupabaseConnectorError extends Error {
-  code: "invalid_input" | "connection_failed" | "table_not_found" | "read_failed" | "payload_too_large";
+  code:
+    | "invalid_input"
+    | "connection_failed"
+    | "table_not_found"
+    | "column_not_found"
+    | "read_failed"
+    | "write_failed"
+    | "payload_too_large";
 
   constructor(code: SupabaseConnectorError["code"]) {
     super(code);
@@ -279,4 +286,146 @@ export const readSupabaseTable = async (
     if (!response.headers.get("content-range") && pageRows.length < pageSize) break;
   }
   return { rows, columns };
+};
+
+type SupabaseActionScalar = string | number | boolean | null;
+
+const actionTableDefinition = async (
+  credentials: SupabaseConnectorCredentials,
+  tableName: string
+) => {
+  const document = await discoverDocument(credentials);
+  if (!tableNamesFromDocument(document).includes(tableName)) {
+    throw new SupabaseConnectorError("table_not_found");
+  }
+  return new Set(tableColumns(document, tableName).map((column) => column.name));
+};
+
+const assertActionColumns = (
+  available: ReadonlySet<string>,
+  columns: readonly string[]
+) => {
+  if (
+    !columns.length ||
+    columns.length > 20 ||
+    columns.some((column) => !available.has(column))
+  ) {
+    throw new SupabaseConnectorError("column_not_found");
+  }
+};
+
+const readActionResponse = async (response: Response, failureCode: "read_failed" | "write_failed") => {
+  if (!response.ok) throw new SupabaseConnectorError(failureCode);
+  const data = await readBoundedJson(response, 256_000);
+  if (
+    !Array.isArray(data) ||
+    data.some((row) => !row || typeof row !== "object" || Array.isArray(row))
+  ) {
+    throw new SupabaseConnectorError(failureCode);
+  }
+  return data as Array<Record<string, unknown>>;
+};
+
+/**
+ * Bounded reads for predefined business Actions. Callers provide only fields
+ * resolved from stored owner configuration; model output never reaches table
+ * or column identifiers.
+ */
+export const readSupabaseActionRows = async ({
+  columns,
+  credentials,
+  filters,
+  limit,
+  tableName,
+}: {
+  columns: string[];
+  credentials: SupabaseConnectorCredentials;
+  filters: Array<{ column: string; value: SupabaseActionScalar }>;
+  limit: number;
+  tableName: string;
+}) => {
+  if (filters.length > 8 || !Number.isInteger(limit) || limit < 1 || limit > 5) {
+    throw new SupabaseConnectorError("invalid_input");
+  }
+  const available = await actionTableDefinition(credentials, tableName);
+  assertActionColumns(available, [
+    ...columns,
+    ...filters.map((filter) => filter.column),
+  ]);
+  const query = new URLSearchParams({ select: columns.join(","), limit: String(limit) });
+  for (const filter of filters) {
+    query.append(filter.column, `eq.${String(filter.value)}`);
+  }
+  const response = await fetchSupabase(
+    `${credentials.projectUrl}/rest/v1/${encodeURIComponent(tableName)}?${query}`,
+    credentials.apiKey
+  );
+  return readActionResponse(response, "read_failed");
+};
+
+export const insertSupabaseActionRow = async ({
+  credentials,
+  returningColumns = [],
+  tableName,
+  values,
+}: {
+  credentials: SupabaseConnectorCredentials;
+  returningColumns?: string[];
+  tableName: string;
+  values: Record<string, SupabaseActionScalar>;
+}) => {
+  const columns = Object.keys(values);
+  const available = await actionTableDefinition(credentials, tableName);
+  const selection = [...new Set([...columns, ...returningColumns])];
+  assertActionColumns(available, selection);
+  const response = await fetchSupabase(
+    `${credentials.projectUrl}/rest/v1/${encodeURIComponent(tableName)}?select=${encodeURIComponent(selection.join(","))}`,
+    credentials.apiKey,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+      },
+      body: JSON.stringify(values),
+    }
+  );
+  const rows = await readActionResponse(response, "write_failed");
+  if (rows.length !== 1) throw new SupabaseConnectorError("write_failed");
+  return rows[0];
+};
+
+export const updateSupabaseActionRow = async ({
+  credentials,
+  match,
+  tableName,
+  values,
+}: {
+  credentials: SupabaseConnectorCredentials;
+  match: { column: string; value: SupabaseActionScalar };
+  tableName: string;
+  values: Record<string, SupabaseActionScalar>;
+}) => {
+  const columns = Object.keys(values);
+  const available = await actionTableDefinition(credentials, tableName);
+  assertActionColumns(available, [...columns, match.column]);
+  const query = new URLSearchParams({
+    select: [...new Set([...columns, match.column])].join(","),
+    [match.column]: `eq.${String(match.value)}`,
+  });
+  const response = await fetchSupabase(
+    `${credentials.projectUrl}/rest/v1/${encodeURIComponent(tableName)}?${query}`,
+    credentials.apiKey,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+      },
+      body: JSON.stringify(values),
+    }
+  );
+  const rows = await readActionResponse(response, "write_failed");
+  if (rows.length !== 1) throw new SupabaseConnectorError("write_failed");
+  return rows[0];
 };
