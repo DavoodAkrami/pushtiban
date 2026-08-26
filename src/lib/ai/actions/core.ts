@@ -209,6 +209,18 @@ export type ActionHandlingResult = {
   status?: ActionStatus | "rejected";
 };
 
+export class ActionPublicError extends Error {
+  readonly code: string;
+  readonly publicMessage: string;
+
+  constructor(code: string, publicMessage: string) {
+    super(code);
+    this.name = "ActionPublicError";
+    this.code = code;
+    this.publicMessage = publicMessage;
+  }
+}
+
 type ActionAuthorization =
   | { result: "rejected" | "disabled" | "verification" }
   | { result: "allowed"; configuration: ActionBusinessConfiguration };
@@ -374,11 +386,15 @@ export const createActionEngine = ({
         input
       );
       parsedResult = definition.resultSchema.parse(rawResult);
-    } catch {
-      await store.markFailed(execution.id, "execution_failed").catch(() => undefined);
+    } catch (error) {
+      const publicError =
+        error instanceof ActionPublicError ? error : null;
+      await store
+        .markFailed(execution.id, publicError?.code ?? "execution_failed")
+        .catch(() => undefined);
       return {
         handled: true,
-        text: TEXT.failed,
+        text: publicError?.publicMessage ?? TEXT.failed,
         actionKey: definition.key,
         status: "failed",
       };

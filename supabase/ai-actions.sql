@@ -120,7 +120,7 @@ end;
 $$;
 
 comment on table public.business_action_settings is
-  'Tenant-owned restrictions for code-registered AI actions. It cannot grant an unregistered action or weaken registry security.';
+  'Tenant-owned restrictions and mapped destinations for code-registered AI actions. It cannot grant an unregistered action or weaken registry security.';
 
 drop trigger if exists business_action_settings_set_updated_at
   on public.business_action_settings;
@@ -249,3 +249,830 @@ alter table public.support_messages
 create unique index if not exists support_messages_action_execution_key
   on public.support_messages (action_execution_id)
   where action_execution_id is not null;
+
+-- Internal Business Data actions use saved owner mappings, never model-selected
+-- field names. This helper validates one mapped field against the tenant-owned
+-- collection before a mutation RPC reads or writes it.
+create or replace function public.business_action_internal_field_key(
+  p_user_id uuid,
+  p_collection_id uuid,
+  p_mapping jsonb,
+  p_concept text,
+  p_types text[],
+  p_required boolean default true
+)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  field_key text;
+begin
+  if jsonb_typeof(p_mapping) <> 'object' then
+    raise exception 'Invalid internal action mapping.' using errcode = '22023';
+  end if;
+
+  field_key := nullif(btrim(p_mapping ->> p_concept), '');
+  if field_key is null then
+    if p_required then
+      raise exception 'Missing internal action field.' using errcode = '22023';
+    end if;
+    return null;
+  end if;
+
+  if not exists (
+    select 1
+    from public.business_data_fields field_definition
+    where field_definition.user_id = p_user_id
+      and field_definition.collection_id = p_collection_id
+      and field_definition.key = field_key
+      and field_definition.data_type = any(p_types)
+  ) then
+    raise exception 'Invalid internal action field.' using errcode = '22023';
+  end if;
+
+  return field_key;
+end;
+$$;
+
+revoke execute on function public.business_action_internal_field_key(
+  uuid, uuid, jsonb, text, text[], boolean
+) from public, anon, authenticated;
+grant execute on function public.business_action_internal_field_key(
+  uuid, uuid, jsonb, text, text[], boolean
+) to service_role;
+
+create or replace function public.business_data_check_availability_action(
+  p_user_id uuid,
+  p_date text,
+  p_time text,
+  p_party_size integer
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  target_collection_id uuid;
+  mapping jsonb;
+  date_key text;
+  time_key text;
+  available_key text;
+  remaining_key text;
+  matched_count integer;
+  record_values jsonb;
+  stated_available boolean;
+  remaining_capacity numeric;
+begin
+  if p_party_size < 1 or p_party_size > 100 then
+    raise exception 'Invalid requested capacity.' using errcode = '22023';
+  end if;
+
+  select setting.collection_id, setting.field_mapping
+  into target_collection_id, mapping
+  from public.business_action_settings setting
+  join public.business_data_collections collection
+    on collection.id = setting.collection_id
+   and collection.user_id = setting.user_id
+  where setting.user_id = p_user_id
+    and setting.action_key = 'check_availability'
+    and setting.source_id is null
+    and setting.configuration ->> 'destination' = 'internal_business_data'
+    and collection.status = 'active'
+    and collection.kind in ('availability', 'reservation');
+
+  if target_collection_id is null then
+    return jsonb_build_object(
+      'determined', false,
+      'available', null,
+      'remaining_capacity', null
+    );
+  end if;
+
+  date_key := public.business_action_internal_field_key(
+    p_user_id, target_collection_id, mapping, 'date',
+    array['date', 'datetime', 'text'], true
+  );
+  time_key := public.business_action_internal_field_key(
+    p_user_id, target_collection_id, mapping, 'time',
+    array['date', 'datetime', 'text'], true
+  );
+  available_key := public.business_action_internal_field_key(
+    p_user_id, target_collection_id, mapping, 'available',
+    array['boolean', 'select', 'text'], true
+  );
+  remaining_key := public.business_action_internal_field_key(
+    p_user_id, target_collection_id, mapping, 'remaining_capacity',
+    array['number'], false
+  );
+
+  select count(*), jsonb_agg(record.values) -> 0
+  into matched_count, record_values
+  from (
+    select candidate.values
+    from public.business_data_records candidate
+    where candidate.user_id = p_user_id
+      and candidate.collection_id = target_collection_id
+      and candidate.status = 'active'
+      and candidate.values ->> date_key = p_date
+      and candidate.values ->> time_key = p_time
+    limit 2
+  ) record;
+
+  if matched_count <> 1 then
+    return jsonb_build_object(
+      'determined', false,
+      'available', null,
+      'remaining_capacity', null
+    );
+  end if;
+
+  if jsonb_typeof(record_values -> available_key) = 'boolean' then
+    stated_available := (record_values ->> available_key)::boolean;
+  elsif jsonb_typeof(record_values -> available_key) = 'string' then
+    if lower(btrim(record_values ->> available_key)) in (
+      'true', 'yes', 'available', 'in stock', 'موجود', 'بله'
+    ) then
+      stated_available := true;
+    elsif lower(btrim(record_values ->> available_key)) in (
+      'false', 'no', 'unavailable', 'out of stock', 'ناموجود', 'خیر'
+    ) then
+      stated_available := false;
+    end if;
+  end if;
+
+  if remaining_key is not null
+     and jsonb_typeof(record_values -> remaining_key) = 'number' then
+    remaining_capacity := greatest(
+      0,
+      (record_values ->> remaining_key)::numeric
+    );
+  end if;
+
+  if stated_available is null then
+    return jsonb_build_object(
+      'determined', false,
+      'available', null,
+      'remaining_capacity', remaining_capacity
+    );
+  end if;
+
+  return jsonb_build_object(
+    'determined', true,
+    'available', stated_available and (
+      remaining_capacity is null or remaining_capacity >= p_party_size
+    ),
+    'remaining_capacity', remaining_capacity
+  );
+end;
+$$;
+
+revoke execute on function public.business_data_check_availability_action(
+  uuid, text, text, integer
+) from public, anon, authenticated;
+grant execute on function public.business_data_check_availability_action(
+  uuid, text, text, integer
+) to service_role;
+
+create or replace function public.business_data_create_reservation_action(
+  p_user_id uuid,
+  p_execution_id uuid,
+  p_date text,
+  p_time text,
+  p_party_size integer,
+  p_customer_name text,
+  p_customer_contact text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  target_collection_id uuid;
+  mapping jsonb;
+  initial_status text;
+  date_key text;
+  time_key text;
+  party_size_key text;
+  customer_name_key text;
+  customer_contact_key text;
+  execution_key text;
+  status_key text;
+  reservation_reference text := 'reservation_' || replace(p_execution_id::text, '-', '');
+  record_values jsonb;
+  existing_reference text;
+  availability_collection_id uuid;
+  availability_mapping jsonb;
+  availability_date_key text;
+  availability_time_key text;
+  available_key text;
+  remaining_key text;
+  availability_record_id uuid;
+  availability_record_ids uuid[];
+  availability_match_count integer;
+  availability_values jsonb;
+  stated_available boolean;
+  remaining_capacity numeric;
+begin
+  if p_party_size < 1 or p_party_size > 100
+     or char_length(btrim(p_customer_name)) not between 1 and 120
+     or char_length(btrim(p_customer_contact)) not between 1 and 160 then
+    raise exception 'Invalid reservation action input.' using errcode = '22023';
+  end if;
+
+  perform 1
+  from public.business_action_executions execution
+  where execution.id = p_execution_id
+    and execution.user_id = p_user_id
+    and execution.action_key = 'create_reservation'
+    and execution.status = 'executing'
+  for update;
+  if not found then
+    raise exception 'Reservation action execution is unavailable.' using errcode = '42501';
+  end if;
+
+  select setting.collection_id, setting.field_mapping,
+         nullif(btrim(setting.configuration ->> 'initialStatus'), '')
+  into target_collection_id, mapping, initial_status
+  from public.business_action_settings setting
+  join public.business_data_collections collection
+    on collection.id = setting.collection_id
+   and collection.user_id = setting.user_id
+  where setting.user_id = p_user_id
+    and setting.action_key = 'create_reservation'
+    and setting.source_id is null
+    and setting.configuration ->> 'destination' = 'internal_business_data'
+    and collection.status = 'active'
+    and collection.kind = 'reservation';
+
+  if target_collection_id is null then
+    raise exception 'Internal reservation configuration is unavailable.' using errcode = '22023';
+  end if;
+
+  select record.external_id into existing_reference
+  from public.business_data_records record
+  where record.user_id = p_user_id
+    and record.collection_id = target_collection_id
+    and record.external_id = reservation_reference
+  limit 1;
+  if existing_reference is not null then
+    return jsonb_build_object('status', 'created', 'reference', existing_reference);
+  end if;
+
+  date_key := public.business_action_internal_field_key(
+    p_user_id, target_collection_id, mapping, 'date',
+    array['date', 'datetime', 'text'], true
+  );
+  time_key := public.business_action_internal_field_key(
+    p_user_id, target_collection_id, mapping, 'time',
+    array['date', 'datetime', 'text'], true
+  );
+  party_size_key := public.business_action_internal_field_key(
+    p_user_id, target_collection_id, mapping, 'party_size', array['number'], true
+  );
+  customer_name_key := public.business_action_internal_field_key(
+    p_user_id, target_collection_id, mapping, 'customer_name',
+    array['text', 'long_text', 'select'], true
+  );
+  customer_contact_key := public.business_action_internal_field_key(
+    p_user_id, target_collection_id, mapping, 'customer_contact',
+    array['text', 'long_text', 'select'], true
+  );
+  execution_key := public.business_action_internal_field_key(
+    p_user_id, target_collection_id, mapping, 'execution_id',
+    array['text', 'long_text', 'select'], true
+  );
+  status_key := public.business_action_internal_field_key(
+    p_user_id, target_collection_id, mapping, 'status',
+    array['text', 'long_text', 'select'], false
+  );
+
+  select setting.collection_id, setting.field_mapping
+  into availability_collection_id, availability_mapping
+  from public.business_action_settings setting
+  join public.business_data_collections collection
+    on collection.id = setting.collection_id
+   and collection.user_id = setting.user_id
+  where setting.user_id = p_user_id
+    and setting.action_key = 'check_availability'
+    and setting.source_id is null
+    and setting.configuration ->> 'destination' = 'internal_business_data'
+    and collection.status = 'active'
+    and collection.kind in ('availability', 'reservation');
+
+  if availability_collection_id is not null then
+    availability_date_key := public.business_action_internal_field_key(
+      p_user_id, availability_collection_id, availability_mapping, 'date',
+      array['date', 'datetime', 'text'], true
+    );
+    availability_time_key := public.business_action_internal_field_key(
+      p_user_id, availability_collection_id, availability_mapping, 'time',
+      array['date', 'datetime', 'text'], true
+    );
+    available_key := public.business_action_internal_field_key(
+      p_user_id, availability_collection_id, availability_mapping, 'available',
+      array['boolean', 'select', 'text'], true
+    );
+    remaining_key := public.business_action_internal_field_key(
+      p_user_id, availability_collection_id, availability_mapping,
+      'remaining_capacity', array['number'], false
+    );
+
+    with matching_records as (
+      select record.id, record.values
+      from public.business_data_records record
+      where record.user_id = p_user_id
+        and record.collection_id = availability_collection_id
+        and record.status = 'active'
+        and record.values ->> availability_date_key = p_date
+        and record.values ->> availability_time_key = p_time
+      order by record.id
+      limit 2
+      for update
+    )
+    select count(*), array_agg(record.id order by record.id),
+           jsonb_agg(record.values order by record.id) -> 0
+    into availability_match_count, availability_record_ids,
+         availability_values
+    from matching_records record;
+
+    if availability_match_count <> 1 then
+      return jsonb_build_object('status', 'unavailable');
+    end if;
+    availability_record_id := availability_record_ids[1];
+
+    if jsonb_typeof(availability_values -> available_key) = 'boolean' then
+      stated_available := (availability_values ->> available_key)::boolean;
+    elsif jsonb_typeof(availability_values -> available_key) = 'string' then
+      stated_available := lower(btrim(availability_values ->> available_key)) in (
+        'true', 'yes', 'available', 'in stock', 'موجود', 'بله'
+      );
+    end if;
+    if stated_available is distinct from true then
+      return jsonb_build_object('status', 'unavailable');
+    end if;
+
+    if remaining_key is not null then
+      if jsonb_typeof(availability_values -> remaining_key) <> 'number' then
+        return jsonb_build_object('status', 'unavailable');
+      end if;
+      remaining_capacity := (availability_values ->> remaining_key)::numeric;
+      if remaining_capacity < p_party_size then
+        return jsonb_build_object('status', 'unavailable');
+      end if;
+      update public.business_data_records
+      set values = jsonb_set(
+        values,
+        array[remaining_key],
+        to_jsonb(remaining_capacity - p_party_size),
+        false
+      )
+      where id = availability_record_id
+        and user_id = p_user_id
+        and collection_id = availability_collection_id;
+    end if;
+  end if;
+
+  record_values := jsonb_build_object(
+    date_key, p_date,
+    time_key, p_time,
+    party_size_key, p_party_size,
+    customer_name_key, btrim(p_customer_name),
+    customer_contact_key, btrim(p_customer_contact),
+    execution_key, p_execution_id::text
+  );
+  if status_key is not null then
+    if initial_status is null then
+      raise exception 'Initial reservation status is missing.' using errcode = '22023';
+    end if;
+    record_values := record_values || jsonb_build_object(status_key, initial_status);
+  end if;
+
+  insert into public.business_data_records (
+    user_id, collection_id, source_id, external_id, values, status
+  ) values (
+    p_user_id, target_collection_id, null, reservation_reference,
+    record_values, 'active'
+  );
+
+  return jsonb_build_object('status', 'created', 'reference', reservation_reference);
+end;
+$$;
+
+revoke execute on function public.business_data_create_reservation_action(
+  uuid, uuid, text, text, integer, text, text
+) from public, anon, authenticated;
+grant execute on function public.business_data_create_reservation_action(
+  uuid, uuid, text, text, integer, text, text
+) to service_role;
+
+create or replace function public.business_data_create_order_action(
+  p_user_id uuid,
+  p_execution_id uuid,
+  p_product_record_id uuid,
+  p_expected_product_reference text,
+  p_expected_unit_price numeric,
+  p_quantity integer,
+  p_customer_name text,
+  p_customer_contact text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  order_collection_id uuid;
+  product_collection_id uuid;
+  mapping jsonb;
+  initial_status text;
+  stock_tracking_enabled boolean;
+  product_name_key text;
+  product_reference_key text;
+  product_price_key text;
+  product_currency_key text;
+  product_available_key text;
+  product_stock_key text;
+  order_product_reference_key text;
+  order_quantity_key text;
+  order_unit_price_key text;
+  order_total_price_key text;
+  order_customer_name_key text;
+  order_customer_contact_key text;
+  execution_key text;
+  order_status_key text;
+  product_values jsonb;
+  product_external_id text;
+  product_reference text;
+  product_name text;
+  currency text;
+  current_price numeric;
+  current_stock numeric;
+  stated_available boolean;
+  order_reference text := 'order_' || replace(p_execution_id::text, '-', '');
+  order_values jsonb;
+  existing_reference text;
+begin
+  if p_quantity < 1 or p_quantity > 50
+     or p_expected_unit_price < 0
+     or char_length(btrim(p_expected_product_reference)) not between 1 and 200
+     or char_length(btrim(p_customer_name)) not between 1 and 120
+     or char_length(btrim(p_customer_contact)) not between 1 and 160 then
+    raise exception 'Invalid order action input.' using errcode = '22023';
+  end if;
+
+  perform 1
+  from public.business_action_executions execution
+  where execution.id = p_execution_id
+    and execution.user_id = p_user_id
+    and execution.action_key = 'create_order'
+    and execution.status = 'executing'
+  for update;
+  if not found then
+    raise exception 'Order action execution is unavailable.' using errcode = '42501';
+  end if;
+
+  select setting.collection_id, setting.related_collection_id,
+         setting.field_mapping,
+         nullif(btrim(setting.configuration ->> 'initialStatus'), ''),
+         case
+           when jsonb_typeof(
+             setting.configuration -> 'stockTrackingEnabled'
+           ) = 'boolean'
+             then (setting.configuration ->> 'stockTrackingEnabled')::boolean
+           else true
+         end
+  into order_collection_id, product_collection_id, mapping,
+       initial_status, stock_tracking_enabled
+  from public.business_action_settings setting
+  join public.business_data_collections orders
+    on orders.id = setting.collection_id
+   and orders.user_id = setting.user_id
+  join public.business_data_collections products
+    on products.id = setting.related_collection_id
+   and products.user_id = setting.user_id
+  where setting.user_id = p_user_id
+    and setting.action_key = 'create_order'
+    and setting.source_id is null
+    and setting.configuration ->> 'destination' = 'internal_business_data'
+    and orders.status = 'active'
+    and orders.kind = 'order'
+    and products.status = 'active'
+    and products.kind in ('product', 'menu_item')
+    and products.access_scope = 'public_catalog'
+    and products.ai_enabled;
+
+  if order_collection_id is null or product_collection_id is null then
+    raise exception 'Internal order configuration is unavailable.' using errcode = '22023';
+  end if;
+
+  select record.external_id into existing_reference
+  from public.business_data_records record
+  where record.user_id = p_user_id
+    and record.collection_id = order_collection_id
+    and record.external_id = order_reference
+  limit 1;
+  if existing_reference is not null then
+    return jsonb_build_object('status', 'created', 'reference', existing_reference);
+  end if;
+
+  product_name_key := public.business_action_internal_field_key(
+    p_user_id, product_collection_id, mapping, 'product_name',
+    array['text', 'long_text', 'select'], true
+  );
+  product_reference_key := public.business_action_internal_field_key(
+    p_user_id, product_collection_id, mapping, 'product_reference',
+    array['text', 'long_text', 'select'], true
+  );
+  product_price_key := public.business_action_internal_field_key(
+    p_user_id, product_collection_id, mapping, 'product_price',
+    array['number', 'currency'], true
+  );
+  product_currency_key := public.business_action_internal_field_key(
+    p_user_id, product_collection_id, mapping, 'product_currency',
+    array['text', 'long_text', 'select'], false
+  );
+  product_available_key := public.business_action_internal_field_key(
+    p_user_id, product_collection_id, mapping, 'product_available',
+    array['boolean', 'select', 'text'], false
+  );
+  product_stock_key := public.business_action_internal_field_key(
+    p_user_id, product_collection_id, mapping, 'product_stock',
+    array['number'], stock_tracking_enabled
+  );
+
+  order_product_reference_key := public.business_action_internal_field_key(
+    p_user_id, order_collection_id, mapping, 'destination_product_reference',
+    array['text', 'long_text', 'select'], true
+  );
+  order_quantity_key := public.business_action_internal_field_key(
+    p_user_id, order_collection_id, mapping, 'destination_quantity',
+    array['number'], true
+  );
+  order_unit_price_key := public.business_action_internal_field_key(
+    p_user_id, order_collection_id, mapping, 'destination_unit_price',
+    array['number', 'currency'], true
+  );
+  order_total_price_key := public.business_action_internal_field_key(
+    p_user_id, order_collection_id, mapping, 'destination_total_price',
+    array['number', 'currency'], false
+  );
+  order_customer_name_key := public.business_action_internal_field_key(
+    p_user_id, order_collection_id, mapping, 'destination_customer_name',
+    array['text', 'long_text', 'select'], true
+  );
+  order_customer_contact_key := public.business_action_internal_field_key(
+    p_user_id, order_collection_id, mapping, 'destination_customer_contact',
+    array['text', 'long_text', 'select'], true
+  );
+  execution_key := public.business_action_internal_field_key(
+    p_user_id, order_collection_id, mapping, 'execution_id',
+    array['text', 'long_text', 'select'], true
+  );
+  order_status_key := public.business_action_internal_field_key(
+    p_user_id, order_collection_id, mapping, 'destination_status',
+    array['text', 'long_text', 'select'], false
+  );
+
+  select record.values, record.external_id
+  into product_values, product_external_id
+  from public.business_data_records record
+  where record.id = p_product_record_id
+    and record.user_id = p_user_id
+    and record.collection_id = product_collection_id
+    and record.status = 'active'
+  for update;
+  if product_values is null then
+    return jsonb_build_object('status', 'unavailable');
+  end if;
+
+  product_name := nullif(btrim(product_values ->> product_name_key), '');
+  product_reference := coalesce(
+    nullif(btrim(product_values ->> product_reference_key), ''),
+    nullif(btrim(product_external_id), '')
+  );
+  if product_name is null
+     or product_reference is distinct from btrim(p_expected_product_reference)
+     or jsonb_typeof(product_values -> product_price_key) <> 'number' then
+    return jsonb_build_object('status', 'unavailable');
+  end if;
+
+  current_price := (product_values ->> product_price_key)::numeric;
+  if product_currency_key is not null then
+    currency := nullif(btrim(product_values ->> product_currency_key), '');
+  end if;
+  if current_price is distinct from p_expected_unit_price then
+    return jsonb_build_object(
+      'status', 'price_changed',
+      'current_price', current_price,
+      'currency', currency
+    );
+  end if;
+
+  if product_available_key is not null then
+    if jsonb_typeof(product_values -> product_available_key) = 'boolean' then
+      stated_available := (product_values ->> product_available_key)::boolean;
+    elsif jsonb_typeof(product_values -> product_available_key) = 'string' then
+      stated_available := lower(btrim(product_values ->> product_available_key)) in (
+        'true', 'yes', 'available', 'in stock', 'موجود', 'بله'
+      );
+    end if;
+    if stated_available is distinct from true then
+      return jsonb_build_object('status', 'unavailable');
+    end if;
+  end if;
+
+  if stock_tracking_enabled then
+    if jsonb_typeof(product_values -> product_stock_key) <> 'number' then
+      return jsonb_build_object('status', 'insufficient_stock');
+    end if;
+    current_stock := (product_values ->> product_stock_key)::numeric;
+    if current_stock < p_quantity then
+      return jsonb_build_object('status', 'insufficient_stock');
+    end if;
+    update public.business_data_records
+    set values = jsonb_set(
+      values,
+      array[product_stock_key],
+      to_jsonb(current_stock - p_quantity),
+      false
+    )
+    where id = p_product_record_id
+      and user_id = p_user_id
+      and collection_id = product_collection_id;
+  end if;
+
+  order_values := jsonb_build_object(
+    order_product_reference_key, product_reference,
+    order_quantity_key, p_quantity,
+    order_unit_price_key, current_price,
+    order_customer_name_key, btrim(p_customer_name),
+    order_customer_contact_key, btrim(p_customer_contact),
+    execution_key, p_execution_id::text
+  );
+  if order_total_price_key is not null then
+    order_values := order_values || jsonb_build_object(
+      order_total_price_key, current_price * p_quantity
+    );
+  end if;
+  if order_status_key is not null then
+    if initial_status is null then
+      raise exception 'Initial order status is missing.' using errcode = '22023';
+    end if;
+    order_values := order_values || jsonb_build_object(
+      order_status_key, initial_status
+    );
+  end if;
+
+  insert into public.business_data_records (
+    user_id, collection_id, source_id, external_id, values, status
+  ) values (
+    p_user_id, order_collection_id, null, order_reference, order_values, 'active'
+  );
+
+  return jsonb_build_object('status', 'created', 'reference', order_reference);
+end;
+$$;
+
+revoke execute on function public.business_data_create_order_action(
+  uuid, uuid, uuid, text, numeric, integer, text, text
+) from public, anon, authenticated;
+grant execute on function public.business_data_create_order_action(
+  uuid, uuid, uuid, text, numeric, integer, text, text
+) to service_role;
+
+create or replace function public.business_data_cancel_action(
+  p_user_id uuid,
+  p_execution_id uuid,
+  p_action_key text,
+  p_record_id uuid,
+  p_channel text,
+  p_connection_id uuid,
+  p_customer_identity_hash text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  target_collection_id uuid;
+  mapping jsonb;
+  cancellation_value text;
+  status_key text;
+  record_values jsonb;
+  record_reference text;
+  current_status text;
+  expected_kind text;
+begin
+  if p_action_key not in ('cancel_order', 'cancel_reservation')
+     or p_channel not in ('telegram', 'instagram')
+     or p_customer_identity_hash !~ '^[0-9a-f]{64}$' then
+    raise exception 'Invalid cancellation action input.' using errcode = '22023';
+  end if;
+  expected_kind := case
+    when p_action_key = 'cancel_order' then 'order'
+    else 'reservation'
+  end;
+
+  perform 1
+  from public.business_action_executions execution
+  where execution.id = p_execution_id
+    and execution.user_id = p_user_id
+    and execution.action_key = p_action_key
+    and execution.status = 'executing'
+  for update;
+  if not found then
+    raise exception 'Cancellation execution is unavailable.' using errcode = '42501';
+  end if;
+
+  select setting.collection_id, setting.field_mapping,
+         nullif(btrim(setting.configuration ->> 'cancellationValue'), '')
+  into target_collection_id, mapping, cancellation_value
+  from public.business_action_settings setting
+  join public.business_data_collections collection
+    on collection.id = setting.collection_id
+   and collection.user_id = setting.user_id
+  where setting.user_id = p_user_id
+    and setting.action_key = p_action_key
+    and setting.source_id is null
+    and setting.configuration ->> 'destination' = 'internal_business_data'
+    and collection.status = 'active'
+    and collection.kind = expected_kind
+    and collection.access_scope = 'verified_customer'
+    and collection.ai_enabled;
+
+  if target_collection_id is null
+     or cancellation_value is null
+     or char_length(cancellation_value) > 80 then
+    raise exception 'Internal cancellation configuration is unavailable.' using errcode = '22023';
+  end if;
+
+  if not exists (
+    select 1
+    from public.business_data_verified_customer_sessions session
+    where session.user_id = p_user_id
+      and session.collection_id = target_collection_id
+      and session.record_id = p_record_id
+      and session.channel = p_channel
+      and session.connection_id = p_connection_id
+      and session.customer_identity_hash = p_customer_identity_hash
+      and session.expires_at > now()
+  ) then
+    raise exception 'Verified customer session is unavailable.' using errcode = '42501';
+  end if;
+
+  status_key := public.business_action_internal_field_key(
+    p_user_id, target_collection_id, mapping, 'status',
+    array['text', 'long_text', 'select'], true
+  );
+
+  select record.values,
+         coalesce(nullif(btrim(record.external_id), ''), record.id::text)
+  into record_values, record_reference
+  from public.business_data_records record
+  where record.id = p_record_id
+    and record.user_id = p_user_id
+    and record.collection_id = target_collection_id
+    and record.status = 'active'
+  for update;
+  if record_values is null then
+    raise exception 'Verified cancellation record is unavailable.' using errcode = '42501';
+  end if;
+
+  current_status := nullif(lower(btrim(record_values ->> status_key)), '');
+  if current_status = lower(cancellation_value) then
+    return jsonb_build_object('status', 'cancelled', 'reference', record_reference);
+  end if;
+  if current_status in (
+    'cancelled', 'canceled', 'completed', 'delivered', 'shipped',
+    'لغو شده', 'تکمیل شده', 'تحویل شده', 'ارسال شده'
+  ) then
+    raise exception 'Current status does not allow cancellation.' using errcode = '55000';
+  end if;
+
+  update public.business_data_records
+  set values = jsonb_set(
+    values,
+    array[status_key],
+    to_jsonb(cancellation_value),
+    false
+  )
+  where id = p_record_id
+    and user_id = p_user_id
+    and collection_id = target_collection_id;
+
+  return jsonb_build_object('status', 'cancelled', 'reference', record_reference);
+end;
+$$;
+
+revoke execute on function public.business_data_cancel_action(
+  uuid, uuid, text, uuid, text, uuid, text
+) from public, anon, authenticated;
+grant execute on function public.business_data_cancel_action(
+  uuid, uuid, text, uuid, text, uuid, text
+) to service_role;

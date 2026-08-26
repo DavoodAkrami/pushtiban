@@ -15,6 +15,10 @@ export type BusinessActionKey =
   | "create_order"
   | "cancel_order";
 
+export type BusinessActionDestination =
+  | "internal_business_data"
+  | "external_supabase";
+
 export type BusinessActionFieldConcept = {
   key: string;
   label: string;
@@ -114,6 +118,7 @@ export type BusinessActionCatalogField = {
   label: string;
   type: BusinessDataFieldType;
   role: BusinessDataFieldRole;
+  required: boolean;
 };
 
 type BusinessActionCatalogSource = {
@@ -143,13 +148,16 @@ export type StoredBusinessActionConfiguration = {
   relatedCollectionId: string | null;
   fieldMapping: Record<string, string>;
   cancellationValue: string | null;
+  initialStatus: string | null;
+  destination: BusinessActionDestination;
+  stockTrackingEnabled: boolean;
 };
 
 export type ResolvedBusinessActionConfiguration = StoredBusinessActionConfiguration & {
   actionKey: BusinessActionKey;
   primary: BusinessActionCatalogCollection;
   related: BusinessActionCatalogCollection | null;
-  source: BusinessActionCatalogSource;
+  source: BusinessActionCatalogSource | null;
 };
 
 const configurationCache = new Map<
@@ -180,6 +188,7 @@ type FieldRow = {
   label: string;
   data_type: BusinessDataFieldType;
   semantic_role: BusinessDataFieldRole;
+  required: boolean;
 };
 
 type SourceRow = {
@@ -210,7 +219,7 @@ const loadCatalog = async (userId: string): Promise<BusinessActionCatalogCollect
   const [fieldResult, sourceResult, privateResult] = await Promise.all([
     admin
       .from("business_data_fields")
-      .select("collection_id, key, label, data_type, semantic_role")
+      .select("collection_id, key, label, data_type, semantic_role, required")
       .eq("user_id", userId)
       .in("collection_id", ids)
       .order("position", { ascending: true }),
@@ -257,6 +266,7 @@ const loadCatalog = async (userId: string): Promise<BusinessActionCatalogCollect
           label: field.label,
           type: field.data_type,
           role: field.semantic_role,
+          required: field.required,
         })),
       source:
         sourceRow && typeof tableName === "string" && tableName
@@ -322,24 +332,60 @@ const compatibleCollection = (
       (!accessScopes || accessScopes.includes(collection.accessScope))
   );
 
+const isBusinessActionDestination = (
+  value: unknown
+): value is BusinessActionDestination =>
+  value === "internal_business_data" || value === "external_supabase";
+
 const resolveAgainstCatalog = ({
   actionKey,
   cancellationValue,
   collectionId,
+  destination,
   fieldMapping,
+  initialStatus,
   relatedCollectionId,
   sourceId,
+  stockTrackingEnabled,
 }: StoredBusinessActionConfiguration & { actionKey: BusinessActionKey }, catalog: BusinessActionCatalogCollection[]) => {
   const spec = BUSINESS_ACTION_CONFIGURATION_SPECS[actionKey];
   const primary = catalog.find((collection) => collection.id === collectionId);
   const related = relatedCollectionId
     ? catalog.find((collection) => collection.id === relatedCollectionId) ?? null
     : null;
-  const source = primary?.source;
   if (
-    !compatibleCollection(primary, spec.primaryKinds, spec.primaryAccessScopes) ||
-    !source ||
-    source.id !== sourceId ||
+    !primary ||
+    !compatibleCollection(primary, spec.primaryKinds, spec.primaryAccessScopes)
+  ) {
+    return null;
+  }
+  const source = primary.source;
+  const usesExternalSource = destination === "external_supabase";
+  const requiresTrackedStock =
+    actionKey === "create_order" &&
+    destination === "internal_business_data" &&
+    stockTrackingEnabled;
+  const statusConcept =
+    actionKey === "create_order" ? "destination_status" : "status";
+  const writesInitialStatus =
+    actionKey === "create_order" || actionKey === "create_reservation";
+  const primaryMappings = spec.fields
+    .filter((concept) => concept.side === "primary")
+    .map((concept) => fieldMapping[concept.key])
+    .filter(Boolean);
+  const relatedMappings = spec.fields
+    .filter((concept) => concept.side === "related")
+    .map((concept) => fieldMapping[concept.key])
+    .filter(Boolean);
+  const primaryMappedFieldKeys = new Set(
+    spec.fields
+      .filter((concept) => concept.side === "primary")
+      .map((concept) => fieldMapping[concept.key])
+      .filter(Boolean)
+  );
+  if (
+    (usesExternalSource && (!source || source.id !== sourceId)) ||
+    (!usesExternalSource && sourceId !== null) ||
     (spec.primaryAccessScopes?.includes("verified_customer") &&
       (!primary.privateAccessReady || !primary.aiEnabled)) ||
     (spec.relatedKinds &&
@@ -350,24 +396,43 @@ const resolveAgainstCatalog = ({
         concept.required &&
         !fieldForConcept(concept, fieldMapping, primary, related)
     ) ||
+    (requiresTrackedStock &&
+      !fieldForConcept(
+        spec.fields.find((concept) => concept.key === "product_stock")!,
+        fieldMapping,
+        primary,
+        related
+      )) ||
+    new Set(primaryMappings).size !== primaryMappings.length ||
+    new Set(relatedMappings).size !== relatedMappings.length ||
+    (destination === "internal_business_data" &&
+      primary.fields.some(
+        (field) => field.required && !primaryMappedFieldKeys.has(field.key)
+      )) ||
     spec.fields.some(
       (concept) =>
+        usesExternalSource &&
         concept.side === "primary" &&
         fieldMapping[concept.key] &&
-        !Object.values(source.fieldMapping).includes(
+        !Object.values(source!.fieldMapping).includes(
           fieldMapping[concept.key]
         )
     ) ||
     (spec.cancellationValue &&
-      (!cancellationValue || cancellationValue.length > 80))
+      (!cancellationValue || cancellationValue.length > 80)) ||
+    (destination === "internal_business_data" &&
+      writesInitialStatus &&
+      fieldMapping[statusConcept] &&
+      (!initialStatus || initialStatus.length > 80))
   ) {
     return null;
   }
   if (
+    usesExternalSource &&
     spec.primaryAccessScopes?.includes("verified_customer") &&
-    (!source.externalIdField ||
-      !Object.values(source.fieldMapping).includes(
-        source.externalIdField
+    (!source!.externalIdField ||
+      !Object.values(source!.fieldMapping).includes(
+        source!.externalIdField
       ))
   ) {
     return null;
@@ -375,13 +440,16 @@ const resolveAgainstCatalog = ({
   return {
     actionKey,
     collectionId: primary.id,
-    sourceId: source.id,
+    sourceId: usesExternalSource ? source!.id : null,
     relatedCollectionId: related?.id ?? null,
     fieldMapping,
     cancellationValue,
+    initialStatus,
+    destination,
+    stockTrackingEnabled,
     primary,
     related,
-    source,
+    source: usesExternalSource ? source! : null,
   } satisfies ResolvedBusinessActionConfiguration;
 };
 
@@ -410,12 +478,18 @@ export const resolveBusinessActionConfigurations = async (userId: string) => {
     const fieldMapping = parseFieldMapping(row.field_mapping);
     const configuration = isPlainObject(row.configuration) ? row.configuration : {};
     if (!fieldMapping) continue;
+    const sourceId = typeof row.source_id === "string" ? row.source_id : null;
+    const destination = isBusinessActionDestination(configuration.destination)
+      ? configuration.destination
+      : sourceId
+        ? "external_supabase"
+        : "internal_business_data";
     const candidate = resolveAgainstCatalog(
       {
         actionKey: row.action_key,
         collectionId:
           typeof row.collection_id === "string" ? row.collection_id : null,
-        sourceId: typeof row.source_id === "string" ? row.source_id : null,
+        sourceId,
         relatedCollectionId:
           typeof row.related_collection_id === "string"
             ? row.related_collection_id
@@ -425,6 +499,16 @@ export const resolveBusinessActionConfigurations = async (userId: string) => {
           typeof configuration.cancellationValue === "string"
             ? configuration.cancellationValue
             : null,
+        initialStatus:
+          typeof configuration.initialStatus === "string"
+            ? configuration.initialStatus
+            : null,
+        destination,
+        stockTrackingEnabled:
+          typeof configuration.stockTrackingEnabled === "boolean"
+            ? configuration.stockTrackingEnabled
+            : destination === "internal_business_data" &&
+              row.action_key === "create_order",
       },
       catalog
     );
@@ -466,18 +550,31 @@ export const parseBusinessActionConfigurationUpdate = async ({
     typeof input.cancellationValue === "string"
       ? input.cancellationValue.trim()
       : null;
-  if (!collectionId || !fieldMapping) return null;
+  const initialStatus =
+    typeof input.initialStatus === "string" ? input.initialStatus.trim() : null;
+  const destination = isBusinessActionDestination(input.destination)
+    ? input.destination
+    : null;
+  const stockTrackingEnabled =
+    typeof input.stockTrackingEnabled === "boolean"
+      ? input.stockTrackingEnabled
+      : destination === "internal_business_data" && actionKey === "create_order";
+  if (!collectionId || !fieldMapping || !destination) return null;
   const catalog = await loadCatalog(userId);
   const primary = catalog.find((collection) => collection.id === collectionId);
-  if (!primary?.source) return null;
+  if (!primary) return null;
   return resolveAgainstCatalog(
     {
       actionKey,
       collectionId,
-      sourceId: primary.source.id,
+      sourceId:
+        destination === "external_supabase" ? primary.source?.id ?? null : null,
       relatedCollectionId,
       fieldMapping,
       cancellationValue,
+      initialStatus,
+      destination,
+      stockTrackingEnabled,
     },
     catalog
   );
@@ -500,6 +597,151 @@ export const listSafeBusinessActionCatalog = async (userId: string) =>
       : null,
     privateAccessReady: collection.privateAccessReady,
   }));
+
+export type BusinessActionPrerequisite = {
+  code:
+    | "ready"
+    | "missing_products"
+    | "missing_orders"
+    | "missing_reservations"
+    | "missing_fields"
+    | "missing_private_access";
+  statusLabel: string;
+  message: string;
+  missingFields: string[];
+  cta: { label: string; href: string } | null;
+};
+
+type PrerequisiteCatalogCollection = Pick<
+  BusinessActionCatalogCollection,
+  "id" | "kind" | "accessScope" | "aiEnabled" | "privateAccessReady"
+>;
+
+const missingCollectionPrerequisite = (
+  actionKey: BusinessActionKey,
+  code: "missing_products" | "missing_orders" | "missing_reservations"
+): BusinessActionPrerequisite => {
+  if (code === "missing_products") {
+    return {
+      code,
+      statusLabel: "نیاز به مجموعه محصولات",
+      message: "برای ثبت سفارش، ابتدا مجموعه «محصولات» را ایجاد کنید.",
+      missingFields: [],
+      cta: { label: "ایجاد مجموعه محصولات", href: "/dashboard/data" },
+    };
+  }
+  if (code === "missing_orders") {
+    return {
+      code,
+      statusLabel: "نیاز به مجموعه سفارش‌ها",
+      message:
+        actionKey === "cancel_order"
+          ? "برای لغو سفارش، ابتدا مجموعه «سفارش‌ها» را در داده‌های کسب‌وکار ایجاد کنید."
+          : "برای ثبت سفارش، به یک مجموعه «سفارش‌ها» نیاز دارید تا سفارش‌های جدید در آن ذخیره شوند.",
+      missingFields: [],
+      cta: { label: "ایجاد مجموعه سفارش‌ها", href: "/dashboard/data" },
+    };
+  }
+  return {
+    code,
+    statusLabel: "نیاز به مجموعه رزروها",
+    message: "برای فعال کردن رزرو، ابتدا مجموعه «رزروها» را در داده‌های کسب‌وکار ایجاد کنید.",
+    missingFields: [],
+    cta: { label: "ایجاد مجموعه رزروها", href: "/dashboard/data" },
+  };
+};
+
+export const buildBusinessActionPrerequisite = ({
+  actionKey,
+  catalog,
+  configuration,
+}: {
+  actionKey: BusinessActionKey;
+  catalog: PrerequisiteCatalogCollection[];
+  configuration: { collectionId: string } | null;
+}): BusinessActionPrerequisite => {
+  const spec = BUSINESS_ACTION_CONFIGURATION_SPECS[actionKey];
+  const primaryCollections = catalog.filter((collection) =>
+    spec.primaryKinds.includes(collection.kind)
+  );
+  const relatedCollections = spec.relatedKinds
+    ? catalog.filter(
+        (collection) =>
+          spec.relatedKinds!.includes(collection.kind) &&
+          (!spec.relatedAccessScopes ||
+            spec.relatedAccessScopes.includes(collection.accessScope)) &&
+          collection.aiEnabled
+      )
+    : [];
+
+  if (actionKey === "create_order" && relatedCollections.length === 0) {
+    return missingCollectionPrerequisite(actionKey, "missing_products");
+  }
+  if (
+    (actionKey === "create_order" || actionKey === "cancel_order") &&
+    primaryCollections.length === 0
+  ) {
+    return missingCollectionPrerequisite(actionKey, "missing_orders");
+  }
+  if (
+    ["check_availability", "create_reservation", "cancel_reservation"].includes(
+      actionKey
+    ) &&
+    primaryCollections.length === 0
+  ) {
+    return missingCollectionPrerequisite(actionKey, "missing_reservations");
+  }
+
+  if (spec.primaryAccessScopes?.includes("verified_customer")) {
+    const selected =
+      primaryCollections.find(
+        (collection) => collection.id === configuration?.collectionId
+      ) ?? primaryCollections[0];
+    if (!selected?.privateAccessReady || !selected.aiEnabled) {
+      return {
+        code: "missing_private_access",
+        statusLabel: "نیاز به تنظیم تأیید هویت",
+        message:
+          actionKey === "cancel_order"
+            ? "برای لغو سفارش، ابتدا دسترسی خصوصی مجموعه سفارش‌ها را تنظیم کنید تا پشتیبان فقط سفارش همان مشتری را تغییر دهد."
+            : "برای لغو رزرو، ابتدا دسترسی خصوصی مجموعه رزروها را تنظیم کنید تا پشتیبان فقط رزرو همان مشتری را تغییر دهد.",
+        missingFields: [],
+        cta: {
+          label: "تنظیم تأیید هویت",
+          href: `/dashboard/data/${selected?.id ?? ""}/structure#private-access-heading`,
+        },
+      };
+    }
+  }
+
+  if (!configuration) {
+    return {
+      code: "missing_fields",
+      statusLabel: "نیاز به تکمیل فیلدها",
+      message:
+        actionKey === "create_order"
+          ? "چند فیلد موردنیاز برای ثبت سفارش هنوز مشخص نشده‌اند."
+          : actionKey === "create_reservation"
+            ? "برای ثبت رزرو، اطلاعات موردنیاز را در مجموعه رزروها مشخص کنید."
+            : "فیلدهای موردنیاز این اقدام هنوز مشخص نشده‌اند.",
+      missingFields: spec.fields
+        .filter((field) => field.required)
+        .map((field) => field.label),
+      cta: {
+        label: "تکمیل تنظیمات",
+        href: `#action-${actionKey}-configuration`,
+      },
+    };
+  }
+
+  return {
+    code: "ready",
+    statusLabel: "آماده فعال‌سازی",
+    message: "مجموعه‌ها و فیلدهای موردنیاز آماده‌اند.",
+    missingFields: [],
+    cta: null,
+  };
+};
 
 export const isBusinessActionKey = (value: string): value is BusinessActionKey =>
   Object.hasOwn(BUSINESS_ACTION_CONFIGURATION_SPECS, value);

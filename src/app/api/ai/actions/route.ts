@@ -6,6 +6,7 @@ import {
 import { isActionSettingsSetupError } from "@/lib/ai/actions/settings";
 import {
   BUSINESS_ACTION_CONFIGURATION_SPECS,
+  buildBusinessActionPrerequisite,
   invalidateBusinessActionConfigurations,
   isBusinessActionKey,
   listSafeBusinessActionCatalog,
@@ -27,6 +28,21 @@ const hasValidOrigin = (request: NextRequest) => {
   return !origin || origin === new URL(request.url).origin;
 };
 
+const withPrerequisites = (
+  actions: Awaited<ReturnType<typeof listSafeActionSettings>>,
+  catalog: Awaited<ReturnType<typeof listSafeBusinessActionCatalog>>
+) =>
+  actions.map((action) => ({
+    ...action,
+    prerequisite: isBusinessActionKey(action.key)
+      ? buildBusinessActionPrerequisite({
+          actionKey: action.key,
+          catalog,
+          configuration: action.configuration,
+        })
+      : null,
+  }));
+
 /** GET /api/ai/actions — sanitized registry metadata for the signed-in owner. */
 export const GET = async () => {
   const supabase = await createClient();
@@ -41,7 +57,7 @@ export const GET = async () => {
       listSafeBusinessActionCatalog(user.id),
     ]);
     return NextResponse.json({
-      actions,
+      actions: withPrerequisites(actions, catalog),
       catalog,
       configurationSpecs: BUSINESS_ACTION_CONFIGURATION_SPECS,
     });
@@ -97,7 +113,7 @@ export const PUT = async (request: NextRequest) => {
       : null;
   if (businessAction && body.configuration !== undefined && !parsedConfiguration) {
     return jsonError(
-      "منبع یا نگاشت فیلدهای این اقدام کامل و معتبر نیست.",
+      "محل انجام یا فیلدهای این اقدام کامل و معتبر نیست.",
       400
     );
   }
@@ -107,7 +123,7 @@ export const PUT = async (request: NextRequest) => {
       : null;
   if (businessAction && body.enabled === true && !parsedConfiguration && !currentCapability) {
     return jsonError(
-      "پیش از فعال‌سازی، منبع و فیلدهای لازم این اقدام را تنظیم کنید.",
+      "پیش از فعال‌سازی، مجموعه‌ها و فیلدهای لازم این اقدام را تنظیم کنید.",
       409
     );
   }
@@ -125,6 +141,10 @@ export const PUT = async (request: NextRequest) => {
             field_mapping: parsedConfiguration.fieldMapping,
             configuration: {
               cancellationValue: parsedConfiguration.cancellationValue,
+              initialStatus: parsedConfiguration.initialStatus,
+              destination: parsedConfiguration.destination,
+              stockTrackingEnabled:
+                parsedConfiguration.stockTrackingEnabled,
             },
           }
         : {}),
@@ -146,8 +166,13 @@ export const PUT = async (request: NextRequest) => {
   }
 
   invalidateBusinessActionConfigurations(user.id);
-  const actions = await listSafeActionSettings(user.id);
-  const action = actions.find((item) => item.key === body.actionKey);
+  const [actions, catalog] = await Promise.all([
+    listSafeActionSettings(user.id),
+    listSafeBusinessActionCatalog(user.id),
+  ]);
+  const action = withPrerequisites(actions, catalog).find(
+    (item) => item.key === body.actionKey
+  );
   return action
     ? NextResponse.json({ action })
     : jsonError("تنظیمات اقدام قابل خواندن نیست.", 500);

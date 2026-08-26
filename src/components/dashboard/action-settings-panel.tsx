@@ -1,8 +1,9 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
-import { Check, Database, ShieldCheck, UserCheck } from "lucide-react";
+import { ArrowUpLeft, Check, Database, ShieldCheck, UserCheck } from "lucide-react";
 import { luxe } from "@/components/motion/reveal";
 import {
   Accordion,
@@ -13,6 +14,7 @@ import {
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button-variants";
 import { Switch } from "@/components/ui/checkbox";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
@@ -32,6 +34,7 @@ type ActionSettingsItem = {
   capabilityAvailable: boolean;
   configurationRequired: boolean;
   configuration: ActionConfiguration | null;
+  prerequisite: ActionPrerequisite | null;
 };
 
 type ActionConfiguration = {
@@ -39,6 +42,17 @@ type ActionConfiguration = {
   relatedCollectionId: string | null;
   fieldMapping: Record<string, string>;
   cancellationValue: string | null;
+  initialStatus: string | null;
+  destination: "internal_business_data" | "external_supabase";
+  stockTrackingEnabled: boolean;
+};
+
+type ActionPrerequisite = {
+  code: string;
+  statusLabel: string;
+  message: string;
+  missingFields: string[];
+  cta: { label: string; href: string } | null;
 };
 
 type ActionCatalogCollection = {
@@ -47,7 +61,13 @@ type ActionCatalogCollection = {
   kind: string;
   accessScope: string;
   aiEnabled: boolean;
-  fields: Array<{ key: string; label: string; type: string; role: string }>;
+  fields: Array<{
+    key: string;
+    label: string;
+    type: string;
+    role: string;
+    required: boolean;
+  }>;
   source: { id: string; name: string; tableName: string } | null;
   privateAccessReady: boolean;
 };
@@ -65,6 +85,7 @@ type ActionConfigurationSpec = {
     side: "primary" | "related";
     required: boolean;
     types: string[];
+    roles?: string[];
   }>;
   cancellationValue?: boolean;
 };
@@ -244,6 +265,13 @@ const ActionCard = ({
     : action.requireConfirmation
       ? "به انتخاب شما فعال است"
       : "اختیاری";
+  const statusLabel = action.enabled
+    ? "فعال"
+    : action.configurationRequired
+      ? action.capabilityAvailable
+        ? "آماده فعال‌سازی"
+        : action.prerequisite?.statusLabel ?? "نیاز به تکمیل تنظیمات"
+      : "غیرفعال";
 
   return (
     <section
@@ -271,12 +299,18 @@ const ActionCard = ({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h2 id={titleId} className="font-bold">{action.name}</h2>
-            <Badge variant={action.enabled ? "success" : "muted"} dot>
-              {action.enabled ? "فعال" : "غیرفعال"}
+            <Badge
+              variant={
+                action.enabled
+                  ? "success"
+                  : action.configurationRequired && !action.capabilityAvailable
+                    ? "warning"
+                    : "muted"
+              }
+              dot
+            >
+              {statusLabel}
             </Badge>
-            {action.configurationRequired && !action.capabilityAvailable && (
-              <Badge variant="warning">نیاز به پیکربندی</Badge>
-            )}
           </div>
           <p className="mt-2 max-w-xl text-sm leading-7 text-muted">
             {action.description}
@@ -330,6 +364,7 @@ const ActionCard = ({
           action={action}
           catalog={catalog}
           configurationSpec={configurationSpec}
+          prerequisite={action.prerequisite}
           disabled={disabled || saving}
           saving={saving}
           onSave={(configuration) => onChange(action, configuration)}
@@ -343,6 +378,7 @@ const ActionConfigurationEditor = ({
   action,
   catalog,
   configurationSpec,
+  prerequisite,
   disabled,
   saving,
   onSave,
@@ -350,6 +386,7 @@ const ActionConfigurationEditor = ({
   action: ActionSettingsItem;
   catalog: ActionCatalogCollection[];
   configurationSpec: ActionConfigurationSpec;
+  prerequisite: ActionPrerequisite | null;
   disabled: boolean;
   saving: boolean;
   onSave: (configuration: ActionConfiguration) => void;
@@ -360,17 +397,26 @@ const ActionConfigurationEditor = ({
       relatedCollectionId: null,
       fieldMapping: {},
       cancellationValue: configurationSpec.cancellationValue ? "cancelled" : null,
+      initialStatus:
+        action.key === "create_order"
+          ? "جدید"
+          : action.key === "create_reservation"
+            ? "در انتظار"
+            : null,
+      destination: "internal_business_data",
+      stockTrackingEnabled: action.key === "create_order",
     }
   );
 
   const primaryCandidates = catalog.filter(
     (collection) =>
-      Boolean(collection.source) &&
       configurationSpec.primaryKinds.includes(collection.kind) &&
       (!configurationSpec.primaryAccessScopes ||
         configurationSpec.primaryAccessScopes.includes(collection.accessScope)) &&
       (!configurationSpec.primaryAccessScopes?.includes("verified_customer") ||
-        (collection.privateAccessReady && collection.aiEnabled))
+        (collection.privateAccessReady && collection.aiEnabled)) &&
+      (draft.destination === "internal_business_data" ||
+        Boolean(collection.source))
   );
   const relatedCandidates = configurationSpec.relatedKinds
     ? catalog.filter(
@@ -386,12 +432,83 @@ const ActionConfigurationEditor = ({
     (collection) => collection.id === draft.relatedCollectionId
   );
   const requiredFields = configurationSpec.fields.filter((field) => field.required);
+  const requiresStockMapping =
+    action.key === "create_order" &&
+    draft.destination === "internal_business_data" &&
+    draft.stockTrackingEnabled;
+  const initialStatusConcept =
+    action.key === "create_order"
+      ? "destination_status"
+      : action.key === "create_reservation"
+        ? "status"
+        : null;
+  const writesInitialStatus = Boolean(
+    initialStatusConcept && draft.fieldMapping[initialStatusConcept]
+  );
+  const primaryMappedFieldKeys = new Set(
+    configurationSpec.fields
+      .filter((concept) => concept.side === "primary")
+      .map((concept) => draft.fieldMapping[concept.key])
+      .filter(Boolean)
+  );
+  const unmappedRequiredCollectionFields =
+    draft.destination === "internal_business_data" && primary
+      ? primary.fields.filter(
+          (field) =>
+            field.required &&
+            !primaryMappedFieldKeys.has(field.key)
+        )
+      : [];
+  const primaryMappingValues = configurationSpec.fields
+    .filter((concept) => concept.side === "primary")
+    .map((concept) => draft.fieldMapping[concept.key])
+    .filter(Boolean);
+  const relatedMappingValues = configurationSpec.fields
+    .filter((concept) => concept.side === "related")
+    .map((concept) => draft.fieldMapping[concept.key])
+    .filter(Boolean);
+  const mappingsAreDistinct =
+    new Set(primaryMappingValues).size === primaryMappingValues.length &&
+    new Set(relatedMappingValues).size === relatedMappingValues.length;
   const complete =
-    Boolean(primary?.source) &&
+    Boolean(primary) &&
+    (draft.destination === "internal_business_data" || Boolean(primary?.source)) &&
     (!configurationSpec.relatedKinds || Boolean(related)) &&
     requiredFields.every((field) => Boolean(draft.fieldMapping[field.key])) &&
+    (!requiresStockMapping || Boolean(draft.fieldMapping.product_stock)) &&
+    unmappedRequiredCollectionFields.length === 0 &&
+    mappingsAreDistinct &&
+    (!writesInitialStatus || Boolean(draft.initialStatus?.trim())) &&
     (!configurationSpec.cancellationValue ||
       Boolean(draft.cancellationValue?.trim()));
+  const missingConcepts = [
+    ...requiredFields.filter((field) => !draft.fieldMapping[field.key]),
+    ...(requiresStockMapping && !draft.fieldMapping.product_stock
+      ? configurationSpec.fields.filter((field) => field.key === "product_stock")
+      : []),
+  ];
+
+  const suggestedMappings = (
+    collection: ActionCatalogCollection,
+    side: "primary" | "related"
+  ) =>
+    Object.fromEntries(
+      configurationSpec.fields
+        .filter((concept) => concept.side === side)
+        .flatMap((concept) => {
+          const compatible = collection.fields.filter(
+            (field) =>
+              concept.types.includes(field.type) &&
+              (field.key === concept.key || concept.roles?.includes(field.role))
+          );
+          const exact = compatible.find((field) => field.key === concept.key);
+          const roleMatches = compatible.filter((field) =>
+            concept.roles?.includes(field.role)
+          );
+          const suggestion = exact ?? (roleMatches.length === 1 ? roleMatches[0] : null);
+          return suggestion ? [[concept.key, suggestion.key]] : [];
+        })
+    );
 
   const updateCollection = (collectionId: string) => {
     const primaryKeys = new Set(
@@ -399,12 +516,16 @@ const ActionConfigurationEditor = ({
         .filter((field) => field.side === "primary")
         .map((field) => field.key)
     );
+    const collection = catalog.find((candidate) => candidate.id === collectionId);
     setDraft((current) => ({
       ...current,
       collectionId,
-      fieldMapping: Object.fromEntries(
-        Object.entries(current.fieldMapping).filter(([key]) => !primaryKeys.has(key))
-      ),
+      fieldMapping: {
+        ...Object.fromEntries(
+          Object.entries(current.fieldMapping).filter(([key]) => !primaryKeys.has(key))
+        ),
+        ...(collection ? suggestedMappings(collection, "primary") : {}),
+      },
     }));
   };
 
@@ -414,12 +535,39 @@ const ActionConfigurationEditor = ({
         .filter((field) => field.side === "related")
         .map((field) => field.key)
     );
+    const collection = catalog.find(
+      (candidate) => candidate.id === relatedCollectionId
+    );
     setDraft((current) => ({
       ...current,
       relatedCollectionId: relatedCollectionId || null,
-      fieldMapping: Object.fromEntries(
-        Object.entries(current.fieldMapping).filter(([key]) => !relatedKeys.has(key))
-      ),
+      fieldMapping: {
+        ...Object.fromEntries(
+          Object.entries(current.fieldMapping).filter(([key]) => !relatedKeys.has(key))
+        ),
+        ...(collection ? suggestedMappings(collection, "related") : {}),
+      },
+    }));
+  };
+
+  const updateDestination = (destination: string) => {
+    if (
+      destination !== "internal_business_data" &&
+      destination !== "external_supabase"
+    ) {
+      return;
+    }
+    setDraft((current) => ({
+      ...current,
+      destination,
+      collectionId:
+        destination === "external_supabase" && !primary?.source
+          ? ""
+          : current.collectionId,
+      stockTrackingEnabled:
+        action.key === "create_order" && destination === "internal_business_data"
+          ? true
+          : false,
     }));
   };
 
@@ -432,21 +580,89 @@ const ActionConfigurationEditor = ({
     >
       <AccordionItem
         value="configuration"
+        id={`action-${action.key}-configuration`}
         className="rounded-2xl border border-line bg-background/35 px-4 shadow-none"
       >
         <AccordionTrigger className="py-4 text-sm hover:text-foreground">
           <span className="flex items-center gap-2">
             <Database className="size-4 text-muted" aria-hidden />
-            منبع و فیلدهای عملیات
+            محل انجام و فیلدهای عملیات
           </span>
         </AccordionTrigger>
         <AccordionContent className="space-y-5 pb-4">
-          {!primaryCandidates.length ? (
-            <p className="rounded-2xl bg-warning/10 p-4 text-sm leading-7 text-warning">
-              مجموعه فعال و متصل به Supabase با ساختار مناسب پیدا نشد. ابتدا
-              اتصال داده این عملیات را در بخش داده‌های کسب‌وکار آماده کنید.
-            </p>
-          ) : (
+          <Select
+            id={`${action.key}-destination`}
+            label="محل انجام عملیات"
+            value={draft.destination}
+            disabled={disabled}
+            options={[
+              {
+                value: "internal_business_data",
+                label: "داده‌های پشتیبان",
+                description: "رکوردهای فعلی داخل پشتیبان به‌روز می‌شوند.",
+              },
+              ...(catalog.some((collection) => collection.source) ||
+              draft.destination === "external_supabase"
+                ? [
+                    {
+                      value: "external_supabase",
+                      label: "Supabase متصل",
+                      description: "عملیات در جدول خارجی انتخاب‌شده انجام می‌شود.",
+                    },
+                  ]
+                : []),
+            ]}
+            onChange={updateDestination}
+          />
+
+          {!action.capabilityAvailable && prerequisite && (
+            <div className="rounded-2xl bg-warning/10 p-4 text-sm leading-7 text-warning">
+              <p>{prerequisite.message}</p>
+              {prerequisite.missingFields.length > 0 && (
+                <ul className="mt-2 list-disc space-y-1 ps-5">
+                  {prerequisite.missingFields.map((field) => (
+                    <li key={field}>{field}</li>
+                  ))}
+                </ul>
+              )}
+              {prerequisite.cta && (
+                <Link
+                  href={prerequisite.cta.href}
+                  className={buttonVariants({
+                    variant: "link",
+                    size: "sm",
+                    className: "mt-3 px-0 text-warning",
+                  })}
+                >
+                  {prerequisite.cta.label}
+                  <ArrowUpLeft className="size-4" aria-hidden />
+                </Link>
+              )}
+            </div>
+          )}
+
+          {draft.destination === "external_supabase" &&
+            primaryCandidates.length === 0 && (
+              <div className="rounded-2xl bg-warning/10 p-4 text-sm leading-7 text-warning">
+                <p>
+                  برای این اقدام، ابتدا مجموعه مناسب را به یک منبع Supabase متصل
+                  کنید.
+                </p>
+                <Link
+                  href="/dashboard/data"
+                  className={buttonVariants({
+                    variant: "link",
+                    size: "sm",
+                    className: "mt-3 px-0 text-warning",
+                  })}
+                >
+                  اتصال منبع خارجی
+                  <ArrowUpLeft className="size-4" aria-hidden />
+                </Link>
+              </div>
+            )}
+
+          {primaryCandidates.length > 0 && (
             <>
               <div className="grid gap-4 sm:grid-cols-2">
                 <Select
@@ -458,9 +674,12 @@ const ActionConfigurationEditor = ({
                   options={primaryCandidates.map((collection) => ({
                     value: collection.id,
                     label: collection.name,
-                    description: collection.source
-                      ? `${collection.source.name} · ${collection.source.tableName}`
-                      : undefined,
+                    description:
+                      draft.destination === "internal_business_data"
+                        ? "داده‌های پشتیبان"
+                        : collection.source
+                          ? `${collection.source.name} · ${collection.source.tableName}`
+                          : undefined,
                   }))}
                   onChange={updateCollection}
                 />
@@ -480,12 +699,39 @@ const ActionConfigurationEditor = ({
                 )}
               </div>
 
-              {primary?.source && (
+              {primary && (
                 <div className="flex flex-wrap gap-x-6 gap-y-2 rounded-2xl bg-surface/55 px-4 py-3 text-xs text-muted">
-                  <span>منبع: {primary.source.name}</span>
-                  <span dir="ltr">Table: {primary.source.tableName}</span>
+                  {draft.destination === "internal_business_data" ? (
+                    <span>محل ذخیره: داده‌های پشتیبان</span>
+                  ) : primary.source ? (
+                    <>
+                      <span>منبع: {primary.source.name}</span>
+                      <span dir="ltr">Table: {primary.source.tableName}</span>
+                    </>
+                  ) : null}
                 </div>
               )}
+
+              {action.key === "create_order" &&
+                draft.destination === "internal_business_data" && (
+                  <div className="rounded-2xl border border-line bg-surface/40 p-4">
+                    <Switch
+                      checked={draft.stockTrackingEnabled}
+                      disabled={disabled}
+                      label="کنترل و کاهش موجودی"
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          stockTrackingEnabled: event.target.checked,
+                        }))
+                      }
+                    />
+                    <p className="mt-2 text-xs leading-6 text-muted">
+                      در حالت فعال، موجودی و سفارش در یک تراکنش ثبت می‌شوند. خاموش
+                      کردن این گزینه یعنی سفارش بدون مدیریت موجودی ثبت می‌شود.
+                    </p>
+                  </div>
+                )}
 
               {(primary || related) && (
                 <div className="grid gap-4 sm:grid-cols-2">
@@ -532,11 +778,44 @@ const ActionConfigurationEditor = ({
                 </div>
               )}
 
+              {(primary || related) &&
+                (missingConcepts.length > 0 ||
+                  unmappedRequiredCollectionFields.length > 0 ||
+                  !mappingsAreDistinct) && (
+                <p className="rounded-2xl bg-warning/10 p-4 text-xs leading-6 text-warning">
+                  {!mappingsAreDistinct
+                    ? "هر فیلد فقط برای یک مورد قابل استفاده است؛ نگاشت‌های تکراری را اصلاح کنید."
+                    : `هنوز باید این موارد را مشخص کنید: ${[
+                        ...missingConcepts.map((field) => field.label),
+                        ...unmappedRequiredCollectionFields.map(
+                          (field) => `فیلد الزامی «${field.label}»`
+                        ),
+                      ].join("، ")}`}
+                </p>
+              )}
+
+              {writesInitialStatus && (
+                <Input
+                  id={`${action.key}-initial-status`}
+                  label="وضعیت اولیه"
+                  hint="این مقدار هنگام ثبت رکورد جدید ذخیره می‌شود."
+                  value={draft.initialStatus ?? ""}
+                  disabled={disabled}
+                  maxLength={80}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      initialStatus: event.target.value,
+                    }))
+                  }
+                />
+              )}
+
               {configurationSpec.cancellationValue && (
                 <Input
                   id={`${action.key}-cancellation-value`}
                   label="مقدار وضعیت پس از لغو"
-                  hint="همان مقداری که سیستم متصل برای وضعیت لغوشده می‌پذیرد."
+                  hint="مقداری که پس از لغو در فیلد وضعیت ذخیره می‌شود."
                   value={draft.cancellationValue ?? ""}
                   disabled={disabled}
                   maxLength={80}
@@ -551,7 +830,7 @@ const ActionConfigurationEditor = ({
 
               <div className="flex items-center justify-between gap-4 border-t border-line pt-4">
                 <p className="text-xs leading-6 text-muted">
-                  نام جدول و ستون‌ها از تنظیم ذخیره‌شده خوانده می‌شوند و در اختیار
+                  نام مجموعه و فیلدها از تنظیم ذخیره‌شده خوانده می‌شوند و در اختیار
                   دستیار قرار نمی‌گیرند.
                 </p>
                 <Button

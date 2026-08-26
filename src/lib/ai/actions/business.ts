@@ -8,6 +8,7 @@ import {
 } from "@/lib/business-data/supabase-connector";
 import { loadSupabaseSourceCredentials } from "@/lib/business-data/supabase-sync";
 import {
+  ActionPublicError,
   actionScopeFor,
   defineAction,
   type ActionExecutionContext,
@@ -473,12 +474,25 @@ const capabilityEnabled = (actionKey: BusinessActionKey) =>
   async (context: ActionExecutionContext) =>
     Boolean(await resolveConfiguration(context, actionKey));
 
+const usesInternalBusinessData = (
+  configuration: ResolvedBusinessActionConfiguration
+) => configuration.destination === "internal_business_data";
+
+const externalSourceFor = (
+  configuration: ResolvedBusinessActionConfiguration
+) => {
+  if (!configuration.source) {
+    throw new Error("External action source unavailable.");
+  }
+  return configuration.source;
+};
+
 const remoteColumn = (
   configuration: ResolvedBusinessActionConfiguration,
   concept: string
 ) => {
   const fieldKey = configuration.fieldMapping[concept];
-  if (!fieldKey) return null;
+  if (!fieldKey || !configuration.source) return null;
   return (
     Object.entries(configuration.source.fieldMapping).find(
       ([, mappedField]) => mappedField === fieldKey
@@ -490,12 +504,29 @@ const credentialsFor = async (
   context: ActionExecutionContext,
   configuration: ResolvedBusinessActionConfiguration
 ) =>
-  loadSupabaseSourceCredentials({
-    admin: createAdminClient(),
-    collectionId: configuration.primary.id,
-    sourceId: configuration.source.id,
-    userId: context.userId,
-  });
+  configuration.source
+    ? loadSupabaseSourceCredentials({
+        admin: createAdminClient(),
+        collectionId: configuration.primary.id,
+        sourceId: configuration.source.id,
+        userId: context.userId,
+      })
+    : Promise.reject(new Error("External action source unavailable."));
+
+const internalRpc = async (
+  name:
+    | "business_data_check_availability_action"
+    | "business_data_create_reservation_action"
+    | "business_data_create_order_action"
+    | "business_data_cancel_action",
+  parameters: Record<string, string | number>
+) => {
+  const { data, error } = await createAdminClient().rpc(name, parameters);
+  if (error || !isPlainObject(data)) {
+    throw new Error("Internal Business Data action failed.");
+  }
+  return data;
+};
 
 const booleanValue = (value: unknown): boolean | null => {
   if (typeof value === "boolean") return value;
@@ -516,6 +547,28 @@ const liveAvailability = async (
   input: AvailabilityInput,
   configuration: ResolvedBusinessActionConfiguration
 ): Promise<AvailabilityResult> => {
+  if (usesInternalBusinessData(configuration)) {
+    const result = await internalRpc(
+      "business_data_check_availability_action",
+      {
+        p_user_id: context.userId,
+        p_date: input.date,
+        p_time: input.time,
+        p_party_size: input.party_size,
+      }
+    );
+    return {
+      determined: result.determined === true,
+      available:
+        typeof result.available === "boolean" ? result.available : null,
+      remainingCapacity:
+        typeof result.remaining_capacity === "number" &&
+        Number.isFinite(result.remaining_capacity)
+          ? result.remaining_capacity
+          : null,
+    };
+  }
+  const source = externalSourceFor(configuration);
   const dateColumn = remoteColumn(configuration, "date");
   const timeColumn = remoteColumn(configuration, "time");
   const availableColumn = remoteColumn(configuration, "available");
@@ -526,7 +579,7 @@ const liveAvailability = async (
   const credentials = await credentialsFor(context, configuration);
   const rows = await readSupabaseActionRows({
     credentials,
-    tableName: configuration.source.tableName,
+    tableName: source.tableName,
     columns: [availableColumn, ...(remainingColumn ? [remainingColumn] : [])],
     filters: [
       { column: dateColumn, value: input.date },
@@ -557,7 +610,7 @@ const liveAvailability = async (
 
 const availabilityText = (result: AvailabilityResult) => {
   if (!result.determined) {
-    return "ظرفیت این زمان از منبع متصل قابل تشخیص نیست؛ نمی‌توانم موجود بودن را تأیید کنم.";
+    return "ظرفیت این زمان از داده‌های کسب‌وکار قابل تشخیص نیست؛ نمی‌توانم موجود بودن را تأیید کنم.";
   }
   if (!result.available) return "برای این زمان ظرفیت کافی ثبت نشده است.";
   return result.remainingCapacity === null
@@ -582,7 +635,7 @@ const prepareReservation = async (
     if (!availability.determined) {
       return {
         success: false as const,
-        text: "ظرفیت این زمان از منبع متصل قابل تشخیص نیست؛ رزرو ثبت نشد.",
+        text: "ظرفیت این زمان از داده‌های کسب‌وکار قابل تشخیص نیست؛ رزرو ثبت نشد.",
       };
     }
     if (!availability.available) {
@@ -600,17 +653,18 @@ const existingActionWrite = async (
   configuration: ResolvedBusinessActionConfiguration,
   credentials: Awaited<ReturnType<typeof credentialsFor>>
 ) => {
+  const source = externalSourceFor(configuration);
   const executionColumn = remoteColumn(configuration, "execution_id");
   if (!executionColumn) return null;
-  const referenceField = configuration.source.externalIdField;
+  const referenceField = source.externalIdField;
   const referenceColumn = referenceField
-    ? Object.entries(configuration.source.fieldMapping).find(
+    ? Object.entries(source.fieldMapping).find(
         ([, fieldKey]) => fieldKey === referenceField
       )?.[0] ?? null
     : null;
   const rows = await readSupabaseActionRows({
     credentials,
-    tableName: configuration.source.tableName,
+    tableName: source.tableName,
     columns: [executionColumn, ...(referenceColumn ? [referenceColumn] : [])],
     filters: [{ column: executionColumn, value: context.executionId }],
     limit: 1,
@@ -628,6 +682,32 @@ const createReservationWrite = async (
 ): Promise<CreateReservationResult> => {
   const configuration = await resolveConfiguration(context, "create_reservation");
   if (!configuration) throw new Error("Reservation destination unavailable.");
+  if (usesInternalBusinessData(configuration)) {
+    const result = await internalRpc(
+      "business_data_create_reservation_action",
+      {
+        p_user_id: context.userId,
+        p_execution_id: context.executionId,
+        p_date: input.date,
+        p_time: input.time,
+        p_party_size: input.party_size,
+        p_customer_name: input.customer_name,
+        p_customer_contact: input.customer_contact,
+      }
+    );
+    if (result.status === "unavailable") {
+      throw new ActionPublicError(
+        "availability_changed",
+        "ظرفیت این زمان تغییر کرده است؛ رزرو ثبت نشد. لطفاً زمان دیگری را انتخاب کنید."
+      );
+    }
+    const reference = boundedText(result.reference, 200);
+    if (result.status !== "created" || !reference) {
+      throw new Error("Internal reservation result was invalid.");
+    }
+    return { reference, status: "created" };
+  }
+  const source = externalSourceFor(configuration);
   const credentials = await credentialsFor(context, configuration);
   const existing = await existingActionWrite(context, configuration, credentials);
   if (existing) return { reference: existing, status: "created" };
@@ -653,21 +733,24 @@ const createReservationWrite = async (
     ["customer_contact", input.customer_contact],
     ["execution_id", context.executionId],
   ];
+  if (remoteColumn(configuration, "status") && configuration.initialStatus) {
+    concepts.push(["status", configuration.initialStatus]);
+  }
   const values: Record<string, string | number | boolean | null> = {};
   for (const [concept, value] of concepts) {
     const column = remoteColumn(configuration, concept);
     if (!column) throw new Error("Reservation mapping unavailable.");
     values[column] = value;
   }
-  const referenceField = configuration.source.externalIdField;
+  const referenceField = source.externalIdField;
   const referenceColumn = referenceField
-    ? Object.entries(configuration.source.fieldMapping).find(
+    ? Object.entries(source.fieldMapping).find(
         ([, fieldKey]) => fieldKey === referenceField
       )?.[0] ?? null
     : null;
   const row = await insertSupabaseActionRow({
     credentials,
-    tableName: configuration.source.tableName,
+    tableName: source.tableName,
     values,
     returningColumns: referenceColumn ? [referenceColumn] : [],
   });
@@ -803,6 +886,55 @@ const createOrderWrite = async (
 ): Promise<CreateOrderResult> => {
   const configuration = await resolveConfiguration(context, "create_order");
   if (!configuration) throw new Error("Order destination unavailable.");
+  if (usesInternalBusinessData(configuration)) {
+    const result = await internalRpc("business_data_create_order_action", {
+      p_user_id: context.userId,
+      p_execution_id: context.executionId,
+      p_product_record_id: input.productRecordId,
+      p_expected_product_reference: input.productReference,
+      p_expected_unit_price: input.unitPrice,
+      p_quantity: input.quantity,
+      p_customer_name: input.customer_name,
+      p_customer_contact: input.customer_contact,
+    });
+    if (result.status === "price_changed") {
+      const currentPrice =
+        typeof result.current_price === "number" &&
+        Number.isFinite(result.current_price)
+          ? result.current_price
+          : null;
+      const currency = boundedText(result.currency, 40);
+      throw new ActionPublicError(
+        "price_changed",
+        currentPrice === null
+          ? "قیمت محصول تغییر کرده است. لطفاً سفارش را دوباره مطرح کنید تا مبلغ جدید را تأیید کنید."
+          : `قیمت محصول تغییر کرده و اکنون ${currentPrice.toLocaleString("fa-IR")}${currency ? ` ${currency}` : ""} است. لطفاً سفارش را دوباره مطرح کنید تا مبلغ جدید را تأیید کنید.`
+      );
+    }
+    if (
+      result.status === "insufficient_stock" ||
+      result.status === "unavailable"
+    ) {
+      throw new ActionPublicError(
+        "insufficient_stock",
+        "این محصول با تعداد درخواستی دیگر موجود نیست؛ سفارش ثبت نشد."
+      );
+    }
+    const reference = boundedText(result.reference, 200);
+    if (result.status !== "created" || !reference) {
+      throw new Error("Internal order result was invalid.");
+    }
+    return {
+      reference,
+      productName: input.productName,
+      quantity: input.quantity,
+      unitPrice: input.unitPrice,
+      totalPrice: input.totalPrice,
+      currency: input.currency,
+      status: "created",
+    };
+  }
+  const source = externalSourceFor(configuration);
   const credentials = await credentialsFor(context, configuration);
   const existing = await existingActionWrite(context, configuration, credentials);
   if (existing) {
@@ -837,21 +969,27 @@ const createOrderWrite = async (
   if (remoteColumn(configuration, "destination_total_price")) {
     concepts.push(["destination_total_price", input.totalPrice]);
   }
+  if (
+    remoteColumn(configuration, "destination_status") &&
+    configuration.initialStatus
+  ) {
+    concepts.push(["destination_status", configuration.initialStatus]);
+  }
   const values: Record<string, string | number | boolean | null> = {};
   for (const [concept, value] of concepts) {
     const column = remoteColumn(configuration, concept);
     if (!column) throw new Error("Order mapping unavailable.");
     values[column] = value;
   }
-  const referenceField = configuration.source.externalIdField;
+  const referenceField = source.externalIdField;
   const referenceColumn = referenceField
-    ? Object.entries(configuration.source.fieldMapping).find(
+    ? Object.entries(source.fieldMapping).find(
         ([, fieldKey]) => fieldKey === referenceField
       )?.[0] ?? null
     : null;
   const row = await insertSupabaseActionRow({
     credentials,
-    tableName: configuration.source.tableName,
+    tableName: source.tableName,
     values,
     returningColumns: referenceColumn ? [referenceColumn] : [],
   });
@@ -902,15 +1040,17 @@ const verifiedRecord = async (
     .gt("expires_at", new Date().toISOString())
     .maybeSingle();
   if (sessionError || !session?.record_id) return null;
-  const { data: record, error: recordError } = await admin
+  let recordQuery = admin
     .from("business_data_records")
     .select("id, external_id, source_id, values")
     .eq("id", session.record_id)
     .eq("user_id", context.userId)
     .eq("collection_id", configuration.primary.id)
-    .eq("source_id", configuration.source.id)
-    .eq("status", "active")
-    .maybeSingle();
+    .eq("status", "active");
+  if (configuration.source) {
+    recordQuery = recordQuery.eq("source_id", configuration.source.id);
+  }
+  const { data: record, error: recordError } = await recordQuery.maybeSingle();
   if (recordError || !record || !isPlainObject(record.values)) return null;
   const externalId = boundedText(record.external_id, 200);
   if (!externalId) return null;
@@ -990,10 +1130,28 @@ const cancelWrite = (actionKey: "cancel_reservation" | "cancel_order") =>
     if (terminalStatus(record.status)) {
       throw new Error("Cancellation status no longer permits this operation.");
     }
+    if (usesInternalBusinessData(configuration)) {
+      const scope = actionScopeFor(context);
+      const result = await internalRpc("business_data_cancel_action", {
+        p_user_id: context.userId,
+        p_execution_id: context.executionId,
+        p_action_key: actionKey,
+        p_record_id: input.recordId,
+        p_channel: context.channel,
+        p_connection_id: context.connectionId,
+        p_customer_identity_hash: scope.customerIdentityHash,
+      });
+      const reference = boundedText(result.reference, 200);
+      if (result.status !== "cancelled" || !reference) {
+        throw new Error("Internal cancellation result was invalid.");
+      }
+      return { reference, status: "cancelled" };
+    }
+    const source = externalSourceFor(configuration);
     const statusColumn = remoteColumn(configuration, "status");
-    const externalField = configuration.source.externalIdField;
+    const externalField = source.externalIdField;
     const externalColumn = externalField
-      ? Object.entries(configuration.source.fieldMapping).find(
+      ? Object.entries(source.fieldMapping).find(
           ([, fieldKey]) => fieldKey === externalField
         )?.[0] ?? null
       : null;
@@ -1003,7 +1161,7 @@ const cancelWrite = (actionKey: "cancel_reservation" | "cancel_order") =>
     const credentials = await credentialsFor(context, configuration);
     await updateSupabaseActionRow({
       credentials,
-      tableName: configuration.source.tableName,
+      tableName: source.tableName,
       match: { column: externalColumn, value: input.externalId },
       values: { [statusColumn]: configuration.cancellationValue },
     });
@@ -1029,7 +1187,7 @@ const checkAvailability = defineAction<AvailabilityInput, AvailabilityResult>({
   confirmation: { required: false },
   settings: {
     displayName: "بررسی ظرفیت رزرو",
-    description: "ظرفیت یک تاریخ و ساعت را فقط از منبع زنده متصل بررسی می‌کند.",
+    description: "ظرفیت یک تاریخ و ساعت را از داده‌های فعلی کسب‌وکار بررسی می‌کند.",
     defaultEnabled: false,
   },
   intentGuard: checkAvailabilityIntent,
@@ -1070,7 +1228,7 @@ const createReservation = defineAction<
   },
   settings: {
     displayName: "ایجاد رزرو",
-    description: "پس از بررسی اطلاعات و تأیید مشتری، رزرو را در مقصد Supabase ثبت می‌کند.",
+    description: "پس از بررسی اطلاعات و تأیید مشتری، رزرو را در محل انتخاب‌شده ثبت می‌کند.",
     defaultEnabled: false,
   },
   intentGuard: createReservationIntent,

@@ -123,6 +123,9 @@ How to use:
       actions with capability-aware owner configuration, authoritative Supabase
       writes, prepared confirmations, verified cancellations, and external
       idempotency recovery without generic database access
+- [x] Internal Business Data Actions: treat manual and file-imported records as
+      controlled mutation destinations, add transactional stock/order and
+      reservation/cancellation RPCs, and expose specific Action prerequisites
 - [ ] Knowledge-base ingestion for PDF and Word — needs a parser dependency and
       a Supabase Storage bucket with its own policies
 - [ ] AI assistant configuration (name, tone, model selection)

@@ -313,8 +313,8 @@ can only disable an Action or add a confirmation requirement; it cannot make a
 registry-required verification or confirmation optional. `create_support_request`
 keeps its compatible default of enabled when no setting exists. The order and
 reservation mutations are disabled by default and are not exposed to the intent
-call until an eligible Business Data capability, a saved Supabase destination,
-complete field mappings, and the owner's enabled setting all agree.
+call until an eligible Business Data capability, a selected internal or external
+destination, complete field mappings, and the owner's enabled setting all agree.
 The compact schema goes to the final reply completion only when the current
 customer message directly matches an enabled operation but cannot yet execute;
 that lets the assistant ask only for missing fields without adding another call.
@@ -335,8 +335,13 @@ the server-only pending/execution record needed to bind confirmation and retry.
 The registry includes `check_availability`, `create_reservation`,
 `cancel_reservation`, `create_order`, and `cancel_order` in addition to
 `create_support_request`. Availability is a bounded read from the configured
-live source. Creates insert only mapped business concepts into the owner-saved
-Supabase table and return only after the authoritative write succeeds.
+internal Business Data collection or external Supabase source. Creates write
+only owner-mapped business concepts to the selected destination and return only
+after the authoritative write succeeds. Internal order execution locks the
+authoritative product row, re-checks price and availability, and performs the
+stock decrement and order insert in one service-only transaction. Internal
+reservation capacity changes and record creation use the same transactional
+boundary. Server-controlled execution references make these writes idempotent.
 Cancellations accept no model-authored record ID: they resolve the exact record
 from the active, record-scoped verified-customer session, re-check ownership and
 status at execution, and update only the configured status field.
@@ -347,9 +352,14 @@ place the customer's original message in the existing inbox. It requires the
 owner's human-handoff setting and does not require confirmation because opening a
 support request is low risk. Connector credentials remain in encrypted
 `business_data_source_secrets`; they never enter model context, browser responses,
-execution records, or logs. CSV/XLSX/manual sources remain snapshots and are
-never mutation destinations. No action can run arbitrary SQL, choose a table or
-column, invent an API URL, or request a generic database mutation.
+execution records, or logs. CSV/XLSX/manual labels describe ingestion origins,
+not mutation restrictions: once imported, their records can become Pushtiban's
+current operational state and may be changed through controlled internal
+Actions. The original file is never modified and there is no automatic file
+upstream; a later explicit import remains a separate owner-initiated ingestion
+event. External Supabase remains available as an optional live destination. No
+action can run arbitrary SQL, choose a table or column, invent an API URL, or
+request a generic database mutation.
 
 ### Gates on every message
 

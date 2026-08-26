@@ -459,6 +459,30 @@ const failure = await failureHarness.engine.executeRequested({
 assert.equal(failure.status, "failed");
 assert.doesNotMatch(failure.text, /hunter2/, "failures are sanitized");
 
+const priceChangeDefinition = definition({
+  key: "price_change_test_action",
+  intentGuard: () => true,
+  execute: async () => {
+    throw new core.ActionPublicError(
+      "price_changed",
+      "قیمت تغییر کرده است؛ لطفاً مبلغ جدید را دوباره تأیید کنید."
+    );
+  },
+});
+const priceChangeHarness = createHarness({
+  definitions: [[priceChangeDefinition.key, priceChangeDefinition]],
+});
+const priceChange = await priceChangeHarness.engine.executeRequested({
+  context: context({
+    customerMessage: "این محصول را سفارش بده",
+    deliveryId: "telegram-update:9030",
+  }),
+  request: { key: "price_change_test_action", arguments: {} },
+});
+assert.equal(priceChange.status, "failed");
+assert.match(priceChange.text, /دوباره تأیید کنید/);
+assert.equal(priceChangeHarness.store.records[0].failureCode, "price_changed");
+
 assert.equal(
   isSupportRequestMessage("این کفش موجوده؟"),
   false,
@@ -566,11 +590,11 @@ assert.match(businessActionSource, /product\.price \* input\.quantity/);
 assert.match(businessActionSource, /customer_identity_hash/);
 assert.match(businessActionSource, /existingActionWrite/);
 assert.doesNotMatch(businessActionSource, /arguments\.(?:table|column|url|price)/);
-assert.match(businessConfigSource, /source\.fieldMapping/);
+assert.match(businessConfigSource, /source!\.fieldMapping/);
 assert.match(businessConfigSource, /primaryAccessScopes: \["verified_customer"\]/);
 assert.match(connectorSource, /insertSupabaseActionRow/);
 assert.match(connectorSource, /updateSupabaseActionRow/);
-assert.match(actionPanelSource, /منبع و فیلدهای عملیات/);
+assert.match(actionPanelSource, /محل انجام و فیلدهای عملیات/);
 assert.match(assistantSource, /ask only for the missing information/);
 assert.match(sqlSource, /business_action_settings_source_fk/);
 assert.match(sqlSource, /field_mapping\s+jsonb/);

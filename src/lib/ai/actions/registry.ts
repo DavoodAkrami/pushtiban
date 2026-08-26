@@ -154,6 +154,9 @@ export type SafeActionSettingsMetadata = {
     relatedCollectionId: string | null;
     fieldMapping: Record<string, string>;
     cancellationValue: string | null;
+    initialStatus: string | null;
+    destination: "internal_business_data" | "external_supabase";
+    stockTrackingEnabled: boolean;
   } | null;
 };
 
@@ -193,6 +196,10 @@ export const listSafeActionSettings = async (
               relatedCollectionId: businessConfiguration.relatedCollectionId,
               fieldMapping: businessConfiguration.fieldMapping,
               cancellationValue: businessConfiguration.cancellationValue,
+              initialStatus: businessConfiguration.initialStatus,
+              destination: businessConfiguration.destination,
+              stockTrackingEnabled:
+                businessConfiguration.stockTrackingEnabled,
             }
           : null,
       };
