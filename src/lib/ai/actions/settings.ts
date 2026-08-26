@@ -65,5 +65,54 @@ export const getBusinessActionConfiguration = async ({
   }
 };
 
+export const listBusinessActionConfigurations = async ({
+  definitions,
+  userId,
+}: {
+  definitions: RegisteredActionDefinition[];
+  userId: string;
+}) => {
+  const fallbacks = new Map(
+    definitions.map((definition) => [
+      definition.key,
+      defaultConfiguration(definition),
+    ])
+  );
+  try {
+    const { data, error } = await createAdminClient()
+      .from("business_action_settings")
+      .select("action_key, is_enabled, require_confirmation")
+      .eq("user_id", userId)
+      .in(
+        "action_key",
+        definitions.map((definition) => definition.key)
+      );
+    if (error) {
+      return SETUP_ERROR_CODES.has(error.code)
+        ? fallbacks
+        : new Map(
+            definitions.map((definition) => [
+              definition.key,
+              { enabled: false, requireConfirmation: false },
+            ])
+          );
+    }
+    for (const row of data ?? []) {
+      fallbacks.set(String(row.action_key), {
+        enabled: row.is_enabled === true,
+        requireConfirmation: row.require_confirmation === true,
+      });
+    }
+    return fallbacks;
+  } catch {
+    return new Map(
+      definitions.map((definition) => [
+        definition.key,
+        { enabled: false, requireConfirmation: false },
+      ])
+    );
+  }
+};
+
 export const isActionSettingsSetupError = (code?: string) =>
   Boolean(code && SETUP_ERROR_CODES.has(code));

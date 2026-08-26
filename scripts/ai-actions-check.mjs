@@ -97,6 +97,14 @@ class MemoryStore {
     return matches.length ? { ...matches.at(-1) } : null;
   };
 
+  findByIdempotency = async (userId, idempotencyKey) => {
+    const record = this.records.find(
+      (item) =>
+        item.userId === userId && item.idempotencyKey === idempotencyKey
+    );
+    return record ? { ...record } : null;
+  };
+
   markExecuting = async (executionId) => {
     const record = this.records.find((item) => item.id === executionId);
     if (!record || record.status !== "pending_confirmation") return false;
@@ -155,6 +163,8 @@ const definition = ({
   confirmation = { required: false },
   verification = "none",
   inputSchema = emptySchema,
+  preparedInputSchema,
+  prepare,
   intentGuard = isSupportRequestMessage,
   execute,
 }) =>
@@ -162,7 +172,9 @@ const definition = ({
     key,
     name: key,
     description: key,
+    modelArguments: {},
     inputSchema,
+    ...(preparedInputSchema ? { preparedInputSchema } : {}),
     resultSchema,
     verification,
     confirmation,
@@ -173,6 +185,7 @@ const definition = ({
     },
     intentGuard,
     isEnabled: async () => true,
+    ...(prepare ? { prepare } : {}),
     execute,
     formatResult: () => "ثبت شد.",
   });
@@ -341,6 +354,71 @@ const confirmed = await confirmedHarness.engine.confirmPending({
 assert.equal(confirmed.status, "succeeded", "valid confirmation executes once");
 assert.equal(confirmedExecutions, 1);
 
+let preparedExecution = null;
+let preparationCount = 0;
+const preparedDefinition = definition({
+  key: "prepared_order_test",
+  inputSchema: objectSchema,
+  preparedInputSchema: objectSchema,
+  confirmation: {
+    required: true,
+    prompt: (input) => `قیمت نهایی ${input.authoritativePrice} است؛ ثبت شود؟`,
+  },
+  intentGuard: () => true,
+  prepare: async (_context, input) => {
+    preparationCount += 1;
+    return {
+      success: true,
+      data: {
+        productRecordId: RESULT_ID,
+        authoritativePrice: 4_850_000,
+        quantity: input.quantity,
+      },
+    };
+  },
+  execute: async (_context, input) => {
+    preparedExecution = input;
+    return { conversationId: RESULT_ID };
+  },
+});
+const preparedHarness = createHarness({
+  definitions: [[preparedDefinition.key, preparedDefinition]],
+});
+const preparedPending = await preparedHarness.engine.executeRequested({
+  context: context({
+    customerMessage: "این محصول را سفارش بده",
+    deliveryId: "telegram-update:9020",
+  }),
+  request: {
+    key: "prepared_order_test",
+    arguments: { quantity: 1, price: 2_000_000 },
+  },
+});
+assert.equal(preparedPending.status, "pending_confirmation");
+assert.match(preparedPending.text, /4850000/);
+assert.doesNotMatch(preparedPending.text, /2000000/);
+await preparedHarness.engine.confirmPending({
+  context: context({
+    customerMessage: "بله",
+    deliveryId: "telegram-update:9021",
+  }),
+  message: "بله",
+});
+assert.equal(preparedExecution.authoritativePrice, 4_850_000);
+assert.equal("price" in preparedExecution, false, "model price is not retained");
+const preparedDuplicate = await preparedHarness.engine.executeRequested({
+  context: context({
+    customerMessage: "این محصول را سفارش بده",
+    deliveryId: "telegram-update:9020",
+  }),
+  request: {
+    key: "prepared_order_test",
+    arguments: { quantity: 1, price: 2_000_000 },
+  },
+});
+assert.equal(preparedDuplicate.status, "succeeded");
+assert.equal(preparationCount, 1, "duplicate delivery reuses prepared arguments");
+
 const extraConfirmationHarness = createHarness({
   definitions: [[supportDefinition.key, supportDefinition]],
   configuration: async () => ({ enabled: true, requireConfirmation: true }),
@@ -421,6 +499,11 @@ const settingsSource = read("src", "lib", "ai", "actions", "settings.ts");
 const settingsRouteSource = read("src", "app", "api", "ai", "actions", "route.ts");
 const ragSource = read("src", "lib", "ai", "rag.ts");
 const sqlSource = read("supabase", "ai-actions.sql");
+const businessActionSource = read("src", "lib", "ai", "actions", "business.ts");
+const businessConfigSource = read("src", "lib", "ai", "actions", "business-config.ts");
+const connectorSource = read("src", "lib", "business-data", "supabase-connector.ts");
+const actionPanelSource = read("src", "components", "dashboard", "action-settings-panel.tsx");
+const assistantSource = read("src", "lib", "ai", "assistant.ts");
 const telegramSource = read(
   "src",
   "app",
@@ -465,6 +548,33 @@ assert.match(settingsRouteSource, /ACTION_REGISTRY\.has\(body\.actionKey\)/);
 assert.match(settingsRouteSource, /user_id: user\.id/);
 assert.doesNotMatch(settingsRouteSource, /execute:/);
 
+for (const actionKey of [
+  "check_availability",
+  "create_reservation",
+  "cancel_reservation",
+  "create_order",
+  "cancel_order",
+]) {
+  assert.match(businessActionSource, new RegExp(`key: "${actionKey}"`));
+}
+assert.ok(
+  (businessActionSource.match(/defaultEnabled: false/g) ?? []).length >= 5,
+  "Every new business action defaults to disabled"
+);
+assert.match(businessActionSource, /verification: "verified_customer"/);
+assert.match(businessActionSource, /product\.price \* input\.quantity/);
+assert.match(businessActionSource, /customer_identity_hash/);
+assert.match(businessActionSource, /existingActionWrite/);
+assert.doesNotMatch(businessActionSource, /arguments\.(?:table|column|url|price)/);
+assert.match(businessConfigSource, /source\.fieldMapping/);
+assert.match(businessConfigSource, /primaryAccessScopes: \["verified_customer"\]/);
+assert.match(connectorSource, /insertSupabaseActionRow/);
+assert.match(connectorSource, /updateSupabaseActionRow/);
+assert.match(actionPanelSource, /منبع و فیلدهای عملیات/);
+assert.match(assistantSource, /ask only for the missing information/);
+assert.match(sqlSource, /business_action_settings_source_fk/);
+assert.match(sqlSource, /field_mapping\s+jsonb/);
+
 console.log(
-  "Validated 18 AI action execution, configuration, authorization, confirmation, idempotency, safety, retrieval-boundary, and support-request cases."
+  "Validated AI action registry, preparation, authoritative values, configuration, authorization, confirmation, idempotency, connector boundaries, retrieval safety, and support-request regression."
 );

@@ -311,24 +311,45 @@ Each business can enable or disable registered Actions at
 `/dashboard/assistant/actions`. The registry remains authoritative: a business
 can only disable an Action or add a confirmation requirement; it cannot make a
 registry-required verification or confirmation optional. `create_support_request`
-keeps its compatible default of enabled when no setting exists, while future
-registered Actions must opt in explicitly before they can be used.
+keeps its compatible default of enabled when no setting exists. The order and
+reservation mutations are disabled by default and are not exposed to the intent
+call until an eligible Business Data capability, a saved Supabase destination,
+complete field mappings, and the owner's enabled setting all agree.
+The compact schema goes to the final reply completion only when the current
+customer message directly matches an enabled operation but cannot yet execute;
+that lets the assistant ask only for missing fields without adding another call.
 
 Confirmation-required actions are stored server-side for five minutes and are
 bound to the business, channel connection, hashed customer identity,
-conversation, exact action, and exact validated arguments. A model claim that
+conversation, exact action, and exact prepared arguments. Preparation resolves
+live availability or the authoritative product, price, stock, and private record
+before the confirmation text is produced; customer/model-supplied prices and
+record identifiers are discarded. A model claim that
 the customer confirmed or is verified has no authority. Webhook delivery IDs
 produce deterministic server-controlled idempotency keys, while handlers receive
 the execution ID for downstream deduplication. The audit stores bounded
 arguments/results and sanitized failure codes—not chain-of-thought, credentials,
-or raw customer identifiers.
+or raw channel identities. Customer-provided action fields are retained only in
+the server-only pending/execution record needed to bind confirmation and retry.
 
-The first registered mutation is `create_support_request`. It accepts no
+The registry includes `check_availability`, `create_reservation`,
+`cancel_reservation`, `create_order`, and `cancel_order` in addition to
+`create_support_request`. Availability is a bounded read from the configured
+live source. Creates insert only mapped business concepts into the owner-saved
+Supabase table and return only after the authoritative write succeeds.
+Cancellations accept no model-authored record ID: they resolve the exact record
+from the active, record-scoped verified-customer session, re-check ownership and
+status at execution, and update only the configured status field.
+
+`create_support_request` accepts no
 model-authored payload and reuses `support_conversations` / `support_messages` to
 place the customer's original message in the existing inbox. It requires the
 owner's human-handoff setting and does not require confirmation because opening a
-support request is low risk. No action can run arbitrary SQL, choose a table or
-column, invent an API URL, or write through the read-only Supabase connector.
+support request is low risk. Connector credentials remain in encrypted
+`business_data_source_secrets`; they never enter model context, browser responses,
+execution records, or logs. CSV/XLSX/manual sources remain snapshots and are
+never mutation destinations. No action can run arbitrary SQL, choose a table or
+column, invent an API URL, or request a generic database mutation.
 
 ### Gates on every message
 
@@ -389,8 +410,8 @@ Instagram-specific node/button limit triggers) · `supabase/business-data.sql`
 (collections, fields, records, source/sync foundation, verified-customer
 configuration/challenges/sessions/attempt audits, and the service-role-only
 bounded public and verified-record lookup RPCs) · `supabase/ai-actions.sql`
-(tenant-owned action restrictions plus server-only confirmation, idempotency,
-audit state, and support-message execution links).
+(tenant-owned action restrictions and connector/field mappings plus server-only
+confirmation, idempotency, audit state, and support-message execution links).
 
 ## Notes
 

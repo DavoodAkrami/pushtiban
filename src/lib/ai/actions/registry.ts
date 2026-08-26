@@ -9,7 +9,15 @@ import {
   type RegisteredActionDefinition,
 } from "./core";
 import { isSupportRequestMessage } from "./support-intent";
-import { getBusinessActionConfiguration } from "./settings";
+import {
+  getBusinessActionConfiguration,
+  listBusinessActionConfigurations,
+} from "./settings";
+import { BUSINESS_ACTION_DEFINITIONS } from "./business";
+import {
+  isBusinessActionKey,
+  resolveBusinessActionConfigurations,
+} from "./business-config";
 
 export { isSupportRequestMessage } from "./support-intent";
 
@@ -77,6 +85,7 @@ const createSupportRequest = defineAction<
   name: "Create support request",
   description:
     "Create an inbox support request only when the customer explicitly asks to register or open a support request. Arguments must be an empty object.",
+  modelArguments: {},
   inputSchema: emptyObjectSchema,
   resultSchema: supportRequestResultSchema,
   verification: "none",
@@ -123,7 +132,12 @@ const createSupportRequest = defineAction<
 export const ACTION_REGISTRY: ReadonlyMap<
   string,
   RegisteredActionDefinition
-> = new Map([[createSupportRequest.key, createSupportRequest]]);
+> = new Map(
+  [createSupportRequest, ...BUSINESS_ACTION_DEFINITIONS].map((definition) => [
+    definition.key,
+    definition,
+  ])
+);
 
 export type SafeActionSettingsMetadata = {
   key: string;
@@ -133,17 +147,32 @@ export type SafeActionSettingsMetadata = {
   registryRequiresVerification: boolean;
   registryRequiresConfirmation: boolean;
   requireConfirmation: boolean;
+  capabilityAvailable: boolean;
+  configurationRequired: boolean;
+  configuration: {
+    collectionId: string;
+    relatedCollectionId: string | null;
+    fieldMapping: Record<string, string>;
+    cancellationValue: string | null;
+  } | null;
 };
 
 export const listSafeActionSettings = async (
   userId: string
-): Promise<SafeActionSettingsMetadata[]> =>
-  Promise.all(
-    [...ACTION_REGISTRY.values()].map(async (definition) => {
-      const configuration = await getBusinessActionConfiguration({
-        userId,
-        definition,
-      });
+): Promise<SafeActionSettingsMetadata[]> => {
+  const definitions = [...ACTION_REGISTRY.values()];
+  const [businessConfigurations, actionConfigurations] = await Promise.all([
+    resolveBusinessActionConfigurations(userId),
+    listBusinessActionConfigurations({ definitions, userId }),
+  ]);
+  return Promise.all(
+    definitions.map(async (definition) => {
+      const configuration =
+        actionConfigurations.get(definition.key) ??
+        (await getBusinessActionConfiguration({ userId, definition }));
+      const businessConfiguration = isBusinessActionKey(definition.key)
+        ? businessConfigurations.get(definition.key) ?? null
+        : null;
       return {
         key: definition.key,
         name: definition.settings.displayName,
@@ -154,9 +183,22 @@ export const listSafeActionSettings = async (
         registryRequiresConfirmation: definition.confirmation.required,
         requireConfirmation:
           definition.confirmation.required || configuration.requireConfirmation,
+        capabilityAvailable: isBusinessActionKey(definition.key)
+          ? Boolean(businessConfiguration)
+          : true,
+        configurationRequired: isBusinessActionKey(definition.key),
+        configuration: businessConfiguration
+          ? {
+              collectionId: businessConfiguration.collectionId!,
+              relatedCollectionId: businessConfiguration.relatedCollectionId,
+              fieldMapping: businessConfiguration.fieldMapping,
+              cancellationValue: businessConfiguration.cancellationValue,
+            }
+          : null,
       };
     })
   );
+};
 
 export const describeAvailableActions = async ({
   actionContextAvailable,
@@ -167,17 +209,45 @@ export const describeAvailableActions = async ({
   handoffEnabled: boolean;
   userId?: string;
 }) => {
-  if (!actionContextAvailable || !handoffEnabled || !userId) return "";
+  if (!actionContextAvailable || !userId) return "";
   const settings = await listSafeActionSettings(userId);
   const actions = settings
-    .filter((setting) => setting.enabled)
+    .filter(
+      (setting) =>
+        setting.enabled &&
+        setting.capabilityAvailable &&
+        (setting.key !== "create_support_request" || handoffEnabled)
+    )
     .map((setting) => {
       const definition = ACTION_REGISTRY.get(setting.key)!;
       return {
         key: definition.key,
         description: definition.description,
-        arguments: {},
+        arguments: definition.modelArguments,
       };
     });
   return actions.length ? JSON.stringify(actions) : "";
+};
+
+export const describeRelevantActionFollowUp = (
+  availableActions: string,
+  customerMessage: string
+) => {
+  if (!availableActions) return "";
+  try {
+    const parsed = JSON.parse(availableActions) as Array<{
+      key?: unknown;
+      arguments?: unknown;
+    }>;
+    const relevant = parsed.find((candidate) => {
+      if (typeof candidate.key !== "string") return false;
+      const definition = ACTION_REGISTRY.get(candidate.key);
+      return Boolean(definition?.intentGuard(customerMessage));
+    });
+    return relevant
+      ? JSON.stringify({ key: relevant.key, arguments: relevant.arguments })
+      : "";
+  } catch {
+    return "";
+  }
 };

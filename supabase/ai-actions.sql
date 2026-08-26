@@ -1,7 +1,8 @@
 -- =============================================================================
 -- Pushtiban - safe AI action execution foundation
 -- Paste and run this whole file in Supabase Dashboard -> SQL Editor.
--- Idempotent and non-destructive. Run after supabase/channel-inbox.sql.
+-- Idempotent and non-destructive. Run after supabase/business-data.sql and
+-- supabase/channel-inbox.sql.
 -- =============================================================================
 
 -- Per-business action controls. The code registry remains the source of what
@@ -12,12 +13,111 @@ create table if not exists public.business_action_settings (
   action_key             text not null,
   is_enabled             boolean not null default false,
   require_confirmation   boolean not null default false,
+  collection_id          uuid,
+  source_id              uuid,
+  related_collection_id  uuid,
+  field_mapping          jsonb not null default '{}'::jsonb,
+  configuration          jsonb not null default '{}'::jsonb,
   created_at             timestamptz not null default now(),
   updated_at             timestamptz not null default now(),
   primary key (user_id, action_key),
   constraint business_action_settings_action_key_check
-    check (action_key ~ '^[a-z][a-z0-9_]{0,63}$')
+    check (action_key ~ '^[a-z][a-z0-9_]{0,63}$'),
+  constraint business_action_settings_field_mapping_check
+    check (
+      jsonb_typeof(field_mapping) = 'object'
+      and octet_length(field_mapping::text) <= 8192
+      and not public.business_data_json_has_secret_key(field_mapping)
+    ),
+  constraint business_action_settings_configuration_check
+    check (
+      jsonb_typeof(configuration) = 'object'
+      and octet_length(configuration::text) <= 4096
+      and not public.business_data_json_has_secret_key(configuration)
+    ),
+  constraint business_action_settings_source_pair_check
+    check (source_id is null or collection_id is not null),
+  constraint business_action_settings_collection_fk
+    foreign key (collection_id, user_id)
+    references public.business_data_collections (id, user_id) on delete cascade,
+  constraint business_action_settings_source_fk
+    foreign key (source_id, collection_id, user_id)
+    references public.business_data_sources (id, collection_id, user_id) on delete cascade,
+  constraint business_action_settings_related_collection_fk
+    foreign key (related_collection_id, user_id)
+    references public.business_data_collections (id, user_id) on delete cascade
 );
+
+alter table public.business_action_settings
+  add column if not exists collection_id uuid,
+  add column if not exists source_id uuid,
+  add column if not exists related_collection_id uuid,
+  add column if not exists field_mapping jsonb not null default '{}'::jsonb,
+  add column if not exists configuration jsonb not null default '{}'::jsonb;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'business_action_settings_field_mapping_check'
+  ) then
+    alter table public.business_action_settings
+      add constraint business_action_settings_field_mapping_check
+      check (
+        jsonb_typeof(field_mapping) = 'object'
+        and octet_length(field_mapping::text) <= 8192
+        and not public.business_data_json_has_secret_key(field_mapping)
+      );
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'business_action_settings_configuration_check'
+  ) then
+    alter table public.business_action_settings
+      add constraint business_action_settings_configuration_check
+      check (
+        jsonb_typeof(configuration) = 'object'
+        and octet_length(configuration::text) <= 4096
+        and not public.business_data_json_has_secret_key(configuration)
+      );
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'business_action_settings_source_pair_check'
+  ) then
+    alter table public.business_action_settings
+      add constraint business_action_settings_source_pair_check
+      check (source_id is null or collection_id is not null);
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'business_action_settings_collection_fk'
+  ) then
+    alter table public.business_action_settings
+      add constraint business_action_settings_collection_fk
+      foreign key (collection_id, user_id)
+      references public.business_data_collections (id, user_id) on delete cascade;
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'business_action_settings_source_fk'
+  ) then
+    alter table public.business_action_settings
+      add constraint business_action_settings_source_fk
+      foreign key (source_id, collection_id, user_id)
+      references public.business_data_sources (id, collection_id, user_id) on delete cascade;
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'business_action_settings_related_collection_fk'
+  ) then
+    alter table public.business_action_settings
+      add constraint business_action_settings_related_collection_fk
+      foreign key (related_collection_id, user_id)
+      references public.business_data_collections (id, user_id) on delete cascade;
+  end if;
+end;
+$$;
 
 comment on table public.business_action_settings is
   'Tenant-owned restrictions for code-registered AI actions. It cannot grant an unregistered action or weaken registry security.';

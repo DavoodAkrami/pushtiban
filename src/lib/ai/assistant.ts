@@ -29,7 +29,10 @@ import type { ChatTurn } from "@/lib/ai/memory";
 import { checkAiLimits, getGlobalAiSettings, logAiUsage } from "@/lib/ai/usage";
 import type { PrivateAccessIdentity } from "@/lib/business-data/private-access";
 import type { ActionExecutionContext } from "@/lib/ai/actions/core";
-import { describeAvailableActions } from "@/lib/ai/actions/registry";
+import {
+  describeAvailableActions,
+  describeRelevantActionFollowUp,
+} from "@/lib/ai/actions/registry";
 import { executeModelAction } from "@/lib/ai/actions/server";
 
 const COMPLETION_TIMEOUT_MS = 25_000;
@@ -457,6 +460,17 @@ export const generateAssistantReply = async (
   let systemPrompt = retrieval
     ? buildRagSystemPrompt(retrieval, persona, { continuingSession })
     : buildFallbackSystemPrompt(persona, { continuingSession });
+
+  const relevantActionFollowUp = describeRelevantActionFollowUp(
+    actionCapabilities,
+    safeQuestion
+  );
+  if (relevantActionFollowUp) {
+    systemPrompt = [
+      systemPrompt,
+      `The customer is asking about this available operation: ${relevantActionFollowUp}. If required arguments are missing, ask only for the missing information. Do not claim the operation ran; execution happens only through the server action path.`,
+    ].join("\n");
+  }
 
   if (escalationAvailable) {
     systemPrompt = buildEscalationSystemPrompt(systemPrompt);

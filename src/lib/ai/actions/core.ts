@@ -45,7 +45,15 @@ export type ActionHandlerContext = ActionExecutionContext & {
 
 export type ActionConfirmation =
   | { required: false }
-  | { required: true; prompt: string; ttlMs?: number };
+  | {
+      required: true;
+      prompt: string | ((preparedInput: unknown) => string);
+      ttlMs?: number;
+    };
+
+export type ActionPreparationResult<Value> =
+  | { success: true; data: Value }
+  | { success: false; text: string };
 
 /** Per-business limits. These can only add safeguards to a registry action. */
 export type ActionBusinessConfiguration = {
@@ -60,18 +68,27 @@ export type ActionSettingsMetadata = {
   defaultEnabled: boolean;
 };
 
-export type ActionDefinition<Input, Result> = {
+export type ActionDefinition<Input, Result, PreparedInput = Input> = {
   key: string;
   name: string;
   description: string;
+  modelArguments: Record<string, string>;
   inputSchema: ActionSchema<Input>;
+  preparedInputSchema?: ActionSchema<PreparedInput>;
   resultSchema: ActionSchema<Result>;
   verification: ActionVerification;
   confirmation: ActionConfirmation;
   settings: ActionSettingsMetadata;
   intentGuard: (customerMessage: string) => boolean;
   isEnabled: (context: ActionExecutionContext) => Promise<boolean>;
-  execute: (context: ActionHandlerContext, input: Input) => Promise<Result>;
+  prepare?: (
+    context: ActionExecutionContext,
+    input: Input
+  ) => Promise<ActionPreparationResult<PreparedInput>>;
+  execute: (
+    context: ActionHandlerContext,
+    input: PreparedInput
+  ) => Promise<Result>;
   formatResult: (result: Result) => string;
 };
 
@@ -79,28 +96,44 @@ export type RegisteredActionDefinition = {
   key: string;
   name: string;
   description: string;
+  modelArguments: Record<string, string>;
   inputSchema: ActionSchema<unknown>;
+  preparedInputSchema: ActionSchema<unknown>;
   resultSchema: ActionSchema<unknown>;
   verification: ActionVerification;
   confirmation: ActionConfirmation;
   settings: ActionSettingsMetadata;
   intentGuard: (customerMessage: string) => boolean;
   isEnabled: (context: ActionExecutionContext) => Promise<boolean>;
+  prepare: (
+    context: ActionExecutionContext,
+    input: unknown
+  ) => Promise<ActionPreparationResult<unknown>>;
   execute: (context: ActionHandlerContext, input: unknown) => Promise<unknown>;
   formatResult: (result: unknown) => string;
 };
 
-export const defineAction = <Input, Result>(
-  definition: ActionDefinition<Input, Result>
+export const defineAction = <Input, Result, PreparedInput = Input>(
+  definition: ActionDefinition<Input, Result, PreparedInput>
 ): RegisteredActionDefinition => ({
   ...definition,
   inputSchema: {
     parse: (value) => definition.inputSchema.parse(value),
   },
+  preparedInputSchema: {
+    parse: (value) =>
+      (definition.preparedInputSchema ?? definition.inputSchema).parse(
+        value as PreparedInput & Input
+      ),
+  },
   resultSchema: {
     parse: (value) => definition.resultSchema.parse(value),
   },
-  execute: (context, input) => definition.execute(context, input as Input),
+  prepare: definition.prepare
+    ? (context, input) => definition.prepare!(context, input as Input)
+    : async (_context, input) => ({ success: true, data: input }),
+  execute: (context, input) =>
+    definition.execute(context, input as PreparedInput),
   formatResult: (result) => definition.formatResult(result as Result),
 });
 
@@ -140,6 +173,10 @@ export type ActionExecutionStore = {
   claim: (
     input: ClaimActionExecutionInput
   ) => Promise<{ created: boolean; execution: StoredActionExecution }>;
+  findByIdempotency: (
+    userId: string,
+    idempotencyKey: string
+  ) => Promise<StoredActionExecution | null>;
   findPending: (
     scope: ActionExecutionScope
   ) => Promise<StoredActionExecution | null>;
@@ -311,10 +348,14 @@ export const createActionEngine = ({
   resolveConfiguration,
   now = () => new Date(),
 }: ActionEngineDependencies) => {
-  const confirmationPrompt = (definition: RegisteredActionDefinition) =>
-    definition.confirmation.required
-      ? definition.confirmation.prompt
-      : TEXT.confirmationRequired;
+  const confirmationPrompt = (
+    definition: RegisteredActionDefinition,
+    preparedInput: unknown
+  ) => {
+    if (!definition.confirmation.required) return TEXT.confirmationRequired;
+    const prompt = definition.confirmation.prompt;
+    return typeof prompt === "function" ? prompt(preparedInput) : prompt;
+  };
   const executeClaimed = async ({
     context,
     definition,
@@ -326,31 +367,13 @@ export const createActionEngine = ({
     execution: StoredActionExecution;
     input: unknown;
   }): Promise<ActionHandlingResult> => {
+    let parsedResult: ActionSchemaResult<unknown>;
     try {
       const rawResult = await definition.execute(
         { ...context, executionId: execution.id },
         input
       );
-      const parsedResult = definition.resultSchema.parse(rawResult);
-      if (
-        !parsedResult.success ||
-        serializedLength(parsedResult.data) > ACTION_LIMITS.resultChars
-      ) {
-        await store.markFailed(execution.id, "invalid_result");
-        return {
-          handled: true,
-          text: TEXT.failed,
-          actionKey: definition.key,
-          status: "failed",
-        };
-      }
-      await store.markSucceeded(execution.id, parsedResult.data);
-      return {
-        handled: true,
-        text: definition.formatResult(parsedResult.data),
-        actionKey: definition.key,
-        status: "succeeded",
-      };
+      parsedResult = definition.resultSchema.parse(rawResult);
     } catch {
       await store.markFailed(execution.id, "execution_failed").catch(() => undefined);
       return {
@@ -360,6 +383,123 @@ export const createActionEngine = ({
         status: "failed",
       };
     }
+    if (
+      !parsedResult.success ||
+      serializedLength(parsedResult.data) > ACTION_LIMITS.resultChars
+    ) {
+      await store.markFailed(execution.id, "invalid_result");
+      return {
+        handled: true,
+        text: TEXT.failed,
+        actionKey: definition.key,
+        status: "failed",
+      };
+    }
+    try {
+      await store.markSucceeded(execution.id, parsedResult.data);
+    } catch {
+      // The authoritative side effect may already exist. Keep the execution
+      // retryable so the handler can recover it by execution ID instead of
+      // reporting a definitive failure or creating a duplicate.
+      return {
+        handled: true,
+        text: TEXT.inProgress,
+        actionKey: definition.key,
+        status: "executing",
+      };
+    }
+    return {
+      handled: true,
+      text: definition.formatResult(parsedResult.data),
+      actionKey: definition.key,
+      status: "succeeded",
+    };
+  };
+
+  const handleExistingExecution = async ({
+    context,
+    currentTime,
+    definition,
+    existing,
+  }: {
+    context: ActionExecutionContext;
+    currentTime: Date;
+    definition: RegisteredActionDefinition;
+    existing: StoredActionExecution;
+  }): Promise<ActionHandlingResult> => {
+    if (existing.status === "succeeded") {
+      const result = definition.resultSchema.parse(existing.result);
+      return result.success
+        ? {
+            handled: true,
+            text: definition.formatResult(result.data),
+            actionKey: definition.key,
+            status: "succeeded",
+          }
+        : {
+            handled: true,
+            text: TEXT.failed,
+            actionKey: definition.key,
+            status: "failed",
+          };
+    }
+    if (existing.status === "pending_confirmation") {
+      return {
+        handled: true,
+        text: existing.requiresConfirmation
+          ? confirmationPrompt(definition, existing.arguments)
+          : TEXT.inProgress,
+        actionKey: definition.key,
+        status: existing.status,
+      };
+    }
+    if (existing.status === "expired") {
+      return {
+        handled: true,
+        text: TEXT.expired,
+        actionKey: definition.key,
+        status: existing.status,
+      };
+    }
+    if (existing.status === "failed") {
+      return {
+        handled: true,
+        text: TEXT.failed,
+        actionKey: definition.key,
+        status: existing.status,
+      };
+    }
+    const updatedAt = Date.parse(existing.updatedAt);
+    const stale =
+      Number.isFinite(updatedAt) &&
+      currentTime.getTime() - updatedAt >= ACTION_LIMITS.executionRetryAfterMs;
+    if (
+      !stale ||
+      !(await store.claimStaleExecution(existing.id, existing.updatedAt))
+    ) {
+      return {
+        handled: true,
+        text: TEXT.inProgress,
+        actionKey: definition.key,
+        status: "executing",
+      };
+    }
+    const preparedInput = definition.preparedInputSchema.parse(existing.arguments);
+    if (!preparedInput.success) {
+      await store.markFailed(existing.id, "invalid_prepared_arguments");
+      return {
+        handled: true,
+        text: TEXT.failed,
+        actionKey: definition.key,
+        status: "failed",
+      };
+    }
+    return executeClaimed({
+      context,
+      definition,
+      execution: existing,
+      input: preparedInput.data,
+    });
   };
 
   const authorize = async (
@@ -412,6 +552,32 @@ export const createActionEngine = ({
     }
 
     const currentTime = now();
+    const idempotencyKey = actionIdempotencyKeyFor(context, definition.key);
+    const existingExecution = await store.findByIdempotency(
+      context.userId,
+      idempotencyKey
+    );
+    if (existingExecution) {
+      return handleExistingExecution({
+        context,
+        currentTime,
+        definition,
+        existing: existingExecution,
+      });
+    }
+
+    const preparation = await definition.prepare(context, parsedInput.data);
+    if (!preparation.success) {
+      return {
+        handled: true,
+        text: preparation.text.slice(0, ACTION_LIMITS.resultChars),
+        actionKey: definition.key,
+        status: "rejected",
+      };
+    }
+    const preparedInput = definition.preparedInputSchema.parse(preparation.data);
+    if (!preparedInput.success) return safeRejected(definition.key);
+
     const requiresConfirmation =
       definition.confirmation.required || authorization.configuration.requireConfirmation;
     const confirmationTtl = definition.confirmation.required
@@ -421,8 +587,8 @@ export const createActionEngine = ({
       ...actionScopeFor(context),
       actionKey: definition.key,
       status: requiresConfirmation ? "pending_confirmation" : "executing",
-      arguments: parsedInput.data,
-      idempotencyKey: actionIdempotencyKeyFor(context, definition.key),
+      arguments: preparedInput.data,
+      idempotencyKey,
       requiresVerification: definition.verification === "verified_customer",
       requiresConfirmation,
       confirmationExpiresAt: requiresConfirmation
@@ -434,67 +600,18 @@ export const createActionEngine = ({
     });
 
     if (!claim.created) {
-      const existing = claim.execution;
-      if (existing.status === "succeeded") {
-        const result = definition.resultSchema.parse(existing.result);
-        return result.success
-          ? {
-              handled: true,
-              text: definition.formatResult(result.data),
-              actionKey: definition.key,
-              status: "succeeded",
-            }
-          : {
-              handled: true,
-              text: TEXT.failed,
-              actionKey: definition.key,
-              status: "failed",
-            };
-      }
-      if (existing.status === "pending_confirmation") {
-        return {
-          handled: true,
-          text: existing.requiresConfirmation
-            ? confirmationPrompt(definition)
-            : TEXT.inProgress,
-          actionKey: definition.key,
-          status: existing.status,
-        };
-      }
-      if (existing.status === "expired") {
-        return {
-          handled: true,
-          text: TEXT.expired,
-          actionKey: definition.key,
-          status: existing.status,
-        };
-      }
-      if (existing.status === "failed") {
-        return {
-          handled: true,
-          text: TEXT.failed,
-          actionKey: definition.key,
-          status: existing.status,
-        };
-      }
-      const updatedAt = Date.parse(existing.updatedAt);
-      const stale =
-        Number.isFinite(updatedAt) &&
-        currentTime.getTime() - updatedAt >= ACTION_LIMITS.executionRetryAfterMs;
-      if (!stale || !(await store.claimStaleExecution(existing.id, existing.updatedAt))) {
-        return {
-          handled: true,
-          text: TEXT.inProgress,
-          actionKey: definition.key,
-          status: "executing",
-        };
-      }
+      return handleExistingExecution({
+        context,
+        currentTime,
+        definition,
+        existing: claim.execution,
+      });
     }
 
     if (requiresConfirmation) {
       return {
         handled: true,
-        text: confirmationPrompt(definition),
+        text: confirmationPrompt(definition, preparedInput.data),
         actionKey: definition.key,
         status: "pending_confirmation",
       };
@@ -504,7 +621,7 @@ export const createActionEngine = ({
       context,
       definition,
       execution: claim.execution,
-      input: parsedInput.data,
+      input: preparedInput.data,
     });
   };
 
@@ -560,7 +677,7 @@ export const createActionEngine = ({
           }
         : safeRejected(pending.actionKey);
     }
-    const input = definition.inputSchema.parse(pending.arguments);
+    const input = definition.preparedInputSchema.parse(pending.arguments);
     if (!input.success || !(await store.markExecuting(pending.id))) {
       return {
         handled: true,
