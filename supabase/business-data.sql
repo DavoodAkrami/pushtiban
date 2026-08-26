@@ -2843,7 +2843,7 @@ begin
       record.values -> field_definition.key
       order by field_definition.position
     ) filter (where record.values ? field_definition.key), '{}'::jsonb),
-    coalesce(record.source_updated_at, record.updated_at)
+    max(coalesce(record.source_updated_at, record.updated_at))
   from public.business_data_records record
   join public.business_data_fields field_definition
     on field_definition.user_id = p_user_id

@@ -13,6 +13,18 @@ const rag = read("src", "lib", "ai", "rag.ts");
 const telegram = read("src", "app", "api", "telegram", "webhook", "[botId]", "route.ts");
 const instagram = read("src", "app", "api", "instagram", "webhook", "route.ts");
 
+const verifiedLookupStart = sql.indexOf(
+  "create or replace function public.business_data_lookup_verified_customer("
+);
+const verifiedLookupEnd = sql.indexOf(
+  "revoke execute on function public.business_data_lookup_verified_customer(",
+  verifiedLookupStart
+);
+const verifiedLookupSql = sql.slice(verifiedLookupStart, verifiedLookupEnd);
+
+assert.ok(verifiedLookupStart >= 0, "Verified-customer lookup RPC must be present");
+assert.ok(verifiedLookupEnd > verifiedLookupStart, "Verified-customer lookup grant boundary must be present");
+
 const cases = [
   "correct order + correct phone",
   "correct order + wrong phone",
@@ -77,6 +89,38 @@ assert.match(sql, /grant execute on function public\.business_data_private_verif
 assert.match(sql, /revoke execute on function public\.business_data_private_find_candidate\([\s\S]*?from public, anon, authenticated;/);
 assert.match(sql, /revoke all on table public\.business_data_private_access_configs,[\s\S]*?public\.business_data_verified_customer_sessions[\s\S]*?from anon, authenticated;/);
 assert.match(sql, /check \(not ai_enabled or access_scope in \('public_catalog', 'verified_customer'\)\)/);
+
+// Regression contract for the verified lookup query. The session pins one
+// record, so the timestamp must be aggregated alongside jsonb_object_agg.
+assert.match(verifiedLookupSql, /returns table \([\s\S]*record_values jsonb[\s\S]*data_updated_at timestamptz/);
+assert.match(verifiedLookupSql, /business_data_verified_customer_sessions/);
+assert.match(verifiedLookupSql, /session\.expires_at > now\(\)/);
+assert.match(verifiedLookupSql, /session\.record_id into session_record_id/);
+assert.match(verifiedLookupSql, /record\.id = session_record_id/);
+assert.match(verifiedLookupSql, /record\.status = 'active'/);
+assert.match(verifiedLookupSql, /field_definition\.ai_exposure = 'answer'/);
+assert.match(verifiedLookupSql, /jsonb_object_agg\(/);
+assert.match(
+  verifiedLookupSql,
+  /max\(coalesce\(record\.source_updated_at, record\.updated_at\)\)/,
+  "data_updated_at must be aggregated with the projected record"
+);
+assert.doesNotMatch(
+  verifiedLookupSql,
+  /,\s*coalesce\(record\.source_updated_at, record\.updated_at\)/,
+  "The lookup must not select an unaggregated timestamp"
+);
+assert.match(verifiedLookupSql, /having count\(record\.id\) > 0/);
+assert.match(
+  verifiedLookupSql,
+  /field_definition\.key in \([\s\S]*jsonb_array_elements\(p_projection_keys\)/,
+  "Only requested answer-visible fields may be projected"
+);
+assert.match(
+  verifiedLookupSql,
+  /where record\.id = session_record_id[\s\S]*record\.user_id = p_user_id[\s\S]*record\.collection_id = collection_row\.id/,
+  "The lookup must remain scoped to the verified tenant and record"
+);
 
 assert.match(privateAccess, /createHash\("sha256"\)/);
 assert.match(privateAccess, /pending_question/);
