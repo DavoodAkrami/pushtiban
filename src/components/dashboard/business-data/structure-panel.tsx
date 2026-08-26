@@ -326,7 +326,22 @@ const AssistantVisibilityModal = ({
           : "برای این مجموعه هنوز دو فیلد تأیید امن انتخاب نشده است؛ دستیار به داده دسترسی ندارد."
         : !collection.aiEnabled
           ? "اجازه استفاده دستیار برای این مجموعه خاموش است."
-          : "اجازه دسترسی ثبت شده است، اما اتصال واقعی داده به پاسخ‌های دستیار در مرحله بعد پیاده‌سازی می‌شود.";
+        : "اجازه دسترسی ثبت شده است، اما اتصال واقعی داده به پاسخ‌های دستیار در مرحله بعد پیاده‌سازی می‌شود.";
+  const privateDiagnostics = collection.privateAccess?.diagnostics;
+  const privateStatus =
+    !privateDiagnostics
+      ? null
+      : !privateDiagnostics.configurationValid
+        ? "تنظیم تأیید معتبر نیست"
+        : privateDiagnostics.locatorMissingCount > 0 || privateDiagnostics.verificationMissingCount > 0
+          ? "برخی رکوردهای فعال برای تأیید کامل نیستند"
+          : privateDiagnostics.recentReason === "verifier_mismatch"
+            ? "آخرین تلاش تأیید نشد"
+            : privateDiagnostics.recentReason === "rate_limited"
+              ? "آخرین تلاش به‌دلیل تعداد تلاش‌ها متوقف شد"
+              : privateDiagnostics.recentReason === "challenge_expired"
+                ? "آخرین چالش منقضی شد"
+                : "تنظیم تأیید آماده است";
 
   return (
     <Modal open={open} onOpenChange={onOpenChange}>
@@ -342,6 +357,12 @@ const AssistantVisibilityModal = ({
           title={eligible ? "دسترسی عمومی" : "دسترسی دستیار بسته است"}
           description={reason}
         />
+        {collection.accessScope === "verified_customer" && privateStatus && (
+          <p className="mt-4 rounded-2xl border border-line bg-surface/25 px-4 py-3 text-xs leading-6 text-muted">
+            <span className="font-bold text-foreground">وضعیت تأیید خصوصی: </span>
+            {privateStatus}
+          </p>
+        )}
         <dl className="mt-5 grid gap-4 rounded-2xl border border-line bg-surface/25 p-4 text-sm sm:grid-cols-3">
           <div><dt className="text-xs text-muted">نوع دسترسی</dt><dd className="mt-1 font-medium">{ACCESS_SCOPE_LABELS[collection.accessScope]}</dd></div>
           <div><dt className="text-xs text-muted">منبع</dt><dd className="mt-1 font-medium">{collection.source?.type === "manual" ? "مدیریت دستی" : collection.source?.name ?? "نامشخص"}</dd></div>
@@ -424,14 +445,39 @@ const PrivateAccessPanel = ({
       field.role === "account_identifier" ||
       field.role === "channel_identifier"
   );
-  const options = eligibleFields.map((field) => ({
+  const locatorRoles = new Set(["reference", "tracking", "account_identifier", "customer_identifier", "channel_identifier"]);
+  const verifierRoles = new Set(["phone", "email", "customer_identifier", "account_identifier", "channel_identifier"]);
+  const locatorOptions = eligibleFields.filter((field) => locatorRoles.has(field.role)).map((field) => ({
     value: field.id,
     label: field.label,
-    description:
-      field.id === suggestedLocator?.id || field.id === suggestedVerifier?.id
-        ? "پیشنهادی براساس نوع فیلد"
-        : undefined,
+    description: field.id === suggestedLocator?.id ? "پیشنهادی براساس نوع فیلد" : undefined,
   }));
+  const verifierOptions = eligibleFields.filter((field) => verifierRoles.has(field.role)).map((field) => ({
+    value: field.id,
+    label: field.label,
+    description: field.id === suggestedVerifier?.id ? "پیشنهادی براساس نوع فیلد" : undefined,
+  }));
+  const diagnostics = collection.privateAccess?.diagnostics;
+  const diagnosticMessage = diagnostics
+    ? !diagnostics.configurationValid
+      ? "این ترکیب برای تأیید هویت مناسب نیست. یک شناسه رکورد و یک روش تأیید مشتری انتخاب کنید."
+      : diagnostics.locatorMissingCount > 0
+        ? `شناسه رکورد انتخاب‌شده در ${fa(diagnostics.locatorMissingCount)} رکورد فعال خالی است.`
+        : diagnostics.verificationMissingCount > 0
+          ? `اطلاعات تأیید مشتری در ${fa(diagnostics.verificationMissingCount)} رکورد فعال خالی است.`
+          : diagnostics.activeRecordCount === 0
+            ? "هنوز رکورد فعالی برای بررسی این تنظیم وجود ندارد."
+            : null
+    : null;
+  const diagnosticReason: Record<NonNullable<typeof diagnostics>["recentReason"] & string, string> = {
+    no_candidate: "شناسه رکوردی پیدا نشد",
+    verifier_mismatch: "اطلاعات تأیید با رکورد مطابقت نداشت",
+    config_invalid: "تنظیم تأیید معتبر نبود",
+    challenge_expired: "زمان چالش تأیید به پایان رسید",
+    rate_limited: "تعداد تلاش‌های ناموفق زیاد بود",
+    lookup_error: "بررسی داده موقتاً انجام نشد",
+    missing_stored_value: "یکی از مقادیر ذخیره‌شده برای تأیید خالی است",
+  };
 
   const save = async () => {
     if (!locatorFieldId || !verificationFieldId || locatorFieldId === verificationFieldId) {
@@ -487,9 +533,15 @@ const PrivateAccessPanel = ({
         <p className="mt-1 text-xs leading-6 text-muted">دستیار فقط وقتی پاسخ این مجموعه را می‌بیند که این دو مورد با یک رکورد مطابقت داشته باشد. هیچ‌یک از این مقادیر در پاسخ نمایش داده نمی‌شود.</p>
       </div>
       <div className="mt-5 grid gap-5 sm:grid-cols-2">
-        <Select id="private-locator-field" label="شناسه رکورد" hint="مثلاً شماره سفارش یا کد رزرو" options={options} value={locatorFieldId} onChange={setLocatorFieldId} disabled={saving} />
-        <Select id="private-verification-field" label="اطلاعات تأیید مشتری" hint="مثلاً شماره موبایل، ایمیل یا شناسه حساب" options={options} value={verificationFieldId} onChange={setVerificationFieldId} disabled={saving} />
+        <Select id="private-locator-field" label="شناسه رکورد" hint="مثلاً شماره سفارش یا کد رزرو" options={locatorOptions} value={locatorFieldId} onChange={setLocatorFieldId} disabled={saving} />
+        <Select id="private-verification-field" label="اطلاعات تأیید مشتری" hint="مثلاً شماره موبایل، ایمیل یا شناسه حساب" options={verifierOptions} value={verificationFieldId} onChange={setVerificationFieldId} disabled={saving} />
       </div>
+      {diagnosticMessage && <Alert variant="warning" className="mt-5" title="پیش از فعال‌سازی بررسی کنید" description={diagnosticMessage} />}
+      {diagnostics?.recentReason && (
+        <p className="mt-4 text-xs leading-6 text-muted">
+          آخرین وضعیت امن تأیید: {diagnosticReason[diagnostics.recentReason]}
+        </p>
+      )}
       <div className="mt-5 rounded-2xl border border-line bg-surface/35 p-4">
         <Switch checked={enabled} onChange={(event) => setEnabled(event.target.checked)} disabled={saving} label="اجازه پاسخ‌گویی پس از تأیید مشتری" />
         <p className="mt-2 text-xs leading-6 text-muted">تأیید فقط برای همین گفت‌وگو و حداکثر ده دقیقه معتبر است. دستیار هرگز داده داخلی یا فیلدهای تأیید را دریافت نمی‌کند.</p>

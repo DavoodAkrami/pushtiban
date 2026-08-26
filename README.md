@@ -154,18 +154,26 @@ emits **nothing** — only the dials the owner moved cost tokens.
 
    **Verified-customer Business Data** — `src/lib/business-data/private-access.ts`
    exposes an active `verified_customer` collection only after the owner has
-   selected two distinct required, filterable `filter_only` fields: a record
-   locator and a customer proof. The first private request creates a short-lived
-   verification challenge; locator and proof replies are intercepted before chat
-   memory and the final model, and are never persisted as proof values. A
+   selected two distinct required, filterable `filter_only` fields with suitable
+   semantic roles: a record locator and a customer proof. Owner setup checks for
+   missing values in active records and shows only sanitized diagnostic states.
+   The first private request creates a short-lived verification challenge; locator
+   and proof replies are intercepted before chat memory and the final model, and
+   are never persisted as proof values. Stored and submitted values pass through
+   the same database normalization: Persian/Arabic digits become Latin digits,
+   email is trimmed and lower-cased, identifier whitespace is normalized, and a
+   `phone` role safely canonicalizes Iranian `09`, `+98`, and `0098` forms. There
+   is no partial or fuzzy match. A locator miss remains at the locator step; one
+   verifier mistake retains the short-lived challenge for a bounded retry, while
+   the existing five failures per 15 minutes still stops the exchange. A
    successful match creates a **10-minute**, record-scoped session keyed by the
    business, channel, connection, hashed external channel identity, collection,
    and record. Telegram's signed webhook establishes a stable Telegram sender;
    Instagram's signed webhook establishes a stable IGSID. Neither is treated as
    proof that the account owns a business record.
 
-   The service-role-only `business_data_private_find_candidate`,
-   `business_data_private_verify`, and `business_data_lookup_verified_customer`
+   The service-role-only `business_data_private_find_candidate_result`,
+   `business_data_private_verify_result`, and `business_data_lookup_verified_customer`
    RPCs repeat tenant, collection scope, active configuration, session expiry,
    channel identity, record ownership, and projection checks in PostgreSQL.
    Only `answer` fields of that one verified record reach the model;

@@ -11,6 +11,7 @@ import type {
   BusinessDataSource,
   BusinessDataSyncRun,
   BusinessDataPrivateAccessConfig,
+  BusinessDataPrivateAccessDiagnostics,
 } from "./api-types";
 import { BUSINESS_DATA_LIMITS } from "./limits";
 import type {
@@ -120,6 +121,14 @@ type PrivateAccessConfigRow = {
   updated_at: string;
 };
 
+type PrivateAccessDiagnosticsRow = {
+  configuration_valid: boolean;
+  active_record_count: number | string;
+  locator_missing_count: number | string;
+  verification_missing_count: number | string;
+  recent_reason: BusinessDataPrivateAccessDiagnostics["recentReason"];
+};
+
 const COLLECTION_COLUMNS =
   "id, user_id, key, name, description, kind, access_scope, ai_enabled, status, schema_version, created_at, updated_at";
 const FIELD_COLUMNS =
@@ -221,7 +230,8 @@ const mapSyncRun = (row: SyncRunRow): BusinessDataSyncRun => ({
 });
 
 const mapPrivateAccessConfig = (
-  row: PrivateAccessConfigRow | null
+  row: PrivateAccessConfigRow | null,
+  diagnostics: BusinessDataPrivateAccessDiagnostics
 ): BusinessDataPrivateAccessConfig | null =>
   row
     ? {
@@ -229,8 +239,49 @@ const mapPrivateAccessConfig = (
         locatorFieldId: row.locator_field_id,
         verificationFieldId: row.verification_field_id,
         updatedAt: row.updated_at,
+        diagnostics,
       }
     : null;
+
+const emptyPrivateAccessDiagnostics = (): BusinessDataPrivateAccessDiagnostics => ({
+  configurationValid: false,
+  activeRecordCount: 0,
+  locatorMissingCount: 0,
+  verificationMissingCount: 0,
+  recentReason: null,
+});
+
+const getPrivateAccessDiagnostics = async ({
+  context,
+  collectionId,
+  locatorFieldId,
+  verificationFieldId,
+}: {
+  context: BusinessDataContext;
+  collectionId: string;
+  locatorFieldId: string;
+  verificationFieldId: string;
+}): Promise<BusinessDataPrivateAccessDiagnostics> => {
+  const { data, error } = await context.admin.rpc(
+    "business_data_private_access_diagnostics",
+    {
+      p_user_id: context.user.id,
+      p_collection_id: collectionId,
+      p_locator_field_id: locatorFieldId,
+      p_verification_field_id: verificationFieldId,
+    }
+  );
+  if (error) throw mapDatabaseFailure(error);
+  const row = Array.isArray(data) ? (data[0] as PrivateAccessDiagnosticsRow | undefined) : undefined;
+  if (!row) return emptyPrivateAccessDiagnostics();
+  return {
+    configurationValid: row.configuration_valid === true,
+    activeRecordCount: Number(row.active_record_count) || 0,
+    locatorMissingCount: Number(row.locator_missing_count) || 0,
+    verificationMissingCount: Number(row.verification_missing_count) || 0,
+    recentReason: row.recent_reason ?? null,
+  };
+};
 
 const invalidDefinition = (issues: { path: string }[]) => {
   const first = issues[0]?.path ?? "collection";
@@ -486,6 +537,14 @@ export const getCollectionDetail = async (
     getSyncRuns(context, collectionId),
     getPrivateAccessConfigRow(context, collectionId),
   ]);
+  const privateDiagnostics = privateAccess
+    ? await getPrivateAccessDiagnostics({
+        context,
+        collectionId,
+        locatorFieldId: privateAccess.locator_field_id,
+        verificationFieldId: privateAccess.verification_field_id,
+      })
+    : emptyPrivateAccessDiagnostics();
   return {
     id: collection.id,
     key: collection.key,
@@ -502,7 +561,7 @@ export const getCollectionDetail = async (
     source: getPrimarySource(sources) ? mapSource(getPrimarySource(sources)!) : null,
     fields: fields.map(mapField),
     syncRuns,
-    privateAccess: mapPrivateAccessConfig(privateAccess),
+    privateAccess: mapPrivateAccessConfig(privateAccess, privateDiagnostics),
     createdAt: collection.created_at,
     updatedAt: collection.updated_at,
   };
@@ -696,17 +755,53 @@ export const updatePrivateAccessConfig = async (
         field.filterable &&
         field.ai_exposure === "filter_only"
     );
+  const locatorRoles = new Set([
+    "reference",
+    "tracking",
+    "account_identifier",
+    "customer_identifier",
+    "channel_identifier",
+  ]);
+  const verifierRoles = new Set([
+    "phone",
+    "email",
+    "customer_identifier",
+    "account_identifier",
+    "channel_identifier",
+  ]);
   if (
     !isVerificationField(locator) ||
     !isVerificationField(verifier) ||
     !locator ||
     !verifier ||
-    locator.id === verifier.id
+    locator.id === verifier.id ||
+    !locatorRoles.has(locator.semantic_role) ||
+    !verifierRoles.has(verifier.semantic_role)
   ) {
     throw new BusinessDataServiceError(
-      "هر دو فیلد تأیید باید متفاوت، الزامی، قابل جست‌وجو و فقط برای پیدا کردن رکورد باشند.",
+      "شناسه رکورد باید یک شناسه، کد پیگیری یا شناسه حساب باشد و اطلاعات تأیید باید شماره موبایل، ایمیل یا شناسه مشتری باشد.",
       400,
       "invalid_private_access_fields"
+    );
+  }
+
+  const diagnostics = await getPrivateAccessDiagnostics({
+    context,
+    collectionId,
+    locatorFieldId: locator.id,
+    verificationFieldId: verifier.id,
+  });
+  if (
+    body.enabled &&
+    (diagnostics.locatorMissingCount > 0 ||
+      diagnostics.verificationMissingCount > 0)
+  ) {
+    throw new BusinessDataServiceError(
+      diagnostics.locatorMissingCount > 0
+        ? "شناسه رکورد در برخی رکوردهای فعال خالی است؛ پیش از فعال‌سازی آن‌ها را کامل کنید."
+        : "اطلاعات تأیید مشتری در برخی رکوردهای فعال خالی است؛ پیش از فعال‌سازی آن‌ها را کامل کنید.",
+      400,
+      "private_access_values_missing"
     );
   }
 

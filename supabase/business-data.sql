@@ -2055,11 +2055,30 @@ create table if not exists public.business_data_private_verification_attempts (
   connection_id          uuid not null,
   customer_identity_hash text not null check (customer_identity_hash ~ '^[0-9a-f]{64}$'),
   outcome                text not null check (outcome in ('success', 'failure', 'limited')),
+  reason                 text,
   created_at             timestamptz not null default now(),
   foreign key (collection_id, user_id)
     references public.business_data_collections (id, user_id)
     on delete cascade
 );
+
+alter table public.business_data_private_verification_attempts
+  add column if not exists reason text;
+
+alter table public.business_data_private_verification_attempts
+  drop constraint if exists business_data_private_verification_attempts_outcome_check;
+alter table public.business_data_private_verification_attempts
+  add constraint business_data_private_verification_attempts_outcome_check
+  check (outcome in ('success', 'failure', 'limited', 'diagnostic'));
+
+alter table public.business_data_private_verification_attempts
+  drop constraint if exists business_data_private_verification_attempts_reason_check;
+alter table public.business_data_private_verification_attempts
+  add constraint business_data_private_verification_attempts_reason_check
+  check (reason is null or reason in (
+    'no_candidate', 'verifier_mismatch', 'config_invalid', 'challenge_expired',
+    'rate_limited', 'lookup_error', 'missing_stored_value'
+  ));
 
 comment on table public.business_data_private_verification_attempts is
   'Bounded private-access audit metadata. It intentionally contains no verification values or private record values.';
@@ -2111,7 +2130,16 @@ begin
     '01234567890123456789'
   )));
   if p_role = 'phone' then
-    normalized := regexp_replace(normalized, '[^0-9+]', '', 'g');
+    normalized := regexp_replace(normalized, '[^0-9]', '', 'g');
+    if normalized ~ '^0098[0-9]{10}$' then
+      normalized := '0' || substring(normalized from 5);
+    elsif normalized ~ '^98[0-9]{10}$' then
+      normalized := '0' || substring(normalized from 3);
+    elsif normalized ~ '^9[0-9]{9}$' then
+      normalized := '0' || normalized;
+    end if;
+  elsif p_role in ('reference', 'tracking', 'account_identifier', 'customer_identifier', 'channel_identifier') then
+    normalized := regexp_replace(normalized, '[[:space:]]+', ' ', 'g');
   end if;
   return normalized;
 end;
@@ -2154,6 +2182,8 @@ as $$
       and collection.status = 'active'
       and locator.required and locator.filterable and locator.ai_exposure = 'filter_only'
       and verifier.required and verifier.filterable and verifier.ai_exposure = 'filter_only'
+      and locator.semantic_role in ('reference', 'tracking', 'account_identifier', 'customer_identifier', 'channel_identifier')
+      and verifier.semantic_role in ('phone', 'email', 'customer_identifier', 'account_identifier', 'channel_identifier')
   );
 $$;
 
@@ -2185,6 +2215,8 @@ begin
       and collection.access_scope = 'verified_customer'
       and locator.required and locator.filterable and locator.ai_exposure = 'filter_only'
       and verifier.required and verifier.filterable and verifier.ai_exposure = 'filter_only'
+      and locator.semantic_role in ('reference', 'tracking', 'account_identifier', 'customer_identifier', 'channel_identifier')
+      and verifier.semantic_role in ('phone', 'email', 'customer_identifier', 'account_identifier', 'channel_identifier')
       and new.locator_field_id <> new.verification_field_id
   ) then
     raise exception 'Private access configuration requires two valid filter-only fields'
@@ -2434,6 +2466,307 @@ $$;
 revoke execute on function public.business_data_private_verify(uuid, text, uuid, text, text, uuid, text)
   from public, anon, authenticated;
 grant execute on function public.business_data_private_verify(uuid, text, uuid, text, text, uuid, text)
+  to service_role;
+
+-- Result-returning private verification helpers deliberately expose only
+-- sanitized state codes to the server. Customer-facing code maps every
+-- mismatch to the same neutral language and never returns these codes.
+create or replace function public.business_data_private_find_candidate_result(
+  p_user_id uuid,
+  p_collection_key text,
+  p_locator_value text,
+  p_channel text,
+  p_connection_id uuid,
+  p_customer_identity_hash text
+)
+returns table(outcome text, candidate_record_id uuid)
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  collection_row public.business_data_collections%rowtype;
+  locator_field public.business_data_fields%rowtype;
+  matched_record_id uuid;
+  candidate_count integer := 0;
+  failures integer := 0;
+begin
+  if p_collection_key is null or char_length(p_collection_key) > 64
+    or p_locator_value is null or char_length(p_locator_value) > 200
+    or p_channel not in ('telegram', 'instagram')
+    or p_customer_identity_hash !~ '^[0-9a-f]{64}$' then
+    return query select 'config_invalid'::text, null::uuid;
+    return;
+  end if;
+
+  select collection.* into collection_row
+  from public.business_data_collections collection
+  where collection.user_id = p_user_id
+    and collection.key = p_collection_key
+    and collection.access_scope = 'verified_customer'
+    and collection.ai_enabled
+    and collection.status = 'active';
+  if not found or not public.business_data_private_config_is_valid(collection_row.id, p_user_id) then
+    return query select 'config_invalid'::text, null::uuid;
+    return;
+  end if;
+
+  select count(*) into failures
+  from public.business_data_private_verification_attempts attempt
+  where attempt.user_id = p_user_id
+    and attempt.collection_id = collection_row.id
+    and attempt.channel = p_channel
+    and attempt.connection_id = p_connection_id
+    and attempt.customer_identity_hash = p_customer_identity_hash
+    and attempt.outcome in ('failure', 'limited')
+    and attempt.created_at >= now() - interval '15 minutes';
+  if failures >= 5 then
+    insert into public.business_data_private_verification_attempts (
+      user_id, collection_id, channel, connection_id, customer_identity_hash, outcome, reason
+    ) values (
+      p_user_id, collection_row.id, p_channel, p_connection_id, p_customer_identity_hash,
+      'limited', 'rate_limited'
+    );
+    return query select 'rate_limited'::text, null::uuid;
+    return;
+  end if;
+
+  select field_definition.* into locator_field
+  from public.business_data_private_access_configs config
+  join public.business_data_fields field_definition
+    on field_definition.id = config.locator_field_id
+  where config.collection_id = collection_row.id
+    and config.user_id = p_user_id
+    and config.enabled;
+
+  select count(*) into candidate_count
+  from public.business_data_records record
+  where record.user_id = p_user_id
+    and record.collection_id = collection_row.id
+    and record.status = 'active'
+    and public.business_data_normalize_verification_value(
+      record.values ->> locator_field.key,
+      locator_field.semantic_role
+    ) = public.business_data_normalize_verification_value(
+      p_locator_value,
+      locator_field.semantic_role
+    );
+  if candidate_count <> 1 then
+    insert into public.business_data_private_verification_attempts (
+      user_id, collection_id, channel, connection_id, customer_identity_hash, outcome, reason
+    ) values (
+      p_user_id, collection_row.id, p_channel, p_connection_id, p_customer_identity_hash,
+      'failure', 'no_candidate'
+    );
+    return query select 'no_candidate'::text, null::uuid;
+    return;
+  end if;
+
+  select record.id into matched_record_id
+  from public.business_data_records record
+  where record.user_id = p_user_id
+    and record.collection_id = collection_row.id
+    and record.status = 'active'
+    and public.business_data_normalize_verification_value(
+      record.values ->> locator_field.key,
+      locator_field.semantic_role
+    ) = public.business_data_normalize_verification_value(
+      p_locator_value,
+      locator_field.semantic_role
+    );
+  return query select 'locator_accepted'::text, matched_record_id;
+end;
+$$;
+
+revoke execute on function public.business_data_private_find_candidate_result(uuid, text, text, text, uuid, text)
+  from public, anon, authenticated;
+grant execute on function public.business_data_private_find_candidate_result(uuid, text, text, text, uuid, text)
+  to service_role;
+
+create or replace function public.business_data_private_verify_result(
+  p_user_id uuid,
+  p_collection_key text,
+  p_candidate_record_id uuid,
+  p_verification_value text,
+  p_channel text,
+  p_connection_id uuid,
+  p_customer_identity_hash text
+)
+returns text
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  collection_row public.business_data_collections%rowtype;
+  verifier_field public.business_data_fields%rowtype;
+  stored_value text;
+  verified boolean := false;
+  failures integer := 0;
+begin
+  if p_collection_key is null or char_length(p_collection_key) > 64
+    or p_verification_value is null or char_length(p_verification_value) > 200
+    or p_channel not in ('telegram', 'instagram')
+    or p_customer_identity_hash !~ '^[0-9a-f]{64}$' then
+    return 'config_invalid';
+  end if;
+
+  select collection.* into collection_row
+  from public.business_data_collections collection
+  where collection.user_id = p_user_id
+    and collection.key = p_collection_key
+    and collection.access_scope = 'verified_customer'
+    and collection.ai_enabled
+    and collection.status = 'active';
+  if not found or not public.business_data_private_config_is_valid(collection_row.id, p_user_id) then
+    return 'config_invalid';
+  end if;
+
+  select count(*) into failures
+  from public.business_data_private_verification_attempts attempt
+  where attempt.user_id = p_user_id
+    and attempt.collection_id = collection_row.id
+    and attempt.channel = p_channel
+    and attempt.connection_id = p_connection_id
+    and attempt.customer_identity_hash = p_customer_identity_hash
+    and attempt.outcome in ('failure', 'limited')
+    and attempt.created_at >= now() - interval '15 minutes';
+  if failures >= 5 then
+    insert into public.business_data_private_verification_attempts (
+      user_id, collection_id, channel, connection_id, customer_identity_hash, outcome, reason
+    ) values (
+      p_user_id, collection_row.id, p_channel, p_connection_id, p_customer_identity_hash,
+      'limited', 'rate_limited'
+    );
+    return 'rate_limited';
+  end if;
+
+  select field_definition.* into verifier_field
+  from public.business_data_private_access_configs config
+  join public.business_data_fields field_definition
+    on field_definition.id = config.verification_field_id
+  where config.collection_id = collection_row.id
+    and config.user_id = p_user_id
+    and config.enabled;
+
+  select record.values ->> verifier_field.key into stored_value
+  from public.business_data_records record
+  where record.id = p_candidate_record_id
+    and record.user_id = p_user_id
+    and record.collection_id = collection_row.id
+    and record.status = 'active';
+  if not found or public.business_data_normalize_verification_value(stored_value, verifier_field.semantic_role) = '' then
+    insert into public.business_data_private_verification_attempts (
+      user_id, collection_id, channel, connection_id, customer_identity_hash, outcome, reason
+    ) values (
+      p_user_id, collection_row.id, p_channel, p_connection_id, p_customer_identity_hash,
+      'failure', 'missing_stored_value'
+    );
+    return 'missing_stored_value';
+  end if;
+
+  verified := public.business_data_normalize_verification_value(
+    stored_value, verifier_field.semantic_role
+  ) = public.business_data_normalize_verification_value(
+    p_verification_value, verifier_field.semantic_role
+  );
+  insert into public.business_data_private_verification_attempts (
+    user_id, collection_id, channel, connection_id, customer_identity_hash, outcome, reason
+  ) values (
+    p_user_id, collection_row.id, p_channel, p_connection_id, p_customer_identity_hash,
+    case when verified then 'success' else 'failure' end,
+    case when verified then null else 'verifier_mismatch' end
+  );
+  if not verified then return 'verifier_mismatch'; end if;
+
+  insert into public.business_data_verified_customer_sessions (
+    user_id, collection_id, record_id, channel, connection_id,
+    customer_identity_hash, verified_at, expires_at
+  ) values (
+    p_user_id, collection_row.id, p_candidate_record_id, p_channel,
+    p_connection_id, p_customer_identity_hash, now(), now() + interval '10 minutes'
+  )
+  on conflict (user_id, collection_id, channel, connection_id, customer_identity_hash)
+  do update set
+    record_id = excluded.record_id,
+    verified_at = excluded.verified_at,
+    expires_at = excluded.expires_at;
+  return 'verified';
+end;
+$$;
+
+revoke execute on function public.business_data_private_verify_result(uuid, text, uuid, text, text, uuid, text)
+  from public, anon, authenticated;
+grant execute on function public.business_data_private_verify_result(uuid, text, uuid, text, text, uuid, text)
+  to service_role;
+
+create or replace function public.business_data_private_access_diagnostics(
+  p_user_id uuid,
+  p_collection_id uuid,
+  p_locator_field_id uuid,
+  p_verification_field_id uuid
+)
+returns table(
+  configuration_valid boolean,
+  active_record_count bigint,
+  locator_missing_count bigint,
+  verification_missing_count bigint,
+  recent_reason text
+)
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  locator_field public.business_data_fields%rowtype;
+  verifier_field public.business_data_fields%rowtype;
+begin
+  select field_definition.* into locator_field
+  from public.business_data_fields field_definition
+  where field_definition.id = p_locator_field_id
+    and field_definition.collection_id = p_collection_id
+    and field_definition.user_id = p_user_id;
+  select field_definition.* into verifier_field
+  from public.business_data_fields field_definition
+  where field_definition.id = p_verification_field_id
+    and field_definition.collection_id = p_collection_id
+    and field_definition.user_id = p_user_id;
+
+  configuration_valid := locator_field.id is not null and verifier_field.id is not null
+    and locator_field.required and locator_field.filterable and locator_field.ai_exposure = 'filter_only'
+    and verifier_field.required and verifier_field.filterable and verifier_field.ai_exposure = 'filter_only'
+    and locator_field.id <> verifier_field.id
+    and locator_field.semantic_role in ('reference', 'tracking', 'account_identifier', 'customer_identifier', 'channel_identifier')
+    and verifier_field.semantic_role in ('phone', 'email', 'customer_identifier', 'account_identifier', 'channel_identifier');
+  select count(*) into active_record_count
+  from public.business_data_records record
+  where record.user_id = p_user_id and record.collection_id = p_collection_id and record.status = 'active';
+  if configuration_valid then
+    select count(*) into locator_missing_count
+    from public.business_data_records record
+    where record.user_id = p_user_id and record.collection_id = p_collection_id and record.status = 'active'
+      and public.business_data_normalize_verification_value(record.values ->> locator_field.key, locator_field.semantic_role) = '';
+    select count(*) into verification_missing_count
+    from public.business_data_records record
+    where record.user_id = p_user_id and record.collection_id = p_collection_id and record.status = 'active'
+      and public.business_data_normalize_verification_value(record.values ->> verifier_field.key, verifier_field.semantic_role) = '';
+  else
+    locator_missing_count := 0;
+    verification_missing_count := 0;
+  end if;
+  select attempt.reason into recent_reason
+  from public.business_data_private_verification_attempts attempt
+  where attempt.user_id = p_user_id and attempt.collection_id = p_collection_id
+    and attempt.reason is not null
+  order by attempt.created_at desc
+  limit 1;
+  return next;
+end;
+$$;
+
+revoke execute on function public.business_data_private_access_diagnostics(uuid, uuid, uuid, uuid)
+  from public, anon, authenticated;
+grant execute on function public.business_data_private_access_diagnostics(uuid, uuid, uuid, uuid)
   to service_role;
 
 create or replace function public.business_data_lookup_verified_customer(

@@ -68,6 +68,36 @@ type ChallengeRow = {
   expires_at: string;
 };
 
+type PrivateVerificationReason =
+  | "no_candidate"
+  | "verifier_mismatch"
+  | "config_invalid"
+  | "challenge_expired"
+  | "rate_limited"
+  | "lookup_error"
+  | "missing_stored_value";
+
+type CandidateResult = {
+  outcome: "locator_accepted" | PrivateVerificationReason;
+  candidate_record_id: string | null;
+};
+
+const locatorRoles = new Set([
+  "reference",
+  "tracking",
+  "account_identifier",
+  "customer_identifier",
+  "channel_identifier",
+]);
+
+const verifierRoles = new Set([
+  "phone",
+  "email",
+  "customer_identifier",
+  "account_identifier",
+  "channel_identifier",
+]);
+
 const verificationIdentityHash = (identity: PrivateAccessIdentity) =>
   createHash("sha256")
     .update(
@@ -86,6 +116,12 @@ const isConfigFieldUsable = (field: ConfigFieldRow | undefined) =>
       field.filterable &&
       field.ai_exposure === "filter_only"
   );
+
+const isLocatorFieldUsable = (field: ConfigFieldRow | undefined) =>
+  Boolean(field && isConfigFieldUsable(field) && locatorRoles.has(field.semantic_role));
+
+const isVerifierFieldUsable = (field: ConfigFieldRow | undefined) =>
+  Boolean(field && isConfigFieldUsable(field) && verifierRoles.has(field.semantic_role));
 
 const getPrivateRows = async (userId: string) => {
   const admin = createAdminClient();
@@ -144,8 +180,8 @@ const eligiblePrivateCollections = async (userId: string) => {
     );
     return (
       config.locator_field_id !== config.verification_field_id &&
-      isConfigFieldUsable(locator) &&
-      isConfigFieldUsable(verifier)
+      isLocatorFieldUsable(locator) &&
+      isVerifierFieldUsable(verifier)
     );
   });
 };
@@ -205,8 +241,8 @@ const getCollectionPrivateConfig = async ({
   );
   if (
     config.locator_field_id === config.verification_field_id ||
-    !isConfigFieldUsable(locator) ||
-    !isConfigFieldUsable(verifier) ||
+    !isLocatorFieldUsable(locator) ||
+    !isVerifierFieldUsable(verifier) ||
     !locator ||
     !verifier
   ) {
@@ -223,7 +259,6 @@ const getActiveChallenge = async ({
   userId: string;
 }) => {
   const admin = createAdminClient();
-  const now = new Date().toISOString();
   const { data, error } = await admin
     .from("business_data_private_verification_challenges")
     .select("id, collection_id, candidate_record_id, pending_question, step, expires_at")
@@ -231,7 +266,6 @@ const getActiveChallenge = async ({
     .eq("channel", identity.channel)
     .eq("connection_id", identity.connectionId)
     .eq("customer_identity_hash", verificationIdentityHash(identity))
-    .gt("expires_at", now)
     .order("updated_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -291,6 +325,46 @@ const fieldPrompt = (label: string, kind: "locator" | "verification") =>
     ? `برای بررسی، ${label} را بفرستید.`
     : `برای تأیید اطلاعات، ${label} را هم بفرستید.`;
 
+const logVerificationDiagnostic = ({
+  collectionKind,
+  outcome,
+}: {
+  collectionKind?: string;
+  outcome: "success" | PrivateVerificationReason;
+}) => {
+  console.info("Private Business Data verification", {
+    ...(collectionKind ? { collectionKind } : {}),
+    outcome,
+  });
+};
+
+const recordOwnerDiagnostic = async ({
+  collectionId,
+  identity,
+  reason,
+  userId,
+}: {
+  collectionId: string;
+  identity: PrivateAccessIdentity;
+  reason: Extract<PrivateVerificationReason, "challenge_expired" | "config_invalid" | "lookup_error">;
+  userId: string;
+}) => {
+  await createAdminClient()
+    .from("business_data_private_verification_attempts")
+    .insert({
+      user_id: userId,
+      collection_id: collectionId,
+      channel: identity.channel,
+      connection_id: identity.connectionId,
+      customer_identity_hash: verificationIdentityHash(identity),
+      outcome: "diagnostic",
+      reason,
+    });
+};
+
+const retryMessage = "اطلاعات واردشده تأیید نشد. لطفاً اطلاعات را بررسی و دوباره ارسال کنید.";
+const rateLimitMessage = "تعداد تلاش‌های ناموفق زیاد شده است. کمی بعد دوباره تلاش کنید.";
+
 export const startPrivateVerification = async ({
   collectionKey,
   identity,
@@ -349,6 +423,20 @@ export const handlePrivateVerificationMessage = async ({
 }): Promise<PrivateVerificationHandling> => {
   const challenge = await getActiveChallenge({ identity, userId });
   if (!challenge) return { handled: false };
+  if (new Date(challenge.expires_at).getTime() <= Date.now()) {
+    await deleteChallenge(challenge.id);
+    await recordOwnerDiagnostic({
+      collectionId: challenge.collection_id,
+      identity,
+      reason: "challenge_expired",
+      userId,
+    });
+    logVerificationDiagnostic({ outcome: "challenge_expired" });
+    return {
+      handled: true,
+      reply: "زمان تأیید به پایان رسیده است. لطفاً درخواست را دوباره ارسال کنید.",
+    };
+  }
   if (/^(لغو|انصراف|cancel)$/iu.test(message.trim())) {
     await deleteChallenge(challenge.id);
     return { handled: true, reply: "فرایند تأیید لغو شد." };
@@ -363,6 +451,13 @@ export const handlePrivateVerificationMessage = async ({
     .maybeSingle();
   if (collectionError || !collectionData) {
     await deleteChallenge(challenge.id);
+    await recordOwnerDiagnostic({
+      collectionId: challenge.collection_id,
+      identity,
+      reason: "lookup_error",
+      userId,
+    });
+    logVerificationDiagnostic({ outcome: "lookup_error" });
     return { handled: true, reply: "امکان بررسی این درخواست در حال حاضر نیست." };
   }
   const config = await getCollectionPrivateConfig({
@@ -371,6 +466,13 @@ export const handlePrivateVerificationMessage = async ({
   });
   if (!config) {
     await deleteChallenge(challenge.id);
+    await recordOwnerDiagnostic({
+      collectionId: challenge.collection_id,
+      identity,
+      reason: "config_invalid",
+      userId,
+    });
+    logVerificationDiagnostic({ outcome: "config_invalid" });
     return { handled: true, reply: "امکان بررسی این درخواست در حال حاضر نیست." };
   }
 
@@ -381,24 +483,58 @@ export const handlePrivateVerificationMessage = async ({
   ) };
 
   if (challenge.step === "locator") {
-    const { data, error } = await admin.rpc("business_data_private_find_candidate", {
+    const { data, error } = await admin.rpc("business_data_private_find_candidate_result", {
       p_user_id: userId,
       p_collection_key: config.collection.key,
       p_locator_value: submitted,
+      p_channel: identity.channel,
+      p_connection_id: identity.connectionId,
+      p_customer_identity_hash: verificationIdentityHash(identity),
     });
-    if (error) throw new Error(`Private verification candidate failed: ${error.message}`);
+    if (error) {
+      await deleteChallenge(challenge.id);
+      await recordOwnerDiagnostic({
+        collectionId: challenge.collection_id,
+        identity,
+        reason: "lookup_error",
+        userId,
+      });
+      logVerificationDiagnostic({ collectionKind: config.collection.kind, outcome: "lookup_error" });
+      return { handled: true, reply: "امکان بررسی این درخواست در حال حاضر نیست." };
+    }
+    const result = Array.isArray(data) ? (data[0] as CandidateResult | undefined) : undefined;
+    if (!result || result.outcome === "config_invalid") {
+      await deleteChallenge(challenge.id);
+      await recordOwnerDiagnostic({
+        collectionId: challenge.collection_id,
+        identity,
+        reason: "config_invalid",
+        userId,
+      });
+      logVerificationDiagnostic({ collectionKind: config.collection.kind, outcome: "config_invalid" });
+      return { handled: true, reply: "امکان بررسی این درخواست در حال حاضر نیست." };
+    }
+    if (result.outcome === "rate_limited") {
+      await deleteChallenge(challenge.id);
+      logVerificationDiagnostic({ collectionKind: config.collection.kind, outcome: "rate_limited" });
+      return { handled: true, reply: rateLimitMessage };
+    }
+    if (result.outcome !== "locator_accepted" || !result.candidate_record_id) {
+      logVerificationDiagnostic({ collectionKind: config.collection.kind, outcome: "no_candidate" });
+      return { handled: true, reply: retryMessage };
+    }
     await upsertChallenge({
       collectionId: config.collection.id,
       identity,
       userId,
-      candidateRecordId: typeof data === "string" ? data : null,
+      candidateRecordId: result.candidate_record_id,
       pendingQuestion: challenge.pending_question,
       step: "verification",
     });
     return { handled: true, reply: fieldPrompt(config.verifier.label, "verification") };
   }
 
-  const { data, error } = await admin.rpc("business_data_private_verify", {
+  const { data, error } = await admin.rpc("business_data_private_verify_result", {
     p_user_id: userId,
     p_collection_key: config.collection.key,
     p_candidate_record_id: challenge.candidate_record_id,
@@ -407,21 +543,43 @@ export const handlePrivateVerificationMessage = async ({
     p_connection_id: identity.connectionId,
     p_customer_identity_hash: verificationIdentityHash(identity),
   });
-  await deleteChallenge(challenge.id);
-  if (error || data !== true) {
-    console.info("Private Business Data verification", {
-      collectionKind: config.collection.kind,
-      outcome: "failure",
+  const outcome = typeof data === "string" ? data as PrivateVerificationReason | "verified" : "lookup_error";
+  if (error || outcome === "lookup_error") {
+    await deleteChallenge(challenge.id);
+    await recordOwnerDiagnostic({
+      collectionId: challenge.collection_id,
+      identity,
+      reason: "lookup_error",
+      userId,
     });
-    return {
-      handled: true,
-      reply: "اطلاعات واردشده برای تأیید کافی نبود. دوباره از ابتدا درخواست را بفرستید.",
-    };
+    logVerificationDiagnostic({ collectionKind: config.collection.kind, outcome: "lookup_error" });
+    return { handled: true, reply: "امکان بررسی این درخواست در حال حاضر نیست." };
   }
-  console.info("Private Business Data verification", {
-    collectionKind: config.collection.kind,
-    outcome: "success",
-  });
+  if (outcome === "rate_limited") {
+    await deleteChallenge(challenge.id);
+    logVerificationDiagnostic({ collectionKind: config.collection.kind, outcome });
+    return { handled: true, reply: rateLimitMessage };
+  }
+  if (outcome === "config_invalid") {
+    await deleteChallenge(challenge.id);
+    await recordOwnerDiagnostic({
+      collectionId: challenge.collection_id,
+      identity,
+      reason: "config_invalid",
+      userId,
+    });
+    logVerificationDiagnostic({ collectionKind: config.collection.kind, outcome });
+    return { handled: true, reply: "امکان بررسی این درخواست در حال حاضر نیست." };
+  }
+  if (outcome !== "verified") {
+    logVerificationDiagnostic({
+      collectionKind: config.collection.kind,
+      outcome: outcome === "missing_stored_value" ? outcome : "verifier_mismatch",
+    });
+    return { handled: true, reply: retryMessage };
+  }
+  await deleteChallenge(challenge.id);
+  logVerificationDiagnostic({ collectionKind: config.collection.kind, outcome: "success" });
   return {
     handled: true,
     reply: "",

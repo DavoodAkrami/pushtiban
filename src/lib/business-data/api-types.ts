@@ -63,6 +63,23 @@ export type BusinessDataPrivateAccessConfig = {
   locatorFieldId: string;
   verificationFieldId: string;
   updatedAt: string;
+  diagnostics: BusinessDataPrivateAccessDiagnostics;
+};
+
+export type BusinessDataPrivateAccessDiagnostics = {
+  configurationValid: boolean;
+  activeRecordCount: number;
+  locatorMissingCount: number;
+  verificationMissingCount: number;
+  recentReason:
+    | "no_candidate"
+    | "verifier_mismatch"
+    | "config_invalid"
+    | "challenge_expired"
+    | "rate_limited"
+    | "lookup_error"
+    | "missing_stored_value"
+    | null;
 };
 
 export type BusinessDataRecord = {

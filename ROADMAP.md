@@ -105,8 +105,12 @@ How to use:
       catalogs, preview inspection, token budgets, and strict exclusion of
       verified-customer/private operational data until milestone 5
 - [x] Business Data milestone 5: verified customer private operational lookup
+      with deterministic two-field verification, record-scoped 10-minute sessions,
+      and private field redaction
       with short-lived record-scoped verification, field redaction, attempt
       limits, and strict exclusion of internal data
+- [x] Private-access reliability hardening: role-specific symmetric normalization,
+      bounded verifier retry, expiry recovery, and sanitized owner diagnostics
 - [x] Business Data connector milestone 1: encrypted server-side Supabase
       connection, table discovery, field mapping, bounded manual sync, and
       sanitized sync history through the existing source architecture
