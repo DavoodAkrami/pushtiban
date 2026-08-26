@@ -9,6 +9,7 @@ import {
   type RegisteredActionDefinition,
 } from "./core";
 import { isSupportRequestMessage } from "./support-intent";
+import { getBusinessActionConfiguration } from "./settings";
 
 export { isSupportRequestMessage } from "./support-intent";
 
@@ -80,6 +81,12 @@ const createSupportRequest = defineAction<
   resultSchema: supportRequestResultSchema,
   verification: "none",
   confirmation: { required: false },
+  settings: {
+    displayName: "ثبت درخواست پشتیبانی",
+    description:
+      "به دستیار اجازه می‌دهد وقتی مشتری صریحاً درخواست پشتیبانی می‌کند، گفت‌وگو را برای پیگیری در صندوق ورودی ثبت کند.",
+    defaultEnabled: true,
+  },
   intentGuard: isSupportRequestMessage,
   isEnabled: supportRequestsEnabled,
   execute: async (context) => {
@@ -118,17 +125,59 @@ export const ACTION_REGISTRY: ReadonlyMap<
   RegisteredActionDefinition
 > = new Map([[createSupportRequest.key, createSupportRequest]]);
 
-export const describeAvailableActions = ({
+export type SafeActionSettingsMetadata = {
+  key: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  registryRequiresVerification: boolean;
+  registryRequiresConfirmation: boolean;
+  requireConfirmation: boolean;
+};
+
+export const listSafeActionSettings = async (
+  userId: string
+): Promise<SafeActionSettingsMetadata[]> =>
+  Promise.all(
+    [...ACTION_REGISTRY.values()].map(async (definition) => {
+      const configuration = await getBusinessActionConfiguration({
+        userId,
+        definition,
+      });
+      return {
+        key: definition.key,
+        name: definition.settings.displayName,
+        description: definition.settings.description,
+        enabled: configuration.enabled,
+        registryRequiresVerification:
+          definition.verification === "verified_customer",
+        registryRequiresConfirmation: definition.confirmation.required,
+        requireConfirmation:
+          definition.confirmation.required || configuration.requireConfirmation,
+      };
+    })
+  );
+
+export const describeAvailableActions = async ({
   actionContextAvailable,
   handoffEnabled,
+  userId,
 }: {
   actionContextAvailable: boolean;
   handoffEnabled: boolean;
+  userId?: string;
 }) => {
-  if (!actionContextAvailable || !handoffEnabled) return "";
-  return JSON.stringify({
-    key: createSupportRequest.key,
-    description: createSupportRequest.description,
-    arguments: {},
-  });
+  if (!actionContextAvailable || !handoffEnabled || !userId) return "";
+  const settings = await listSafeActionSettings(userId);
+  const actions = settings
+    .filter((setting) => setting.enabled)
+    .map((setting) => {
+      const definition = ACTION_REGISTRY.get(setting.key)!;
+      return {
+        key: definition.key,
+        description: definition.description,
+        arguments: {},
+      };
+    });
+  return actions.length ? JSON.stringify(actions) : "";
 };

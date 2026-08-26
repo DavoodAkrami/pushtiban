@@ -47,6 +47,19 @@ export type ActionConfirmation =
   | { required: false }
   | { required: true; prompt: string; ttlMs?: number };
 
+/** Per-business limits. These can only add safeguards to a registry action. */
+export type ActionBusinessConfiguration = {
+  enabled: boolean;
+  requireConfirmation: boolean;
+};
+
+/** Safe, owner-facing metadata. Execution details stay private to the registry. */
+export type ActionSettingsMetadata = {
+  displayName: string;
+  description: string;
+  defaultEnabled: boolean;
+};
+
 export type ActionDefinition<Input, Result> = {
   key: string;
   name: string;
@@ -55,6 +68,7 @@ export type ActionDefinition<Input, Result> = {
   resultSchema: ActionSchema<Result>;
   verification: ActionVerification;
   confirmation: ActionConfirmation;
+  settings: ActionSettingsMetadata;
   intentGuard: (customerMessage: string) => boolean;
   isEnabled: (context: ActionExecutionContext) => Promise<boolean>;
   execute: (context: ActionHandlerContext, input: Input) => Promise<Result>;
@@ -69,6 +83,7 @@ export type RegisteredActionDefinition = {
   resultSchema: ActionSchema<unknown>;
   verification: ActionVerification;
   confirmation: ActionConfirmation;
+  settings: ActionSettingsMetadata;
   intentGuard: (customerMessage: string) => boolean;
   isEnabled: (context: ActionExecutionContext) => Promise<boolean>;
   execute: (context: ActionHandlerContext, input: unknown) => Promise<unknown>;
@@ -143,6 +158,10 @@ export type ActionEngineDependencies = {
   store: ActionExecutionStore;
   authorizeContext: (context: ActionExecutionContext) => Promise<boolean>;
   verifyCustomer: (context: ActionExecutionContext) => Promise<boolean>;
+  resolveConfiguration: (
+    context: ActionExecutionContext,
+    definition: RegisteredActionDefinition
+  ) => Promise<ActionBusinessConfiguration>;
   now?: () => Date;
 };
 
@@ -152,6 +171,10 @@ export type ActionHandlingResult = {
   actionKey?: string;
   status?: ActionStatus | "rejected";
 };
+
+type ActionAuthorization =
+  | { result: "rejected" | "disabled" | "verification" }
+  | { result: "allowed"; configuration: ActionBusinessConfiguration };
 
 const ACTION_KEY_RE = /^[a-z][a-z0-9_]{0,63}$/;
 const UUID_RE =
@@ -164,6 +187,8 @@ const TEXT = {
     "مهلت تأیید این درخواست تمام شده است. لطفاً دوباره درخواست را مطرح کنید.",
   failed: "انجام درخواست ممکن نشد؛ لطفاً کمی بعد دوباره تلاش کنید.",
   inProgress: "این درخواست در حال انجام است؛ لطفاً کمی صبر کنید.",
+  confirmationRequired:
+    "برای انجام این درخواست، تأیید شما لازم است. آیا ادامه می‌دهید؟",
   rejected: "امکان انجام این درخواست وجود ندارد.",
   verificationRequired:
     "برای انجام این درخواست، ابتدا باید هویت شما تأیید شود.",
@@ -283,8 +308,13 @@ export const createActionEngine = ({
   store,
   authorizeContext,
   verifyCustomer,
+  resolveConfiguration,
   now = () => new Date(),
 }: ActionEngineDependencies) => {
+  const confirmationPrompt = (definition: RegisteredActionDefinition) =>
+    definition.confirmation.required
+      ? definition.confirmation.prompt
+      : TEXT.confirmationRequired;
   const executeClaimed = async ({
     context,
     definition,
@@ -335,17 +365,19 @@ export const createActionEngine = ({
   const authorize = async (
     definition: RegisteredActionDefinition,
     context: ActionExecutionContext
-  ) => {
-    if (!validContext(context)) return "rejected" as const;
-    if (!(await authorizeContext(context))) return "rejected" as const;
-    if (!(await definition.isEnabled(context))) return "disabled" as const;
+  ): Promise<ActionAuthorization> => {
+    if (!validContext(context)) return { result: "rejected" };
+    if (!(await authorizeContext(context))) return { result: "rejected" };
+    if (!(await definition.isEnabled(context))) return { result: "disabled" };
+    const configuration = await resolveConfiguration(context, definition);
+    if (!configuration.enabled) return { result: "disabled" };
     if (
       definition.verification === "verified_customer" &&
       !(await verifyCustomer(context))
     ) {
-      return "verification" as const;
+      return { result: "verification" };
     }
-    return "allowed" as const;
+    return { result: "allowed" as const, configuration };
   };
 
   const executeRequested = async ({
@@ -366,26 +398,25 @@ export const createActionEngine = ({
     if (!parsedInput.success) return safeRejected(definition.key);
 
     const authorization = await authorize(definition, context);
-    if (authorization === "rejected") return safeRejected(definition.key);
-    if (authorization === "disabled") {
+    if (authorization.result !== "allowed") {
+      if (authorization.result === "rejected") return safeRejected(definition.key);
       return {
         handled: true,
-        text: TEXT.disabled,
-        actionKey: definition.key,
-        status: "rejected",
-      };
-    }
-    if (authorization === "verification") {
-      return {
-        handled: true,
-        text: TEXT.verificationRequired,
+        text:
+          authorization.result === "verification"
+            ? TEXT.verificationRequired
+            : TEXT.disabled,
         actionKey: definition.key,
         status: "rejected",
       };
     }
 
     const currentTime = now();
-    const requiresConfirmation = definition.confirmation.required;
+    const requiresConfirmation =
+      definition.confirmation.required || authorization.configuration.requireConfirmation;
+    const confirmationTtl = definition.confirmation.required
+      ? (definition.confirmation.ttlMs ?? ACTION_LIMITS.confirmationTtlMs)
+      : ACTION_LIMITS.confirmationTtlMs;
     const claim = await store.claim({
       ...actionScopeFor(context),
       actionKey: definition.key,
@@ -397,7 +428,7 @@ export const createActionEngine = ({
       confirmationExpiresAt: requiresConfirmation
         ? new Date(
             currentTime.getTime() +
-              (definition.confirmation.ttlMs ?? ACTION_LIMITS.confirmationTtlMs)
+              confirmationTtl
           ).toISOString()
         : null,
     });
@@ -423,8 +454,8 @@ export const createActionEngine = ({
       if (existing.status === "pending_confirmation") {
         return {
           handled: true,
-          text: definition.confirmation.required
-            ? definition.confirmation.prompt
+          text: existing.requiresConfirmation
+            ? confirmationPrompt(definition)
             : TEXT.inProgress,
           actionKey: definition.key,
           status: existing.status,
@@ -463,9 +494,7 @@ export const createActionEngine = ({
     if (requiresConfirmation) {
       return {
         handled: true,
-        text: definition.confirmation.required
-          ? definition.confirmation.prompt
-          : TEXT.inProgress,
+        text: confirmationPrompt(definition),
         actionKey: definition.key,
         status: "pending_confirmation",
       };
@@ -493,7 +522,7 @@ export const createActionEngine = ({
     const pending = await store.findPending(actionScopeFor(context));
     if (!pending) return { handled: false, text: null };
     const definition = definitions.get(pending.actionKey);
-    if (!definition || !definition.confirmation.required) {
+    if (!definition || !pending.requiresConfirmation) {
       await store.markFailed(pending.id, "definition_unavailable");
       return safeRejected(pending.actionKey);
     }
@@ -520,9 +549,9 @@ export const createActionEngine = ({
     }
 
     const authorization = await authorize(definition, context);
-    if (authorization !== "allowed") {
-      await store.markFailed(pending.id, `authorization_${authorization}`);
-      return authorization === "verification"
+    if (authorization.result !== "allowed") {
+      await store.markFailed(pending.id, `authorization_${authorization.result}`);
+      return authorization.result === "verification"
         ? {
             handled: true,
             text: TEXT.verificationRequired,

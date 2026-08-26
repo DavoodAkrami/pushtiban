@@ -4,6 +4,59 @@
 -- Idempotent and non-destructive. Run after supabase/channel-inbox.sql.
 -- =============================================================================
 
+-- Per-business action controls. The code registry remains the source of what
+-- actions exist and of all mandatory security requirements; this table can
+-- only disable an action or add confirmation.
+create table if not exists public.business_action_settings (
+  user_id                uuid not null references auth.users (id) on delete cascade,
+  action_key             text not null,
+  is_enabled             boolean not null default false,
+  require_confirmation   boolean not null default false,
+  created_at             timestamptz not null default now(),
+  updated_at             timestamptz not null default now(),
+  primary key (user_id, action_key),
+  constraint business_action_settings_action_key_check
+    check (action_key ~ '^[a-z][a-z0-9_]{0,63}$')
+);
+
+comment on table public.business_action_settings is
+  'Tenant-owned restrictions for code-registered AI actions. It cannot grant an unregistered action or weaken registry security.';
+
+drop trigger if exists business_action_settings_set_updated_at
+  on public.business_action_settings;
+create trigger business_action_settings_set_updated_at
+  before update on public.business_action_settings
+  for each row execute function public.set_updated_at();
+
+alter table public.business_action_settings enable row level security;
+
+-- Owners can manage only their own preferences through the authenticated
+-- dashboard API. The webhook uses the service role and still enforces the
+-- registry's authorization, verification, and confirmation requirements.
+revoke all on table public.business_action_settings from public, anon;
+grant select, insert, update on table public.business_action_settings to authenticated;
+grant select, insert, update, delete
+  on table public.business_action_settings to service_role;
+
+drop policy if exists "Owners read their action settings"
+  on public.business_action_settings;
+create policy "Owners read their action settings"
+  on public.business_action_settings for select to authenticated
+  using ((select auth.uid()) = user_id);
+
+drop policy if exists "Owners insert their action settings"
+  on public.business_action_settings;
+create policy "Owners insert their action settings"
+  on public.business_action_settings for insert to authenticated
+  with check ((select auth.uid()) = user_id);
+
+drop policy if exists "Owners update their action settings"
+  on public.business_action_settings;
+create policy "Owners update their action settings"
+  on public.business_action_settings for update to authenticated
+  using ((select auth.uid()) = user_id)
+  with check ((select auth.uid()) = user_id);
+
 create table if not exists public.business_action_executions (
   id                         uuid primary key default gen_random_uuid(),
   user_id                    uuid not null references auth.users (id) on delete cascade,

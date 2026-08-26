@@ -166,13 +166,18 @@ const definition = ({
     resultSchema,
     verification,
     confirmation,
+    settings: {
+      displayName: key,
+      description: key,
+      defaultEnabled: true,
+    },
     intentGuard,
     isEnabled: async () => true,
     execute,
     formatResult: () => "ثبت شد.",
   });
 
-const createHarness = ({ definitions, authorize, initialTime } = {}) => {
+const createHarness = ({ definitions, authorize, configuration, initialTime } = {}) => {
   let currentTime = initialTime ?? new Date("2026-08-25T08:00:00.000Z");
   const now = () => new Date(currentTime);
   const store = new MemoryStore(now);
@@ -185,6 +190,9 @@ const createHarness = ({ definitions, authorize, initialTime } = {}) => {
         candidate.userId === OWNER_ID &&
         candidate.connectionId === CONNECTION_ID),
     verifyCustomer: async () => false,
+    resolveConfiguration:
+      configuration ??
+      (async () => ({ enabled: true, requireConfirmation: false })),
     now,
   });
   return {
@@ -213,6 +221,17 @@ const success = await successHarness.engine.executeRequested({
 });
 assert.equal(success.status, "succeeded", "registered action executes");
 assert.equal(supportExecutions, 1);
+
+const disabledHarness = createHarness({
+  definitions: [[supportDefinition.key, supportDefinition]],
+  configuration: async () => ({ enabled: false, requireConfirmation: false }),
+});
+const disabled = await disabledHarness.engine.executeRequested({
+  context: context({ deliveryId: "telegram-update:9014" }),
+  request: { key: "create_support_request", arguments: {} },
+});
+assert.equal(disabled.status, "rejected", "disabled action cannot execute");
+assert.equal(supportExecutions, 1, "client state cannot bypass server configuration");
 
 const unknown = await successHarness.engine.executeRequested({
   context: context({ deliveryId: "telegram-update:9002" }),
@@ -322,6 +341,21 @@ const confirmed = await confirmedHarness.engine.confirmPending({
 assert.equal(confirmed.status, "succeeded", "valid confirmation executes once");
 assert.equal(confirmedExecutions, 1);
 
+const extraConfirmationHarness = createHarness({
+  definitions: [[supportDefinition.key, supportDefinition]],
+  configuration: async () => ({ enabled: true, requireConfirmation: true }),
+});
+const extraConfirmation = await extraConfirmationHarness.engine.executeRequested({
+  context: context({ deliveryId: "telegram-update:9015" }),
+  request: { key: "create_support_request", arguments: {} },
+});
+assert.equal(
+  extraConfirmation.status,
+  "pending_confirmation",
+  "business can add confirmation to a registry action"
+);
+assert.equal(supportExecutions, 1, "extra confirmation prevents early execution");
+
 const duplicate = await successHarness.engine.executeRequested({
   context: context(),
   request: { key: "create_support_request", arguments: {} },
@@ -383,6 +417,8 @@ assert.equal(
 const read = (...segments) => fs.readFileSync(path.join(root, ...segments), "utf8");
 const registrySource = read("src", "lib", "ai", "actions", "registry.ts");
 const serverSource = read("src", "lib", "ai", "actions", "server.ts");
+const settingsSource = read("src", "lib", "ai", "actions", "settings.ts");
+const settingsRouteSource = read("src", "app", "api", "ai", "actions", "route.ts");
 const ragSource = read("src", "lib", "ai", "rag.ts");
 const sqlSource = read("supabase", "ai-actions.sql");
 const telegramSource = read(
@@ -406,7 +442,12 @@ const instagramSource = read(
 assert.match(registrySource, /key: "create_support_request"/);
 assert.match(registrySource, /upsertConversationForCustomer/);
 assert.match(registrySource, /action_execution_id/);
+assert.match(registrySource, /defaultEnabled: true/);
+assert.match(settingsSource, /defaultEnabled/);
+assert.match(settingsSource, /definition\.key === "create_support_request"/);
+assert.match(settingsSource, /enabled: false, requireConfirmation: false/);
 assert.match(serverSource, /\.eq\("user_id", context\.userId\)/);
+assert.match(serverSource, /resolveConfiguration/);
 assert.match(serverSource, /\.eq\("idempotency_key", input\.idempotencyKey\)/);
 assert.match(ragSource, /actionRequest: parsed\.action \?\? null/);
 assert.match(ragSource, /Information-only questions must keep action null/);
@@ -417,7 +458,13 @@ assert.match(sqlSource, /revoke all on table public\.business_action_executions 
 assert.match(sqlSource, /unique index if not exists business_action_executions_idempotency_key/);
 assert.match(sqlSource, /customer_identity_hash/);
 assert.match(sqlSource, /support_messages_action_execution_key/);
+assert.match(sqlSource, /create table if not exists public\.business_action_settings/);
+assert.match(sqlSource, /alter table public\.business_action_settings enable row level security/);
+assert.match(sqlSource, /with check \(\(select auth\.uid\(\)\) = user_id\)/);
+assert.match(settingsRouteSource, /ACTION_REGISTRY\.has\(body\.actionKey\)/);
+assert.match(settingsRouteSource, /user_id: user\.id/);
+assert.doesNotMatch(settingsRouteSource, /execute:/);
 
 console.log(
-  "Validated 15 AI action execution, authorization, confirmation, idempotency, safety, retrieval-boundary, and support-request cases."
+  "Validated 18 AI action execution, configuration, authorization, confirmation, idempotency, safety, retrieval-boundary, and support-request cases."
 );

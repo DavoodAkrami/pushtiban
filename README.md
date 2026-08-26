@@ -299,6 +299,13 @@ tenant and channel connection, business configuration, customer verification,
 and confirmation state before a handler can run. Business Data and connector
 values are never instructions and cannot authorize an action.
 
+Each business can enable or disable registered Actions at
+`/dashboard/assistant/actions`. The registry remains authoritative: a business
+can only disable an Action or add a confirmation requirement; it cannot make a
+registry-required verification or confirmation optional. `create_support_request`
+keeps its compatible default of enabled when no setting exists, while future
+registered Actions must opt in explicitly before they can be used.
+
 Confirmation-required actions are stored server-side for five minutes and are
 bound to the business, channel connection, hashed customer identity,
 conversation, exact action, and exact validated arguments. A model claim that
@@ -374,8 +381,8 @@ Instagram-specific node/button limit triggers) · `supabase/business-data.sql`
 (collections, fields, records, source/sync foundation, verified-customer
 configuration/challenges/sessions/attempt audits, and the service-role-only
 bounded public and verified-record lookup RPCs) · `supabase/ai-actions.sql`
-(server-only action confirmation, idempotency, audit state, and support-message
-execution links).
+(tenant-owned action restrictions plus server-only confirmation, idempotency,
+audit state, and support-message execution links).
 
 ## Notes
 

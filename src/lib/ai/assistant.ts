@@ -376,9 +376,10 @@ export const generateAssistantReply = async (
   // sending the tool schema or its instructions saves those input tokens on
   // every single message.
   const escalationAvailable = options.handoffEnabled !== false;
-  const actionCapabilities = describeAvailableActions({
+  const actionCapabilities = await describeAvailableActions({
     actionContextAvailable: Boolean(options.actionContext),
     handoffEnabled: options.handoffEnabled === true,
+    userId,
   });
 
   // Platform-wide kill switch and per-business monthly caps, both managed

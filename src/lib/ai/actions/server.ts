@@ -11,6 +11,7 @@ import {
   type StoredActionExecution,
 } from "./core";
 import { ACTION_REGISTRY } from "./registry";
+import { getBusinessActionConfiguration } from "./settings";
 
 type ExecutionRow = {
   id: string;
@@ -215,6 +216,8 @@ const actionEngine = createActionEngine({
   store: actionStore,
   authorizeContext,
   verifyCustomer,
+  resolveConfiguration: (context, definition) =>
+    getBusinessActionConfiguration({ userId: context.userId, definition }),
 });
 
 const safeFailure = (actionKey?: string): ActionHandlingResult => ({

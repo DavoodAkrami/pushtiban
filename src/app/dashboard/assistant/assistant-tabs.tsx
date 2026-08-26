@@ -1,11 +1,12 @@
 "use client";
 
-import { ToggleRight, Wand2 } from "lucide-react";
+import { ShieldCheck, ToggleRight, Wand2 } from "lucide-react";
 import { PageTabs } from "@/components/ui/page-tabs";
 
 const TABS = [
   { href: "/dashboard/assistant", label: "وضعیت و رفتار", icon: ToggleRight },
   { href: "/dashboard/assistant/persona", label: "شخصیت و لحن", icon: Wand2 },
+  { href: "/dashboard/assistant/actions", label: "اقدامات", icon: ShieldCheck },
 ];
 
 export const AssistantTabs = () => (
