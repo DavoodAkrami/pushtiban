@@ -13,12 +13,14 @@ import {
   parseBusinessActionConfigurationUpdate,
   resolveBusinessActionConfiguration,
 } from "@/lib/ai/actions/business-config";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MAX_BODY_BYTES = 16_384;
+const USER_CORRECTABLE_DB_CODES = new Set(["22P02", "23503", "23514"]);
 
 const jsonError = (error: string, status: number, setupRequired = false) =>
   NextResponse.json({ error, setupRequired }, { status });
@@ -149,20 +151,43 @@ export const PUT = async (request: NextRequest) => {
           }
         : {}),
     };
-  const { error } = await supabase.from("business_action_settings").upsert(
-    row,
-    { onConflict: "user_id,action_key" }
-  );
+  try {
+    const admin = createAdminClient();
+    const { error } = await admin
+      .from("business_action_settings")
+      .upsert(row, { onConflict: "user_id,action_key" });
 
-  if (error) {
-    const setupRequired = isActionSettingsSetupError(error.code);
-    return jsonError(
-      setupRequired
-        ? "راه‌اندازی اقدامات کامل نشده؛ اسکریپت ai-actions.sql را اجرا کنید."
-        : "تنظیمات اقدام ذخیره نشد؛ دوباره تلاش کنید.",
-      setupRequired ? 503 : 500,
-      setupRequired
+    if (error) {
+      const code = typeof error.code === "string" ? error.code : "unknown";
+      console.error("AI action settings mutation failed:", {
+        code,
+        message:
+          typeof error.message === "string"
+            ? error.message.slice(0, 240)
+            : "database error",
+      });
+      const setupRequired = isActionSettingsSetupError(error.code);
+      const status = setupRequired
+        ? 503
+        : USER_CORRECTABLE_DB_CODES.has(code)
+          ? 400
+          : 500;
+      return jsonError(
+        setupRequired
+          ? "راه‌اندازی اقدامات کامل نشده؛ اسکریپت ai-actions.sql را اجرا کنید."
+          : USER_CORRECTABLE_DB_CODES.has(code)
+            ? "تنظیمات اقدام معتبر نیست."
+            : "تنظیمات اقدام ذخیره نشد؛ دوباره تلاش کنید.",
+        status,
+        setupRequired
+      );
+    }
+  } catch (mutationError) {
+    console.error(
+      "AI action settings mutation failed:",
+      mutationError instanceof Error ? mutationError.message.slice(0, 240) : "unknown error"
     );
+    return jsonError("تنظیمات اقدام ذخیره نشد؛ دوباره تلاش کنید.", 500);
   }
 
   invalidateBusinessActionConfigurations(user.id);

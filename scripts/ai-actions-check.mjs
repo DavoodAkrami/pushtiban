@@ -571,6 +571,11 @@ assert.match(sqlSource, /with check \(\(select auth\.uid\(\)\) = user_id\)/);
 assert.match(settingsRouteSource, /ACTION_REGISTRY\.has\(body\.actionKey\)/);
 assert.match(settingsRouteSource, /user_id: user\.id/);
 assert.doesNotMatch(settingsRouteSource, /execute:/);
+assert.match(settingsRouteSource, /createAdminClient/);
+assert.match(settingsRouteSource, /admin[\s\S]*business_action_settings[\s\S]*upsert/);
+assert.doesNotMatch(settingsRouteSource, /supabase\.from\("business_action_settings"\)\.upsert/);
+assert.match(settingsRouteSource, /AI action settings mutation failed/);
+assert.match(settingsRouteSource, /USER_CORRECTABLE_DB_CODES/);
 
 for (const actionKey of [
   "check_availability",
