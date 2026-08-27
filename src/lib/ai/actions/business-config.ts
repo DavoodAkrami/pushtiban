@@ -7,6 +7,10 @@ import type {
   BusinessDataFieldRole,
   BusinessDataFieldType,
 } from "@/lib/business-data/types";
+import {
+  businessActionRequiresCollectionRequiredFieldValidation,
+  businessActionWritesRecords,
+} from "./business-action-rules";
 
 export type BusinessActionKey =
   | "check_availability"
@@ -428,7 +432,7 @@ const resolveAgainstCatalog = ({
       .map((concept) => fieldMapping[concept.key])
       .filter(Boolean)
   );
-  const writesRecords = ["create_order", "create_reservation"].includes(actionKey);
+  const writesRecords = businessActionWritesRecords(actionKey);
   const mapsGeneratedFieldToBusinessConcept =
     destination === "internal_business_data" &&
     writesRecords &&
@@ -465,7 +469,7 @@ const resolveAgainstCatalog = ({
     hasMappingConflict(actionKey, relatedConcepts, fieldMapping, related) ||
     mapsGeneratedFieldToBusinessConcept ||
     (destination === "internal_business_data" &&
-      writesRecords &&
+      businessActionRequiresCollectionRequiredFieldValidation(actionKey) &&
       primary.fields.some(
         (field) =>
           field.required &&

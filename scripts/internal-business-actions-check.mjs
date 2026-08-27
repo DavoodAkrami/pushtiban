@@ -17,6 +17,13 @@ const configuration = read(
   "actions",
   "business-config.ts"
 );
+const actionRules = read(
+  "src",
+  "lib",
+  "ai",
+  "actions",
+  "business-action-rules.ts"
+);
 const route = read("src", "app", "api", "ai", "actions", "route.ts");
 const panel = read(
   "src",
@@ -68,6 +75,8 @@ assert.match(configuration, /serverGenerated/);
 assert.match(configuration, /isInternalGeneratedCollectionField/);
 assert.match(configuration, /mapsGeneratedFieldToBusinessConcept/);
 assert.match(configuration, /canMapGeneratedOrderField/);
+assert.match(configuration, /businessActionWritesRecords/);
+assert.match(configuration, /businessActionRequiresCollectionRequiredFieldValidation/);
 assert.doesNotMatch(orderRpc, /source_type\s*=\s*'(?:manual|csv|excel)'/);
 assert.doesNotMatch(reservationRpc, /source_type\s*=\s*'(?:manual|csv|excel)'/);
 
@@ -144,6 +153,16 @@ assert.match(panel, /concept\.side === "primary"/);
 assert.match(panel, /mappingSignals/);
 assert.match(panel, /hasValidMapping/);
 assert.match(panel, /فیلد انتخاب‌شده برای/);
+assert.match(panel, /businessActionRequiresCollectionRequiredFieldValidation\(action\.key\)/);
+assert.match(actionRules, /businessActionWritesRecords/);
+assert.match(
+  actionRules,
+  /actionKey === "create_order" \|\| actionKey === "create_reservation"/
+);
+assert.match(
+  panel,
+  /draft\.destination === "internal_business_data"[\s\S]*businessActionRequiresCollectionRequiredFieldValidation\(action\.key\)/
+);
 assert.doesNotMatch(panel, /مجموعه فعال و متصل به Supabase با ساختار مناسب پیدا نشد/);
 
 console.log(

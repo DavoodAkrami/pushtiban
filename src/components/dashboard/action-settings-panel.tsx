@@ -22,6 +22,7 @@ import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
+import { businessActionRequiresCollectionRequiredFieldValidation } from "@/lib/ai/actions/business-action-rules";
 
 type ActionSettingsItem = {
   key: string;
@@ -457,7 +458,9 @@ const ActionConfigurationEditor = ({
       .filter(Boolean)
   );
   const unmappedRequiredCollectionFields =
-    draft.destination === "internal_business_data" && primary
+    draft.destination === "internal_business_data" &&
+    businessActionRequiresCollectionRequiredFieldValidation(action.key) &&
+    primary
       ? primary.fields.filter(
           (field) =>
             field.required &&
