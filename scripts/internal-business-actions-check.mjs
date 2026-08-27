@@ -67,6 +67,7 @@ assert.match(configuration, /hasMappingConflict/);
 assert.match(configuration, /serverGenerated/);
 assert.match(configuration, /isInternalGeneratedCollectionField/);
 assert.match(configuration, /mapsGeneratedFieldToBusinessConcept/);
+assert.match(configuration, /canMapGeneratedOrderField/);
 assert.doesNotMatch(orderRpc, /source_type\s*=\s*'(?:manual|csv|excel)'/);
 assert.doesNotMatch(reservationRpc, /source_type\s*=\s*'(?:manual|csv|excel)'/);
 
@@ -139,6 +140,10 @@ assert.match(configuration, /ایجاد مجموعه رزروها/);
 assert.match(configuration, /تنظیم تأیید هویت/);
 assert.match(panel, /اتصال منبع خارجی/);
 assert.match(panel, /suggestedMappings/);
+assert.match(panel, /concept\.side === "primary"/);
+assert.match(panel, /mappingSignals/);
+assert.match(panel, /hasValidMapping/);
+assert.match(panel, /فیلد انتخاب‌شده برای/);
 assert.doesNotMatch(panel, /مجموعه فعال و متصل به Supabase با ساختار مناسب پیدا نشد/);
 
 console.log(

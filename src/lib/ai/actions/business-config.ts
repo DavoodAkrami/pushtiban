@@ -338,6 +338,15 @@ const isInternalGeneratedCollectionField = (
   ["create_order", "create_reservation"].includes(actionKey) &&
   (field.role === "title" || field.role === "reference");
 
+const canMapGeneratedOrderField = (
+  actionKey: BusinessActionKey,
+  concept: BusinessActionFieldConcept,
+  field: BusinessActionCatalogField
+) =>
+  actionKey === "create_order" &&
+  concept.key === "destination_product_reference" &&
+  (field.role === "title" || field.role === "reference");
+
 const hasMappingConflict = (
   actionKey: BusinessActionKey,
   concepts: BusinessActionFieldConcept[],
@@ -426,7 +435,11 @@ const resolveAgainstCatalog = ({
     primaryConcepts.some((concept) => {
       if (concept.serverGenerated || !fieldMapping[concept.key]) return false;
       const field = primary.fields.find((candidate) => candidate.key === fieldMapping[concept.key]);
-      return Boolean(field && isInternalGeneratedCollectionField(actionKey, destination, field));
+      return Boolean(
+        field &&
+          isInternalGeneratedCollectionField(actionKey, destination, field) &&
+          !canMapGeneratedOrderField(actionKey, concept, field)
+      );
     });
   if (
     (usesExternalSource && (!source || source.id !== sourceId)) ||

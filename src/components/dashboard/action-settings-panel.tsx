@@ -486,11 +486,39 @@ const ActionConfigurationEditor = ({
     );
   };
   const mappingsAreDistinct = !hasMappingConflict("primary") && !hasMappingConflict("related");
+  const selectableFields = (
+    concept: ActionConfigurationSpec["fields"][number],
+    collection: ActionCatalogCollection
+  ) =>
+    collection.fields.filter((field) => {
+      const generatedPrimaryField =
+        draft.destination === "internal_business_data" &&
+        concept.side === "primary" &&
+        !concept.serverGenerated &&
+        (action.key === "create_order" || action.key === "create_reservation") &&
+        (field.role === "title" || field.role === "reference");
+      const canUseGeneratedOrderField =
+        action.key === "create_order" &&
+        concept.key === "destination_product_reference";
+      return (
+        concept.types.includes(field.type) &&
+        (!generatedPrimaryField || canUseGeneratedOrderField)
+      );
+    });
+  const hasValidMapping = (concept: ActionConfigurationSpec["fields"][number]) => {
+    const fieldKey = draft.fieldMapping[concept.key];
+    if (!fieldKey) return false;
+    const collection = concept.side === "primary" ? primary : related;
+    return Boolean(
+      collection &&
+        selectableFields(concept, collection).some((field) => field.key === fieldKey)
+    );
+  };
   const complete =
     Boolean(primary) &&
     (draft.destination === "internal_business_data" || Boolean(primary?.source)) &&
     (!configurationSpec.relatedKinds || Boolean(related)) &&
-    requiredFields.every((field) => Boolean(draft.fieldMapping[field.key])) &&
+    requiredFields.every(hasValidMapping) &&
     (!requiresStockMapping || Boolean(draft.fieldMapping.product_stock)) &&
     unmappedRequiredCollectionFields.length === 0 &&
     mappingsAreDistinct &&
@@ -498,26 +526,34 @@ const ActionConfigurationEditor = ({
     (!configurationSpec.cancellationValue ||
       Boolean(draft.cancellationValue?.trim()));
   const missingConcepts = [
-    ...requiredFields.filter((field) => !draft.fieldMapping[field.key]),
+    ...requiredFields.filter((field) => !hasValidMapping(field)),
     ...(requiresStockMapping && !draft.fieldMapping.product_stock
       ? configurationSpec.fields.filter((field) => field.key === "product_stock")
       : []),
   ];
 
-  const selectableFields = (
-    concept: ActionConfigurationSpec["fields"][number],
-    collection: ActionCatalogCollection
-  ) =>
-    collection.fields.filter(
-      (field) =>
-        concept.types.includes(field.type) &&
-        !(
-          draft.destination === "internal_business_data" &&
-          !concept.serverGenerated &&
-          (field.role === "title" || field.role === "reference") &&
-          (action.key === "create_order" || action.key === "create_reservation")
-        )
-    );
+  const mappingSignals: Record<string, string[]> = {
+    date: ["date", "تاریخ"],
+    time: ["time", "ساعت"],
+    party_size: ["party", "guest", "تعداد", "نفر"],
+    available: ["available", "availability", "موجود", "ظرفیت"],
+    remaining_capacity: ["capacity", "remaining", "ظرفیت", "باقی"],
+    destination_product_reference: ["product", "sku", "reference", "محصول", "شناسه"],
+    destination_quantity: ["quantity", "qty", "تعداد"],
+    destination_unit_price: ["unit_price", "price", "قیمت"],
+    destination_total_price: ["total", "amount", "price", "مبلغ", "قیمت"],
+    destination_customer_contact: ["customer", "phone", "email", "contact", "مشتری", "موبایل", "تلفن", "ایمیل"],
+    destination_status: ["status", "state", "وضعیت"],
+    product_name: ["name", "title", "product", "نام", "عنوان", "محصول"],
+    product_reference: ["sku", "reference", "product", "کد", "شناسه"],
+    product_price: ["price", "cost", "قیمت", "هزینه"],
+    product_currency: ["currency", "واحد", "ارز"],
+    product_available: ["available", "availability", "موجود"],
+    product_stock: ["stock", "inventory", "quantity", "موجودی", "تعداد"],
+    status: ["status", "state", "وضعیت"],
+  };
+  const normalizedSignal = (value: string) =>
+    value.toLocaleLowerCase("fa-IR").replace(/[\s_-]+/g, "");
 
   const suggestedMappings = (
     collection: ActionCatalogCollection,
@@ -532,11 +568,31 @@ const ActionConfigurationEditor = ({
     );
     for (const concept of concepts) {
       const compatible = selectableFields(concept, collection);
-      const exact = compatible.find((field) => field.key === concept.key && !used.has(field.key));
-      const roleMatches = compatible.filter(
-        (field) => !used.has(field.key) && concept.roles?.includes(field.role)
+      const signals = (mappingSignals[concept.key] ?? []).map(normalizedSignal);
+      const autoCompatible = compatible.filter(
+        (field) =>
+          !(
+            draft.destination === "internal_business_data" &&
+            concept.side === "primary" &&
+            action.key === "create_order" &&
+            concept.key === "destination_product_reference" &&
+            field.role === "reference"
+          )
       );
-      const suggestion = exact ?? (roleMatches.length === 1 ? roleMatches[0] : null);
+      const available = autoCompatible.filter((field) => !used.has(field.key));
+      const exact = available.find((field) => field.key === concept.key);
+      const roleMatches = available.filter((field) => concept.roles?.includes(field.role));
+      const signalMatches = available.filter((field) => {
+        const haystack = normalizedSignal(`${field.key} ${field.label}`);
+        return signals.some((signal) => haystack.includes(signal));
+      });
+      const suggestion =
+        exact ??
+        (roleMatches.length === 1
+          ? roleMatches[0]
+          : roleMatches.length === 0 && signalMatches.length === 1
+            ? signalMatches[0]
+            : null);
       if (suggestion) {
         result[concept.key] = suggestion.key;
         used.add(suggestion.key);
@@ -781,14 +837,24 @@ const ActionConfigurationEditor = ({
                     const collection =
                       concept.side === "primary" ? primary : related;
                     if (!collection) return null;
+                    const fieldKey = draft.fieldMapping[concept.key];
+                    const hasSelection = Boolean(fieldKey);
+                    const validSelection = hasSelection && hasValidMapping(concept);
                     const missing =
-                      concept.required && !draft.fieldMapping[concept.key];
+                      concept.required && !validSelection;
+                    const invalid = hasSelection && !validSelection;
                     return (
                       <Select
                         key={concept.key}
                         id={`${action.key}-${concept.key}`}
                         label={`${concept.label}${concept.required ? "" : " (اختیاری)"}`}
-                        error={missing ? `فیلد ${concept.label} را مشخص کنید.` : undefined}
+                        error={
+                          missing
+                            ? `فیلد ${concept.label} را مشخص کنید.`
+                            : invalid
+                              ? `فیلد انتخاب‌شده برای ${concept.label} مناسب نیست.`
+                              : undefined
+                        }
                         value={draft.fieldMapping[concept.key] ?? ""}
                         disabled={disabled}
                         options={[
