@@ -67,6 +67,7 @@ type ActionCatalogCollection = {
     type: string;
     role: string;
     required: boolean;
+    serverGenerated?: boolean;
   }>;
   source: { id: string; name: string; tableName: string } | null;
   privateAccessReady: boolean;
@@ -84,6 +85,7 @@ type ActionConfigurationSpec = {
     label: string;
     side: "primary" | "related";
     required: boolean;
+    serverGenerated?: boolean;
     types: string[];
     roles?: string[];
   }>;
@@ -431,7 +433,10 @@ const ActionConfigurationEditor = ({
   const related = catalog.find(
     (collection) => collection.id === draft.relatedCollectionId
   );
-  const requiredFields = configurationSpec.fields.filter((field) => field.required);
+  const visibleConcepts = configurationSpec.fields.filter(
+    (field) => !(draft.destination === "internal_business_data" && field.serverGenerated)
+  );
+  const requiredFields = visibleConcepts.filter((field) => field.required);
   const requiresStockMapping =
     action.key === "create_order" &&
     draft.destination === "internal_business_data" &&
@@ -446,7 +451,7 @@ const ActionConfigurationEditor = ({
     initialStatusConcept && draft.fieldMapping[initialStatusConcept]
   );
   const primaryMappedFieldKeys = new Set(
-    configurationSpec.fields
+    visibleConcepts
       .filter((concept) => concept.side === "primary")
       .map((concept) => draft.fieldMapping[concept.key])
       .filter(Boolean)
@@ -456,20 +461,31 @@ const ActionConfigurationEditor = ({
       ? primary.fields.filter(
           (field) =>
             field.required &&
-            !primaryMappedFieldKeys.has(field.key)
+            !primaryMappedFieldKeys.has(field.key) &&
+            !(
+              (action.key === "create_order" || action.key === "create_reservation") &&
+              (field.role === "title" || field.role === "reference")
+            )
         )
       : [];
-  const primaryMappingValues = configurationSpec.fields
-    .filter((concept) => concept.side === "primary")
-    .map((concept) => draft.fieldMapping[concept.key])
-    .filter(Boolean);
-  const relatedMappingValues = configurationSpec.fields
-    .filter((concept) => concept.side === "related")
-    .map((concept) => draft.fieldMapping[concept.key])
-    .filter(Boolean);
-  const mappingsAreDistinct =
-    new Set(primaryMappingValues).size === primaryMappingValues.length &&
-    new Set(relatedMappingValues).size === relatedMappingValues.length;
+  const isAllowedSharedDateTime = (keys: string[], fieldKey: string) =>
+    action.key === "create_reservation" &&
+    new Set(keys).size === 2 &&
+    new Set(keys).has("date") &&
+    new Set(keys).has("time") &&
+    (primary?.fields.find((field) => field.key === fieldKey)?.type === "datetime");
+  const hasMappingConflict = (side: "primary" | "related") => {
+    const seen = new Map<string, string[]>();
+    for (const concept of visibleConcepts.filter((item) => item.side === side)) {
+      const fieldKey = draft.fieldMapping[concept.key];
+      if (!fieldKey) continue;
+      seen.set(fieldKey, [...(seen.get(fieldKey) ?? []), concept.key]);
+    }
+    return [...seen.entries()].some(([fieldKey, keys]) =>
+      keys.length > 1 && !isAllowedSharedDateTime(keys, fieldKey)
+    );
+  };
+  const mappingsAreDistinct = !hasMappingConflict("primary") && !hasMappingConflict("related");
   const complete =
     Boolean(primary) &&
     (draft.destination === "internal_business_data" || Boolean(primary?.source)) &&
@@ -488,27 +504,53 @@ const ActionConfigurationEditor = ({
       : []),
   ];
 
+  const selectableFields = (
+    concept: ActionConfigurationSpec["fields"][number],
+    collection: ActionCatalogCollection
+  ) =>
+    collection.fields.filter(
+      (field) =>
+        concept.types.includes(field.type) &&
+        !(
+          draft.destination === "internal_business_data" &&
+          !concept.serverGenerated &&
+          (field.role === "title" || field.role === "reference") &&
+          (action.key === "create_order" || action.key === "create_reservation")
+        )
+    );
+
   const suggestedMappings = (
     collection: ActionCatalogCollection,
     side: "primary" | "related"
-  ) =>
-    Object.fromEntries(
-      configurationSpec.fields
-        .filter((concept) => concept.side === side)
-        .flatMap((concept) => {
-          const compatible = collection.fields.filter(
-            (field) =>
-              concept.types.includes(field.type) &&
-              (field.key === concept.key || concept.roles?.includes(field.role))
-          );
-          const exact = compatible.find((field) => field.key === concept.key);
-          const roleMatches = compatible.filter((field) =>
-            concept.roles?.includes(field.role)
-          );
-          const suggestion = exact ?? (roleMatches.length === 1 ? roleMatches[0] : null);
-          return suggestion ? [[concept.key, suggestion.key]] : [];
-        })
+  ) => {
+    const result: Record<string, string> = {};
+    const used = new Set<string>();
+    const concepts = configurationSpec.fields.filter(
+      (concept) =>
+        concept.side === side &&
+        !(draft.destination === "internal_business_data" && concept.serverGenerated)
     );
+    for (const concept of concepts) {
+      const compatible = selectableFields(concept, collection);
+      const exact = compatible.find((field) => field.key === concept.key && !used.has(field.key));
+      const roleMatches = compatible.filter(
+        (field) => !used.has(field.key) && concept.roles?.includes(field.role)
+      );
+      const suggestion = exact ?? (roleMatches.length === 1 ? roleMatches[0] : null);
+      if (suggestion) {
+        result[concept.key] = suggestion.key;
+        used.add(suggestion.key);
+      } else if (
+        action.key === "create_reservation" &&
+        concept.key === "time" &&
+        result.date &&
+        collection.fields.find((field) => field.key === result.date)?.type === "datetime"
+      ) {
+        result.time = result.date;
+      }
+    }
+    return result;
+  };
 
   const updateCollection = (collectionId: string) => {
     const primaryKeys = new Set(
@@ -735,23 +777,25 @@ const ActionConfigurationEditor = ({
 
               {(primary || related) && (
                 <div className="grid gap-4 sm:grid-cols-2">
-                  {configurationSpec.fields.map((concept) => {
+                  {visibleConcepts.map((concept) => {
                     const collection =
                       concept.side === "primary" ? primary : related;
                     if (!collection) return null;
+                    const missing =
+                      concept.required && !draft.fieldMapping[concept.key];
                     return (
                       <Select
                         key={concept.key}
                         id={`${action.key}-${concept.key}`}
                         label={`${concept.label}${concept.required ? "" : " (اختیاری)"}`}
+                        error={missing ? `فیلد ${concept.label} را مشخص کنید.` : undefined}
                         value={draft.fieldMapping[concept.key] ?? ""}
                         disabled={disabled}
                         options={[
                           ...(!concept.required
                             ? [{ value: "", label: "استفاده نشود" }]
                             : []),
-                          ...collection.fields
-                            .filter((field) => concept.types.includes(field.type))
+                          ...selectableFields(concept, collection)
                             .map((field) => ({
                               value: field.key,
                               label: field.label,

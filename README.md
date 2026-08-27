@@ -337,7 +337,11 @@ The registry includes `check_availability`, `create_reservation`,
 `create_support_request`. Availability is a bounded read from the configured
 internal Business Data collection or external Supabase source. Creates write
 only owner-mapped business concepts to the selected destination and return only
-after the authoritative write succeeds. Internal order execution locks the
+after the authoritative write succeeds. Internal creates keep execution and
+idempotency references in the Action infrastructure and generate required
+Business Data titles when the destination schema needs one; owners do not have
+to add technical fields for those values. A single datetime field may represent
+both reservation date and time. Internal order execution locks the
 authoritative product row, re-checks price and availability, and performs the
 stock decrement and order insert in one service-only transaction. Internal
 reservation capacity changes and record creation use the same transactional

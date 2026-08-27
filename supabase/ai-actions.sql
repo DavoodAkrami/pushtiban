@@ -460,7 +460,8 @@ declare
   party_size_key text;
   customer_name_key text;
   customer_contact_key text;
-  execution_key text;
+  title_key text;
+  reference_key text;
   status_key text;
   reservation_reference text := 'reservation_' || replace(p_execution_id::text, '-', '');
   record_values jsonb;
@@ -536,14 +537,10 @@ begin
   );
   customer_name_key := public.business_action_internal_field_key(
     p_user_id, target_collection_id, mapping, 'customer_name',
-    array['text', 'long_text', 'select'], true
+    array['text', 'long_text', 'select'], false
   );
   customer_contact_key := public.business_action_internal_field_key(
     p_user_id, target_collection_id, mapping, 'customer_contact',
-    array['text', 'long_text', 'select'], true
-  );
-  execution_key := public.business_action_internal_field_key(
-    p_user_id, target_collection_id, mapping, 'execution_id',
     array['text', 'long_text', 'select'], true
   );
   status_key := public.business_action_internal_field_key(
@@ -637,14 +634,64 @@ begin
     end if;
   end if;
 
-  record_values := jsonb_build_object(
-    date_key, p_date,
-    time_key, p_time,
-    party_size_key, p_party_size,
-    customer_name_key, btrim(p_customer_name),
-    customer_contact_key, btrim(p_customer_contact),
-    execution_key, p_execution_id::text
-  );
+  select field_definition.key
+  into title_key
+  from public.business_data_fields field_definition
+  where field_definition.user_id = p_user_id
+    and field_definition.collection_id = target_collection_id
+    and field_definition.required
+    and field_definition.semantic_role = 'title'
+  order by field_definition.position, field_definition.key
+  limit 1;
+  select field_definition.key
+  into reference_key
+  from public.business_data_fields field_definition
+  where field_definition.user_id = p_user_id
+    and field_definition.collection_id = target_collection_id
+    and field_definition.required
+    and field_definition.semantic_role = 'reference'
+  order by field_definition.position, field_definition.key
+  limit 1;
+
+  if date_key = time_key then
+    if not exists (
+      select 1
+      from public.business_data_fields field_definition
+      where field_definition.user_id = p_user_id
+        and field_definition.collection_id = target_collection_id
+        and field_definition.key = date_key
+        and field_definition.data_type = 'datetime'
+    ) then
+      raise exception 'Reservation date and time require separate fields or one datetime field.' using errcode = '22023';
+    end if;
+    record_values := jsonb_build_object(
+      date_key, p_date || 'T' || p_time || ':00',
+      party_size_key, p_party_size,
+      customer_contact_key, btrim(p_customer_contact)
+    );
+  else
+    record_values := jsonb_build_object(
+      date_key, p_date,
+      time_key, p_time,
+      party_size_key, p_party_size,
+      customer_contact_key, btrim(p_customer_contact)
+    );
+  end if;
+  if customer_name_key is not null then
+    record_values := record_values || jsonb_build_object(
+      customer_name_key, btrim(p_customer_name)
+    );
+  end if;
+  if title_key is not null and not (record_values ? title_key) then
+    record_values := record_values || jsonb_build_object(
+      title_key, left(btrim(p_customer_name) || ' · ' || p_date || ' ' || p_time, 120)
+    );
+  end if;
+  if reference_key is not null then
+    record_values := record_values || jsonb_build_object(
+      reference_key, reservation_reference
+    );
+  end if;
   if status_key is not null then
     if initial_status is null then
       raise exception 'Initial reservation status is missing.' using errcode = '22023';
@@ -703,7 +750,8 @@ declare
   order_total_price_key text;
   order_customer_name_key text;
   order_customer_contact_key text;
-  execution_key text;
+  order_title_key text;
+  order_reference_key text;
   order_status_key text;
   product_values jsonb;
   product_external_id text;
@@ -823,14 +871,10 @@ begin
   );
   order_customer_name_key := public.business_action_internal_field_key(
     p_user_id, order_collection_id, mapping, 'destination_customer_name',
-    array['text', 'long_text', 'select'], true
+    array['text', 'long_text', 'select'], false
   );
   order_customer_contact_key := public.business_action_internal_field_key(
     p_user_id, order_collection_id, mapping, 'destination_customer_contact',
-    array['text', 'long_text', 'select'], true
-  );
-  execution_key := public.business_action_internal_field_key(
-    p_user_id, order_collection_id, mapping, 'execution_id',
     array['text', 'long_text', 'select'], true
   );
   order_status_key := public.business_action_internal_field_key(
@@ -906,14 +950,47 @@ begin
       and collection_id = product_collection_id;
   end if;
 
+  select field_definition.key
+  into order_title_key
+  from public.business_data_fields field_definition
+  where field_definition.user_id = p_user_id
+    and field_definition.collection_id = order_collection_id
+    and field_definition.required
+    and field_definition.semantic_role = 'title'
+  order by field_definition.position, field_definition.key
+  limit 1;
+  select field_definition.key
+  into order_reference_key
+  from public.business_data_fields field_definition
+  where field_definition.user_id = p_user_id
+    and field_definition.collection_id = order_collection_id
+    and field_definition.required
+    and field_definition.semantic_role = 'reference'
+  order by field_definition.position, field_definition.key
+  limit 1;
+
   order_values := jsonb_build_object(
     order_product_reference_key, product_reference,
     order_quantity_key, p_quantity,
     order_unit_price_key, current_price,
-    order_customer_name_key, btrim(p_customer_name),
-    order_customer_contact_key, btrim(p_customer_contact),
-    execution_key, p_execution_id::text
+    order_customer_contact_key, btrim(p_customer_contact)
   );
+  if order_customer_name_key is not null then
+    order_values := order_values || jsonb_build_object(
+      order_customer_name_key, btrim(p_customer_name)
+    );
+  end if;
+  if order_title_key is not null and not (order_values ? order_title_key) then
+    order_values := order_values || jsonb_build_object(
+      order_title_key, left(product_name || ' · ' || btrim(p_customer_name), 120)
+    );
+  end if;
+  if order_reference_key is not null
+     and order_reference_key <> order_product_reference_key then
+    order_values := order_values || jsonb_build_object(
+      order_reference_key, order_reference
+    );
+  end if;
   if order_total_price_key is not null then
     order_values := order_values || jsonb_build_object(
       order_total_price_key, current_price * p_quantity

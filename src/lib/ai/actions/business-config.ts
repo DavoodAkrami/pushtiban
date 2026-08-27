@@ -24,6 +24,7 @@ export type BusinessActionFieldConcept = {
   label: string;
   side: "primary" | "related";
   required: boolean;
+  serverGenerated?: boolean;
   types: BusinessDataFieldType[];
   roles?: BusinessDataFieldRole[];
 };
@@ -64,9 +65,9 @@ export const BUSINESS_ACTION_CONFIGURATION_SPECS: Record<
       { key: "date", label: "تاریخ رزرو", side: "primary", required: true, types: dateTypes, roles: ["start_at"] },
       { key: "time", label: "ساعت رزرو", side: "primary", required: true, types: dateTypes, roles: ["start_at"] },
       { key: "party_size", label: "تعداد نفرات", side: "primary", required: true, types: ["number"], roles: ["quantity"] },
-      { key: "customer_name", label: "نام مشتری", side: "primary", required: true, types: textTypes, roles: ["title"] },
+      { key: "customer_name", label: "نام مشتری", side: "primary", required: true, serverGenerated: true, types: textTypes, roles: ["title"] },
       { key: "customer_contact", label: "راه تماس مشتری", side: "primary", required: true, types: textTypes, roles: ["phone", "email", "customer_identifier"] },
-      { key: "execution_id", label: "شناسه یکتای عملیات", side: "primary", required: true, types: textTypes, roles: ["reference"] },
+      { key: "execution_id", label: "شناسه یکتای عملیات", side: "primary", required: true, serverGenerated: true, types: textTypes, roles: ["reference"] },
       { key: "status", label: "وضعیت اولیه", side: "primary", required: false, types: textTypes, roles: ["status"] },
     ],
   },
@@ -90,9 +91,9 @@ export const BUSINESS_ACTION_CONFIGURATION_SPECS: Record<
       { key: "destination_quantity", label: "تعداد سفارش", side: "primary", required: true, types: ["number"], roles: ["quantity"] },
       { key: "destination_unit_price", label: "قیمت واحد", side: "primary", required: true, types: numberTypes, roles: ["price"] },
       { key: "destination_total_price", label: "مبلغ کل", side: "primary", required: false, types: numberTypes, roles: ["price"] },
-      { key: "destination_customer_name", label: "نام مشتری", side: "primary", required: true, types: textTypes, roles: ["title"] },
+      { key: "destination_customer_name", label: "نام مشتری", side: "primary", required: true, serverGenerated: true, types: textTypes, roles: ["title"] },
       { key: "destination_customer_contact", label: "راه تماس مشتری", side: "primary", required: true, types: textTypes, roles: ["phone", "email", "customer_identifier"] },
-      { key: "execution_id", label: "شناسه یکتای عملیات", side: "primary", required: true, types: textTypes, roles: ["reference"] },
+      { key: "execution_id", label: "شناسه یکتای عملیات", side: "primary", required: true, serverGenerated: true, types: textTypes, roles: ["reference"] },
       { key: "destination_status", label: "وضعیت اولیه", side: "primary", required: false, types: textTypes, roles: ["status"] },
       { key: "product_name", label: "نام محصول", side: "related", required: true, types: textTypes, roles: ["title"] },
       { key: "product_reference", label: "شناسه محصول", side: "related", required: true, types: textTypes, roles: ["sku", "reference"] },
@@ -321,6 +322,48 @@ const fieldForConcept = (
   return field && concept.types.includes(field.type) ? field : null;
 };
 
+export const isBusinessActionConceptRequired = (
+  concept: BusinessActionFieldConcept,
+  destination: BusinessActionDestination
+) =>
+  concept.required &&
+  !(destination === "internal_business_data" && concept.serverGenerated);
+
+const isInternalGeneratedCollectionField = (
+  actionKey: BusinessActionKey,
+  destination: BusinessActionDestination,
+  field: BusinessActionCatalogField
+) =>
+  destination === "internal_business_data" &&
+  ["create_order", "create_reservation"].includes(actionKey) &&
+  (field.role === "title" || field.role === "reference");
+
+const hasMappingConflict = (
+  actionKey: BusinessActionKey,
+  concepts: BusinessActionFieldConcept[],
+  mapping: Record<string, string>,
+  collection: BusinessActionCatalogCollection | null
+) => {
+  const seen = new Map<string, BusinessActionFieldConcept>();
+  for (const concept of concepts) {
+    const fieldKey = mapping[concept.key];
+    if (!fieldKey) continue;
+    const previous = seen.get(fieldKey);
+    if (!previous) {
+      seen.set(fieldKey, concept);
+      continue;
+    }
+    const sharedDateTime =
+      actionKey === "create_reservation" &&
+      new Set([previous.key, concept.key]).size === 2 &&
+      new Set([previous.key, concept.key]).has("date") &&
+      new Set([previous.key, concept.key]).has("time") &&
+      collection?.fields.find((field) => field.key === fieldKey)?.type === "datetime";
+    if (!sharedDateTime) return true;
+  }
+  return false;
+};
+
 const compatibleCollection = (
   collection: BusinessActionCatalogCollection | undefined,
   kinds: BusinessDataCollectionKind[],
@@ -369,20 +412,22 @@ const resolveAgainstCatalog = ({
     actionKey === "create_order" ? "destination_status" : "status";
   const writesInitialStatus =
     actionKey === "create_order" || actionKey === "create_reservation";
-  const primaryMappings = spec.fields
-    .filter((concept) => concept.side === "primary")
-    .map((concept) => fieldMapping[concept.key])
-    .filter(Boolean);
-  const relatedMappings = spec.fields
-    .filter((concept) => concept.side === "related")
-    .map((concept) => fieldMapping[concept.key])
-    .filter(Boolean);
+  const primaryConcepts = spec.fields.filter((concept) => concept.side === "primary");
+  const relatedConcepts = spec.fields.filter((concept) => concept.side === "related");
   const primaryMappedFieldKeys = new Set(
-    spec.fields
-      .filter((concept) => concept.side === "primary")
+    primaryConcepts
       .map((concept) => fieldMapping[concept.key])
       .filter(Boolean)
   );
+  const writesRecords = ["create_order", "create_reservation"].includes(actionKey);
+  const mapsGeneratedFieldToBusinessConcept =
+    destination === "internal_business_data" &&
+    writesRecords &&
+    primaryConcepts.some((concept) => {
+      if (concept.serverGenerated || !fieldMapping[concept.key]) return false;
+      const field = primary.fields.find((candidate) => candidate.key === fieldMapping[concept.key]);
+      return Boolean(field && isInternalGeneratedCollectionField(actionKey, destination, field));
+    });
   if (
     (usesExternalSource && (!source || source.id !== sourceId)) ||
     (!usesExternalSource && sourceId !== null) ||
@@ -393,7 +438,7 @@ const resolveAgainstCatalog = ({
         related?.aiEnabled !== true)) ||
     spec.fields.some(
       (concept) =>
-        concept.required &&
+        isBusinessActionConceptRequired(concept, destination) &&
         !fieldForConcept(concept, fieldMapping, primary, related)
     ) ||
     (requiresTrackedStock &&
@@ -403,11 +448,16 @@ const resolveAgainstCatalog = ({
         primary,
         related
       )) ||
-    new Set(primaryMappings).size !== primaryMappings.length ||
-    new Set(relatedMappings).size !== relatedMappings.length ||
+    hasMappingConflict(actionKey, primaryConcepts, fieldMapping, primary) ||
+    hasMappingConflict(actionKey, relatedConcepts, fieldMapping, related) ||
+    mapsGeneratedFieldToBusinessConcept ||
     (destination === "internal_business_data" &&
+      writesRecords &&
       primary.fields.some(
-        (field) => field.required && !primaryMappedFieldKeys.has(field.key)
+        (field) =>
+          field.required &&
+          !primaryMappedFieldKeys.has(field.key) &&
+          !isInternalGeneratedCollectionField(actionKey, destination, field)
       )) ||
     spec.fields.some(
       (concept) =>
@@ -725,7 +775,7 @@ export const buildBusinessActionPrerequisite = ({
             ? "برای ثبت رزرو، اطلاعات موردنیاز را در مجموعه رزروها مشخص کنید."
             : "فیلدهای موردنیاز این اقدام هنوز مشخص نشده‌اند.",
       missingFields: spec.fields
-        .filter((field) => field.required)
+        .filter((field) => field.required && !field.serverGenerated)
         .map((field) => field.label),
       cta: {
         label: "تکمیل تنظیمات",
