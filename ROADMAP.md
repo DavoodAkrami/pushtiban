@@ -126,6 +126,9 @@ How to use:
 - [x] Internal Business Data Actions: treat manual and file-imported records as
       controlled mutation destinations, add transactional stock/order and
       reservation/cancellation RPCs, and expose specific Action prerequisites
+- [x] Improve the Business Data creation modal: choose the data kind before
+      its source and edit the initial field structure before creating a
+      collection
 - [ ] Knowledge-base ingestion for PDF and Word — needs a parser dependency and
       a Supabase Storage bucket with its own policies
 - [ ] AI assistant configuration (name, tone, model selection)

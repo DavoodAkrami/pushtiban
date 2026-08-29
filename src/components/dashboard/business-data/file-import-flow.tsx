@@ -21,6 +21,7 @@ import type { BusinessDataCollectionDetail, BusinessDataField } from "@/lib/busi
 import { FIELD_TYPE_LABELS } from "@/lib/business-data/api-types";
 import type {
   BusinessDataAccessScope,
+  BusinessDataCollectionKind,
   BusinessDataFieldDefinition,
   BusinessDataFieldType,
 } from "@/lib/business-data/types";
@@ -67,12 +68,14 @@ const makeIdempotencyKey = () =>
 export const FileImportFlow = ({
   collection,
   sourceType,
+  collectionKind = "custom",
   open,
   onOpenChange,
   onImported,
 }: {
   collection?: BusinessDataCollectionDetail;
   sourceType?: "csv" | "excel";
+  collectionKind?: BusinessDataCollectionKind;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onImported: (collectionId?: string) => void;
@@ -229,7 +232,7 @@ export const FileImportFlow = ({
         form.set("collectionDefinition", JSON.stringify({
           name: collectionName,
           description: "",
-          kind: "custom",
+          kind: collectionKind,
           accessScope,
           status: "active",
           aiEnabled: false,

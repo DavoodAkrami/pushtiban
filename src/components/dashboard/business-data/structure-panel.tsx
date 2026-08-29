@@ -20,7 +20,7 @@ import { useDashboardTitle } from "@/components/dashboard/title-context";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox, Switch } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   Modal,
@@ -46,11 +46,10 @@ import {
 import { businessDataRequest, jsonRequest } from "@/lib/business-data/client";
 import type {
   BusinessDataAccessScope,
-  BusinessDataAiExposure,
-  BusinessDataFieldType,
 } from "@/lib/business-data/types";
 import { selectAiAnswerValues } from "@/lib/business-data/validation";
 import { fa } from "@/lib/utils";
+import { FieldEditorModal } from "./field-editor-modal";
 import { useBusinessDataCollection } from "./use-collection";
 
 const ACCESS_OPTIONS = [
@@ -70,209 +69,6 @@ const ACCESS_OPTIONS = [
     description: "فقط برای مدیریت داخل کسب‌وکار",
   },
 ];
-
-const FIELD_TYPE_OPTIONS = Object.entries(FIELD_TYPE_LABELS).map(
-  ([value, label]) => ({ value, label })
-);
-
-const AI_EXPOSURE_OPTIONS = Object.entries(AI_EXPOSURE_LABELS).map(
-  ([value, label]) => ({ value, label })
-);
-
-type FieldDraft = {
-  label: string;
-  description: string;
-  type: BusinessDataFieldType;
-  required: boolean;
-  searchable: boolean;
-  filterable: boolean;
-  aiExposure: BusinessDataAiExposure;
-  optionsText: string;
-};
-
-const fieldDraft = (field: BusinessDataField | null): FieldDraft => ({
-  label: field?.label ?? "",
-  description: field?.description ?? "",
-  type: field?.type ?? "text",
-  required: field?.required ?? false,
-  searchable: field?.searchable ?? true,
-  filterable: field?.filterable ?? false,
-  aiExposure: field?.aiExposure ?? "hidden",
-  optionsText: field?.validation?.options?.join("\n") ?? "",
-});
-
-const FieldEditorModal = ({
-  collection,
-  field,
-  open,
-  onOpenChange,
-  onSaved,
-}: {
-  collection: BusinessDataCollectionDetail;
-  field: BusinessDataField | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onSaved: (collection: BusinessDataCollectionDetail) => void;
-}) => {
-  const { toast } = useToast();
-  const [draft, setDraft] = React.useState<FieldDraft>(() => fieldDraft(field));
-  const [error, setError] = React.useState("");
-  const [saving, setSaving] = React.useState(false);
-  const hasRecords = collection.recordCount > 0;
-
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    const label = draft.label.trim();
-    if (!label) {
-      setError("نام فیلد را وارد کنید.");
-      return;
-    }
-    const options = draft.optionsText
-      .split(/\n|،|,/)
-      .map((option) => option.trim())
-      .filter(Boolean);
-    if (draft.type === "select" && !options.length) {
-      setError("برای فیلد انتخابی دست‌کم یک گزینه وارد کنید.");
-      return;
-    }
-    setSaving(true);
-    setError("");
-    const key = field?.key ?? `field_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
-    const payload = {
-      key,
-      label,
-      description: draft.description,
-      type: draft.type,
-      role: field?.role ?? "custom",
-      required: draft.required,
-      searchable: draft.searchable,
-      filterable: draft.filterable,
-      aiExposure: draft.aiExposure,
-      ...(draft.type === "select"
-        ? { validation: { options } }
-        : field?.type === draft.type && field?.validation
-          ? { validation: field.validation }
-          : {}),
-    };
-    try {
-      const base = `/api/business-data/collections/${collection.id}/fields`;
-      const data = await businessDataRequest<{
-        collection: BusinessDataCollectionDetail;
-      }>(
-        field ? `${base}/${field.id}` : base,
-        jsonRequest(field ? "PATCH" : "POST", payload)
-      );
-      toast({
-        title: field ? "فیلد به‌روز شد" : "فیلد افزوده شد",
-        variant: "success",
-      });
-      onOpenChange(false);
-      onSaved(data.collection);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "ذخیره فیلد انجام نشد.");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Modal open={open} onOpenChange={(next) => !saving && onOpenChange(next)}>
-      <ModalContent
-        size="md"
-        closeDisabled={saving}
-        className="flex max-h-[calc(100dvh-2.5rem)] flex-col overflow-hidden p-0"
-      >
-        <ModalHeader className="mb-0 shrink-0 border-b border-line px-5 pb-4 pt-5 sm:px-7 sm:pb-5 sm:pt-7">
-          <ModalTitle>{field ? "ویرایش فیلد" : "فیلد جدید"}</ModalTitle>
-          <ModalDescription>
-            نامی بنویسید که هنگام ورود رکوردها برای اعضای کسب‌وکار روشن باشد.
-          </ModalDescription>
-        </ModalHeader>
-        <form onSubmit={submit} noValidate className="flex min-h-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-5 py-6 sm:px-7">
-            {error && <Alert variant="error" title="فیلد ذخیره نشد" description={error} />}
-            {hasRecords && field && (
-              <Alert
-                variant="warning"
-                title="ساختار رکوردهای موجود حفظ می‌شود"
-                description="تا وقتی مجموعه رکورد دارد، نوع و الزامی‌بودن این فیلد قابل تغییر نیست؛ نام و دسترسی آن همچنان قابل ویرایش است."
-              />
-            )}
-            <Input
-              id="field-label"
-              label="نام فیلد"
-              value={draft.label}
-              onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))}
-              maxLength={120}
-              required
-              disabled={saving}
-            />
-            <Textarea
-              id="field-description"
-              label="راهنمای کوتاه"
-              value={draft.description}
-              onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
-              maxLength={500}
-              rows={2}
-              disabled={saving}
-            />
-            <Select
-              id="field-type"
-              label="نوع مقدار"
-              options={FIELD_TYPE_OPTIONS}
-              value={draft.type}
-              onChange={(value) => setDraft((current) => ({ ...current, type: value as BusinessDataFieldType }))}
-              disabled={saving || (hasRecords && Boolean(field))}
-            />
-            {draft.type === "select" && (
-              <Textarea
-                id="field-options"
-                label="گزینه‌ها"
-                hint="هر گزینه را در یک خط بنویسید."
-                value={draft.optionsText}
-                onChange={(event) => setDraft((current) => ({ ...current, optionsText: event.target.value }))}
-                rows={4}
-                disabled={saving || (hasRecords && Boolean(field))}
-              />
-            )}
-            <div className="space-y-4 rounded-2xl border border-line bg-surface/25 p-4">
-              <Checkbox
-                label="این فیلد الزامی است"
-                checked={draft.required}
-                onChange={(event) => setDraft((current) => ({ ...current, required: event.target.checked }))}
-                disabled={saving || (hasRecords && Boolean(field))}
-              />
-              <Checkbox
-                label="در جستجو استفاده شود"
-                checked={draft.searchable}
-                onChange={(event) => setDraft((current) => ({ ...current, searchable: event.target.checked }))}
-                disabled={saving}
-              />
-              <Checkbox
-                label="در فیلترها قابل استفاده باشد"
-                checked={draft.filterable}
-                onChange={(event) => setDraft((current) => ({ ...current, filterable: event.target.checked }))}
-                disabled={saving}
-              />
-            </div>
-            <Select
-              id="field-ai-exposure"
-              label="دستیار با این فیلد چه می‌کند؟"
-              options={AI_EXPOSURE_OPTIONS}
-              value={draft.aiExposure}
-              onChange={(value) => setDraft((current) => ({ ...current, aiExposure: value as BusinessDataAiExposure }))}
-              disabled={saving}
-            />
-          </div>
-          <ModalFooter className="mt-0 shrink-0 flex-col-reverse border-t border-line px-5 py-4 sm:flex-row sm:px-7 sm:py-5">
-            <Button type="button" variant="ghost" disabled={saving} onClick={() => onOpenChange(false)} className="w-full sm:w-auto">انصراف</Button>
-            <Button type="submit" loading={saving} className="w-full sm:w-auto">{field ? "ذخیره تغییرات" : "افزودن فیلد"}</Button>
-          </ModalFooter>
-        </form>
-      </ModalContent>
-    </Modal>
-  );
-};
 
 const AssistantVisibilityModal = ({
   collection,
