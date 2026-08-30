@@ -29,6 +29,12 @@ const core = require(
 const { isSupportRequestMessage } = require(
   path.join(root, "src", "lib", "ai", "actions", "support-intent.ts")
 );
+const {
+  isCreateOrderIntentMessage,
+  isCreateReservationIntentMessage,
+} = require(
+  path.join(root, "src", "lib", "ai", "actions", "business-action-rules.ts")
+);
 
 const OWNER_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_OWNER_ID = "22222222-2222-4222-8222-222222222222";
@@ -614,6 +620,26 @@ assert.match(settingsRouteSource, /refreshBusinessActionConfiguration/);
 assert.match(assistantSource, /ask only for the missing information/);
 assert.match(sqlSource, /business_action_settings_source_fk/);
 assert.match(sqlSource, /field_mapping\s+jsonb/);
+assert.equal(
+  isCreateOrderIntentMessage("می خواهم یک سفارش جدید ثبت کنم"),
+  true,
+  "order creation language is recognized"
+);
+assert.equal(
+  isCreateOrderIntentMessage("وضعیت سفارش من چیست؟"),
+  false,
+  "order status language is not treated as order creation"
+);
+assert.equal(
+  isCreateReservationIntentMessage("می خواهم یک رزرو ثبت کنم"),
+  true,
+  "reservation creation language is recognized"
+);
+assert.equal(
+  isCreateReservationIntentMessage("پیگیری رزرو من کجاست؟"),
+  false,
+  "reservation lookup language is not treated as reservation creation"
+);
 
 console.log(
   "Validated AI action registry, preparation, authoritative values, configuration, authorization, confirmation, idempotency, connector boundaries, retrieval safety, and support-request regression."

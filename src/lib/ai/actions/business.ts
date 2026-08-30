@@ -21,6 +21,10 @@ import {
   type BusinessActionKey,
   type ResolvedBusinessActionConfiguration,
 } from "./business-config";
+import {
+  isCreateOrderIntentMessage,
+  isCreateReservationIntentMessage,
+} from "./business-action-rules";
 
 type AvailabilityInput = {
   date: string;
@@ -201,25 +205,45 @@ const reservationInputSchema: ActionSchema<CreateReservationInput> = {
   parse: (value) => {
     if (
       !isPlainObject(value) ||
-      !hasExactKeys(value, [
-        "date",
-        "time",
-        "customer_values",
-      ], ["party_size"])
+      !hasExactKeys(value, [], ["date", "time", "party_size", "customer_values"])
     ) {
       return { success: false };
     }
-    const availability = availabilityInputSchema.parse({
-      date: value.date,
-      time: value.time,
-      party_size: value.party_size ?? 1,
-    });
-    const customerValues = parseValueObject(value.customer_values, /^field_[1-9]\d?$/);
-    return availability.success && customerValues
+    const date =
+      value.date === undefined
+        ? ""
+        : typeof value.date === "string" && validDate(value.date)
+          ? value.date
+          : typeof value.date === "string"
+            ? ""
+            : null;
+    const time =
+      value.time === undefined
+        ? ""
+        : typeof value.time === "string" && TIME_RE.test(value.time)
+          ? value.time
+          : typeof value.time === "string"
+            ? ""
+            : null;
+    const partySize =
+      value.party_size === undefined
+        ? 1
+        : Number.isInteger(value.party_size) &&
+            Number(value.party_size) >= 1 &&
+            Number(value.party_size) <= 100
+          ? Number(value.party_size)
+          : null;
+    const customerValues =
+      value.customer_values === undefined
+        ? {}
+        : parseValueObject(value.customer_values, /^field_[1-9]\d?$/);
+    return date !== null && time !== null && partySize !== null && customerValues
       ? {
           success: true,
           data: {
-            ...availability.data,
+            date,
+            time,
+            party_size: partySize,
             customer_values: customerValues,
           },
         }
@@ -233,27 +257,38 @@ const orderInputSchema: ActionSchema<CreateOrderInput> = {
       !isPlainObject(value) ||
       !hasExactKeys(
         value,
-        ["product_query", "quantity", "customer_values"],
-        ["variant"]
-      ) ||
-      !Number.isInteger(value.quantity) ||
-      Number(value.quantity) < 1 ||
-      Number(value.quantity) > 50
+        [],
+        ["product_query", "quantity", "customer_values", "variant"]
+      )
     ) {
       return { success: false };
     }
-    const productQuery = boundedText(value.product_query, 160);
-    const customerValues = parseValueObject(value.customer_values, /^field_[1-9]\d?$/);
+    const productQuery =
+      value.product_query === undefined
+        ? ""
+        : boundedText(value.product_query, 160) ?? "";
+    const quantity =
+      value.quantity === undefined
+        ? 1
+        : Number.isInteger(value.quantity) &&
+            Number(value.quantity) >= 1 &&
+            Number(value.quantity) <= 50
+          ? Number(value.quantity)
+          : null;
+    const customerValues =
+      value.customer_values === undefined
+        ? {}
+        : parseValueObject(value.customer_values, /^field_[1-9]\d?$/);
     const variant =
       value.variant === undefined ? undefined : boundedText(value.variant, 120);
-    if (!productQuery || !customerValues || variant === null) {
+    if (quantity === null || !customerValues || variant === null) {
       return { success: false };
     }
     return {
       success: true,
       data: {
         product_query: productQuery,
-        quantity: Number(value.quantity),
+        quantity,
         customer_values: customerValues,
         ...(variant ? { variant } : {}),
       },
@@ -533,20 +568,13 @@ const checkAvailabilityIntent = intentMatches([
   /(?:جا|ظرفیت|موجود).*(?:دار|هست)/u,
   /(?:available|availability)/u,
 ]);
-const createReservationIntent = intentMatches([
-  /(?:رزرو).*(?:کن|ثبت)/u,
-  /(?:book|reserve).*(?:table|seat|reservation)?/u,
-]);
+const createReservationIntent = isCreateReservationIntentMessage;
 const cancelReservationIntent = intentMatches([
   /(?:لغو|کنسل).*(?:رزرو)/u,
   /(?:رزرو).*(?:لغو|کنسل)/u,
   /cancel.*reservation/u,
 ]);
-const createOrderIntent = intentMatches([
-  /(?:سفارش).*(?:بده|ثبت|کن)/u,
-  /(?:می ?خوام|میخواهم).*(?:بخر|سفارش)/u,
-  /(?:order|buy).*/u,
-]);
+const createOrderIntent = isCreateOrderIntentMessage;
 const cancelOrderIntent = intentMatches([
   /(?:لغو|کنسل).*(?:سفارش)/u,
   /(?:سفارش).*(?:لغو|کنسل)/u,
@@ -776,11 +804,27 @@ const prepareReservation = async (
   if (!configuration) {
     return { success: false as const, text: "ثبت رزرو برای این کسب‌وکار آماده نیست." };
   }
-  const customerData = validateCustomerValues(configuration, input.customer_values);
-  if (!customerData) {
+  const missingDateTime = [
+    !validDate(input.date) ? "تاریخ رزرو" : null,
+    !TIME_RE.test(input.time) ? "ساعت رزرو" : null,
+  ].filter((value): value is string => Boolean(value));
+  if (missingDateTime.length) {
     return {
       success: false as const,
-      text: "اطلاعات لازم برای ثبت رزرو کامل یا معتبر نیست.",
+      text: `برای ثبت رزرو، لطفاً ${missingDateTime.join(" و ")} را بفرستید.`,
+    };
+  }
+  const customerData = validateCustomerValues(configuration, input.customer_values);
+  if (!customerData) {
+    const missingFields = missingCustomerFieldText(
+      configuration,
+      input.customer_values,
+      "رزرو"
+    );
+    return {
+      success: false as const,
+      text:
+        missingFields ?? "اطلاعات لازم برای ثبت رزرو کامل یا معتبر نیست.",
     };
   }
   const availabilityConfiguration = await resolveBusinessActionConfiguration(
@@ -956,6 +1000,61 @@ const createReservationWrite = async (
 
 const escapeLike = (value: string) => value.replace(/[\\%_]/g, "\\$&");
 
+const GENERIC_PRODUCT_QUERY_TERMS = new Set([
+  "an",
+  "a",
+  "buy",
+  "create",
+  "item",
+  "i",
+  "می",
+  "میخوام",
+  "میخواهم",
+  "خواهم",
+  "یه",
+  "یک",
+  "بخر",
+  "خرید",
+  "بده",
+  "بدم",
+  "کن",
+  "کنم",
+  "جدید",
+  "ثبت",
+  "سفارش",
+  "محصول",
+  "کالا",
+  "order",
+  "place",
+  "please",
+  "product",
+  "to",
+  "want",
+  "we",
+  "make",
+]);
+
+const hasSpecificProductQuery = (value: string) => {
+  const terms = normalized(value).split(" ").filter(Boolean);
+  return terms.some(
+    (term) =>
+      /\p{N}/u.test(term) || !GENERIC_PRODUCT_QUERY_TERMS.has(term)
+  );
+};
+
+const missingCustomerFieldText = (
+  configuration: ResolvedBusinessActionConfiguration,
+  values: Record<string, ActionFieldValue>,
+  operation: "سفارش" | "رزرو"
+) => {
+  const missing = configuration.customerFields
+    .filter((field) => field.required && !Object.hasOwn(values, field.slot))
+    .map((field) => field.label);
+  return missing.length
+    ? `برای ثبت ${operation}، لطفاً ${missing.join(" و ")} را بفرستید.`
+    : null;
+};
+
 const resolveProduct = async (
   context: ActionExecutionContext,
   input: Pick<CreateOrderInput, "product_query" | "quantity" | "variant">,
@@ -1048,24 +1147,36 @@ const prepareOrder = async (
   if (!configuration) {
     return { success: false as const, text: "ثبت سفارش برای این کسب‌وکار آماده نیست." };
   }
-  const customerData = validateCustomerValues(configuration, input.customer_values);
-  if (!customerData) {
+  if (!hasSpecificProductQuery(input.product_query)) {
     return {
       success: false as const,
-      text: "اطلاعات لازم برای ثبت سفارش کامل یا معتبر نیست.",
+      text: "برای ثبت سفارش، لطفاً نام یا مشخصات محصول موردنظر را بفرستید.",
     };
   }
   const product = await resolveProduct(context, input, configuration);
   if (!product) {
     return {
       success: false as const,
-      text: "محصول دقیق از داده کسب‌وکار پیدا نشد؛ سفارش ثبت نشد.",
+      text: "محصول دقیق پیدا نشد؛ لطفاً نام یا مشخصات دقیق محصول را بفرستید.",
     };
   }
   if (product.unavailable) {
     return {
       success: false as const,
       text: "این محصول با تعداد درخواستی موجود نیست؛ سفارش ثبت نشد.",
+    };
+  }
+  const customerData = validateCustomerValues(configuration, input.customer_values);
+  if (!customerData) {
+    const missingFields = missingCustomerFieldText(
+      configuration,
+      input.customer_values,
+      "سفارش"
+    );
+    return {
+      success: false as const,
+      text:
+        missingFields ?? "اطلاعات لازم برای ثبت سفارش کامل یا معتبر نیست.",
     };
   }
   return {
@@ -1460,7 +1571,7 @@ const createReservation = defineAction<
   prepare: prepareReservation,
   execute: createReservationWrite,
   formatResult: (result) =>
-    `رزرو با موفقیت ثبت شد. شناسه رزرو: ${result.reference}`,
+    `رزرو با موفقیت ثبت شد. کد پیگیری رزرو: ${result.reference}؛ برای پیگیری بعدی این کد را نگه دارید.`,
 });
 
 const cancelReservation = defineAction<
@@ -1529,7 +1640,7 @@ const createOrder = defineAction<CreateOrderInput, CreateOrderResult, PreparedOr
   prepare: prepareOrder,
   execute: createOrderWrite,
   formatResult: (result) =>
-    `سفارش ${result.productName} ثبت شد. مبلغ نهایی ${formatMoney(result.totalPrice, result.currency)} و شناسه سفارش ${result.reference} است.`,
+    `سفارش ${result.productName} ثبت شد. مبلغ نهایی ${formatMoney(result.totalPrice, result.currency)} و کد پیگیری سفارش ${result.reference} است؛ برای پیگیری بعدی این کد را نگه دارید.`,
 });
 
 const cancelOrder = defineAction<CancelInput, CancelResult, PreparedCancellation>({

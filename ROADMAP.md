@@ -133,6 +133,8 @@ How to use:
       automatically when creating orders or reservations
 - [x] Harden dataset-only Action activation: keep generated destination fields
       server-owned and resolve shared datetime/product fields deterministically
+- [x] Make order and reservation conversations recoverable: ask for missing
+      creation details, keep lookup separate, and let verification yield to new questions
 - [x] Improve the Business Data creation modal: choose the data kind before
       its source and edit the initial field structure before creating a
       collection

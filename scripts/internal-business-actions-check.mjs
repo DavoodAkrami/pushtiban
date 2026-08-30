@@ -24,6 +24,13 @@ const actionRules = read(
   "actions",
   "business-action-rules.ts"
 );
+const rag = read("src", "lib", "ai", "rag.ts");
+const privateAccess = read(
+  "src",
+  "lib",
+  "business-data",
+  "private-access.ts"
+);
 const route = read("src", "app", "api", "ai", "actions", "route.ts");
 const panel = read(
   "src",
@@ -187,6 +194,18 @@ assert.match(
   actionRules,
   /actionKey === "create_order" \|\| actionKey === "create_reservation"/
 );
+assert.match(actionRules, /isCreateOrderIntentMessage/);
+assert.match(actionRules, /isCreateReservationIntentMessage/);
+assert.match(rag, /Creating an order or reservation is never a private-data lookup/);
+assert.match(rag, /privateLookupSuppressed/);
+assert.match(rag, /isActionContinuation/);
+assert.match(business, /برای ثبت سفارش، لطفاً نام یا مشخصات محصول موردنظر را بفرستید/);
+assert.match(business, /برای ثبت رزرو، لطفاً/);
+assert.match(business, /کد پیگیری سفارش/);
+assert.match(business, /کد پیگیری رزرو/);
+assert.match(privateAccess, /isLikelyNewQuestion/);
+assert.match(privateAccess, /return \{ handled: false \};/);
+assert.match(privateAccess, /برای خروج «لغو» بنویسید/);
 assert.doesNotMatch(panel, /draft\.fieldMapping|draft\.destination/);
 assert.doesNotMatch(panel, /مجموعه فعال و متصل به Supabase با ساختار مناسب پیدا نشد/);
 

@@ -362,8 +362,52 @@ const recordOwnerDiagnostic = async ({
     });
 };
 
-const retryMessage = "اطلاعات واردشده تأیید نشد. لطفاً اطلاعات را بررسی و دوباره ارسال کنید.";
+const retryMessage =
+  "این کد درست نبود. اگر می‌خواهید دوباره تلاش کنید، کد را بفرستید؛ برای خروج «لغو» بنویسید. سؤال دیگری دارید؟ همان سؤال را ارسال کنید تا بررسی‌اش کنم.";
 const rateLimitMessage = "تعداد تلاش‌های ناموفق زیاد شده است. کمی بعد دوباره تلاش کنید.";
+
+const NEW_QUESTION_SIGNALS = [
+  /وضعیت/u,
+  /پیگیری/u,
+  /کجاست/u,
+  /چطور/u,
+  /چگونه/u,
+  /قیمت/u,
+  /موجود/u,
+  /تحویل/u,
+  /لغو/u,
+  /لطفا/u,
+  /لطفاً/u,
+  /سلام/u,
+  /می ?(?:خوام|خواهم)/u,
+  /میشه/u,
+  /بدونم/u,
+  /بگو/u,
+  /آدرس/u,
+  /فروشگاه/u,
+  /امروز/u,
+  /فردا/u,
+  /ساعت/u,
+  /کمک/u,
+  /سوال/u,
+  /سفارش/u,
+  /رزرو/u,
+  /\b(?:what|where|when|how|status|track|cancel|help|price|order|reservation|hi|hello)\b/iu,
+];
+
+const isLikelyNewQuestion = (message: string) => {
+  const candidate = message.trim();
+  if (!candidate) return false;
+  if (/[؟?]/u.test(candidate)) return true;
+  if (NEW_QUESTION_SIGNALS.some((pattern) => pattern.test(candidate))) {
+    return true;
+  }
+  return (
+    candidate.split(/\s+/u).length >= 4 &&
+    /\p{L}/u.test(candidate) &&
+    !/^[\p{L}\p{N}._/@:+-]+$/u.test(candidate)
+  );
+};
 
 export const startPrivateVerification = async ({
   collectionKey,
@@ -440,6 +484,14 @@ export const handlePrivateVerificationMessage = async ({
   if (/^(لغو|انصراف|cancel)$/iu.test(message.trim())) {
     await deleteChallenge(challenge.id);
     return { handled: true, reply: "فرایند تأیید لغو شد." };
+  }
+
+  // A verification challenge must not trap the conversation. A real question
+  // is routed back through the normal assistant pipeline; only code-like
+  // replies continue this challenge.
+  if (isLikelyNewQuestion(message)) {
+    await deleteChallenge(challenge.id);
+    return { handled: false };
   }
 
   const admin = createAdminClient();

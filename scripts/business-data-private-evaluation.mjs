@@ -83,7 +83,7 @@ assert.match(privateAccess, /pending_question/);
 assert.match(privateAccess, /candidate_record_id/);
 assert.doesNotMatch(privateAccess, /console\.(?:info|error)\([^)]*submitted/);
 assert.match(privateAccess, /message: fieldPrompt\(config\.locator\.label, "locator"\)/);
-assert.match(privateAccess, /اطلاعات واردشده تأیید نشد/);
+assert.match(privateAccess, /این کد درست نبود/);
 assert.match(privateAccess, /زمان تأیید به پایان رسیده است/);
 assert.match(privateAccess, /تعداد تلاش‌های ناموفق زیاد شده است/);
 assert.match(privateAccess, /business_data_private_find_candidate_result/);
