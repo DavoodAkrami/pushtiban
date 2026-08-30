@@ -122,6 +122,19 @@ $$;
 comment on table public.business_action_settings is
   'Tenant-owned restrictions and mapped destinations for code-registered AI actions. It cannot grant an unregistered action or weaken registry security.';
 
+-- Cover the collection/source foreign keys used by saved action destinations.
+-- These indexes keep deletes and relationship checks bounded as tenants add
+-- more configured actions.
+create index if not exists business_action_settings_collection_owner_idx
+  on public.business_action_settings (collection_id, user_id)
+  where collection_id is not null;
+create index if not exists business_action_settings_related_collection_owner_idx
+  on public.business_action_settings (related_collection_id, user_id)
+  where related_collection_id is not null;
+create index if not exists business_action_settings_source_collection_owner_idx
+  on public.business_action_settings (source_id, collection_id, user_id)
+  where source_id is not null;
+
 drop trigger if exists business_action_settings_set_updated_at
   on public.business_action_settings;
 create trigger business_action_settings_set_updated_at

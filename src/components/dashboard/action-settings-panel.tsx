@@ -53,6 +53,10 @@ type ActionPrerequisite = {
   statusLabel: string;
   message: string;
   missingFields: string[];
+  datasetRequirements: Array<{
+    label: string;
+    cta: { label: string; href: string };
+  }>;
   cta: { label: string; href: string } | null;
 };
 
@@ -360,6 +364,26 @@ const ActionCard = ({
           }
         />
       </div>
+
+      {!action.capabilityAvailable &&
+        action.prerequisite &&
+        action.prerequisite.datasetRequirements.length > 0 && (
+          <div className="mt-5 rounded-2xl border border-warning/20 bg-warning/10 p-4">
+            <p className="text-sm font-bold text-warning">{action.prerequisite.message}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {action.prerequisite.datasetRequirements.map((requirement) => (
+                <Link
+                  key={requirement.label}
+                  href={requirement.cta.href}
+                  className={buttonVariants({ variant: "outline", size: "sm" })}
+                >
+                  {requirement.cta.label}
+                  <ArrowUpLeft className="size-4" aria-hidden />
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
 
       {action.configurationRequired && configurationSpec && (
         <ActionConfigurationEditor
@@ -676,7 +700,11 @@ const ActionConfigurationEditor = ({
     <Accordion
       type="single"
       collapsible
-      defaultValue={action.capabilityAvailable ? undefined : "configuration"}
+      defaultValue={
+        action.capabilityAvailable || prerequisite?.datasetRequirements.length
+          ? undefined
+          : "configuration"
+      }
       className="mt-5 border-t border-line pt-4"
     >
       <AccordionItem
@@ -716,7 +744,9 @@ const ActionConfigurationEditor = ({
             onChange={updateDestination}
           />
 
-          {!action.capabilityAvailable && prerequisite && (
+          {!action.capabilityAvailable &&
+            prerequisite &&
+            prerequisite.datasetRequirements.length === 0 && (
             <div className="rounded-2xl bg-warning/10 p-4 text-sm leading-7 text-warning">
               <p>{prerequisite.message}</p>
               {prerequisite.missingFields.length > 0 && (

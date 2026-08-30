@@ -126,6 +126,8 @@ How to use:
 - [x] Internal Business Data Actions: treat manual and file-imported records as
       controlled mutation destinations, add transactional stock/order and
       reservation/cancellation RPCs, and expose specific Action prerequisites
+- [x] Make missing dataset prerequisites visible directly on each AI Action,
+      with a separate creation link for every required dataset
 - [x] Improve the Business Data creation modal: choose the data kind before
       its source and edit the initial field structure before creating a
       collection

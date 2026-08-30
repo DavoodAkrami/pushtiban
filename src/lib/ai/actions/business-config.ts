@@ -668,14 +668,16 @@ export const listSafeBusinessActionCatalog = async (userId: string) =>
 export type BusinessActionPrerequisite = {
   code:
     | "ready"
-    | "missing_products"
-    | "missing_orders"
-    | "missing_reservations"
+    | "missing_datasets"
     | "missing_fields"
     | "missing_private_access";
   statusLabel: string;
   message: string;
   missingFields: string[];
+  datasetRequirements: Array<{
+    label: string;
+    cta: { label: string; href: string };
+  }>;
   cta: { label: string; href: string } | null;
 };
 
@@ -684,39 +686,10 @@ type PrerequisiteCatalogCollection = Pick<
   "id" | "kind" | "accessScope" | "aiEnabled" | "privateAccessReady"
 >;
 
-const missingCollectionPrerequisite = (
-  actionKey: BusinessActionKey,
-  code: "missing_products" | "missing_orders" | "missing_reservations"
-): BusinessActionPrerequisite => {
-  if (code === "missing_products") {
-    return {
-      code,
-      statusLabel: "نیاز به مجموعه محصولات",
-      message: "برای ثبت سفارش، ابتدا مجموعه «محصولات» را ایجاد کنید.",
-      missingFields: [],
-      cta: { label: "ایجاد مجموعه محصولات", href: "/dashboard/data" },
-    };
-  }
-  if (code === "missing_orders") {
-    return {
-      code,
-      statusLabel: "نیاز به مجموعه سفارش‌ها",
-      message:
-        actionKey === "cancel_order"
-          ? "برای لغو سفارش، ابتدا مجموعه «سفارش‌ها» را در داده‌های کسب‌وکار ایجاد کنید."
-          : "برای ثبت سفارش، به یک مجموعه «سفارش‌ها» نیاز دارید تا سفارش‌های جدید در آن ذخیره شوند.",
-      missingFields: [],
-      cta: { label: "ایجاد مجموعه سفارش‌ها", href: "/dashboard/data" },
-    };
-  }
-  return {
-    code,
-    statusLabel: "نیاز به مجموعه رزروها",
-    message: "برای فعال کردن رزرو، ابتدا مجموعه «رزروها» را در داده‌های کسب‌وکار ایجاد کنید.",
-    missingFields: [],
-    cta: { label: "ایجاد مجموعه رزروها", href: "/dashboard/data" },
-  };
-};
+const datasetRequirement = (label: string) => ({
+  label,
+  cta: { label: `ایجاد مجموعه ${label}`, href: "/dashboard/data" },
+});
 
 export const buildBusinessActionPrerequisite = ({
   actionKey,
@@ -741,22 +714,30 @@ export const buildBusinessActionPrerequisite = ({
       )
     : [];
 
-  if (actionKey === "create_order" && relatedCollections.length === 0) {
-    return missingCollectionPrerequisite(actionKey, "missing_products");
-  }
-  if (
-    (actionKey === "create_order" || actionKey === "cancel_order") &&
+  const datasetRequirements = [
+    ...(actionKey === "create_order" && relatedCollections.length === 0
+      ? [datasetRequirement("محصولات")]
+      : []),
+    ...((actionKey === "create_order" || actionKey === "cancel_order") &&
     primaryCollections.length === 0
-  ) {
-    return missingCollectionPrerequisite(actionKey, "missing_orders");
-  }
-  if (
-    ["check_availability", "create_reservation", "cancel_reservation"].includes(
+      ? [datasetRequirement("سفارش‌ها")]
+      : []),
+    ...(["check_availability", "create_reservation", "cancel_reservation"].includes(
       actionKey
-    ) &&
-    primaryCollections.length === 0
-  ) {
-    return missingCollectionPrerequisite(actionKey, "missing_reservations");
+    ) && primaryCollections.length === 0
+      ? [datasetRequirement("رزروها")]
+      : []),
+  ];
+
+  if (datasetRequirements.length > 0) {
+    return {
+      code: "missing_datasets",
+      statusLabel: "نیاز به مجموعه داده",
+      message: "برای فعال‌سازی این اقدام، ابتدا مجموعه‌های دادهٔ زیر را ایجاد کنید.",
+      missingFields: [],
+      datasetRequirements,
+      cta: null,
+    };
   }
 
   if (spec.primaryAccessScopes?.includes("verified_customer")) {
@@ -773,6 +754,7 @@ export const buildBusinessActionPrerequisite = ({
             ? "برای لغو سفارش، ابتدا دسترسی خصوصی مجموعه سفارش‌ها را تنظیم کنید تا پشتیبان فقط سفارش همان مشتری را تغییر دهد."
             : "برای لغو رزرو، ابتدا دسترسی خصوصی مجموعه رزروها را تنظیم کنید تا پشتیبان فقط رزرو همان مشتری را تغییر دهد.",
         missingFields: [],
+        datasetRequirements: [],
         cta: {
           label: "تنظیم تأیید هویت",
           href: `/dashboard/data/${selected?.id ?? ""}/structure#private-access-heading`,
@@ -794,6 +776,7 @@ export const buildBusinessActionPrerequisite = ({
       missingFields: spec.fields
         .filter((field) => field.required && !field.serverGenerated)
         .map((field) => field.label),
+      datasetRequirements: [],
       cta: {
         label: "تکمیل تنظیمات",
         href: `#action-${actionKey}-configuration`,
@@ -806,6 +789,7 @@ export const buildBusinessActionPrerequisite = ({
     statusLabel: "آماده فعال‌سازی",
     message: "مجموعه‌ها و فیلدهای موردنیاز آماده‌اند.",
     missingFields: [],
+    datasetRequirements: [],
     cta: null,
   };
 };
