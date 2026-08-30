@@ -131,6 +131,8 @@ How to use:
 - [x] Make AI Action setup dataset-only: infer field mappings and operational
       defaults on the server, then ask customers for required dataset fields
       automatically when creating orders or reservations
+- [x] Harden dataset-only Action activation: keep generated destination fields
+      server-owned and resolve shared datetime/product fields deterministically
 - [x] Improve the Business Data creation modal: choose the data kind before
       its source and edit the initial field structure before creating a
       collection

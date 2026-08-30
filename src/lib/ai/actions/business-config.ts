@@ -412,6 +412,14 @@ const inferSideFieldMapping = ({
     const compatible = collection.fields.filter((field) => {
       if (!concept.types.includes(field.type)) return false;
       if (
+        destination === "internal_business_data" &&
+        side === "primary" &&
+        isSystemGeneratedCollectionField(actionKey, field) &&
+        !canMapGeneratedOrderField(actionKey, concept, field)
+      ) {
+        return false;
+      }
+      if (
         actionKey === "create_order" &&
         concept.key === "destination_product_reference" &&
         field.role === "reference" &&
@@ -430,10 +438,10 @@ const inferSideFieldMapping = ({
     );
     const selected =
       exact ??
-      (signalMatches.length === 1
-        ? signalMatches[0]
-        : signalMatches.length === 0 && roleMatches.length === 1
-          ? roleMatches[0]
+      (roleMatches.length === 1
+        ? roleMatches[0]
+        : signalMatches.length === 1
+          ? signalMatches[0]
           : null);
 
     if (selected) {
@@ -442,7 +450,7 @@ const inferSideFieldMapping = ({
       continue;
     }
     if (
-      actionKey === "create_reservation" &&
+      ["check_availability", "create_reservation"].includes(actionKey) &&
       concept.key === "time" &&
       result.date &&
       collection.fields.find((field) => field.key === result.date)?.type ===
@@ -587,7 +595,7 @@ const hasMappingConflict = (
       continue;
     }
     const sharedDateTime =
-      actionKey === "create_reservation" &&
+      ["check_availability", "create_reservation"].includes(actionKey) &&
       new Set([previous.key, concept.key]).size === 2 &&
       new Set([previous.key, concept.key]).has("date") &&
       new Set([previous.key, concept.key]).has("time") &&
