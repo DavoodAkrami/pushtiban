@@ -124,7 +124,10 @@ emits **nothing** — only the dials the owner moved cost tokens.
 1. **Intent and retrieval plan** — one cheap `gpt-4o-mini` call classifies the message
    (`shipping` / `pricing` / `products` / `returns` / `account` / `general`) and
    condenses it into a search query. When the chat has memory, the previous
-   customer message is passed in so follow-ups resolve into standalone queries.
+   customer message resolves retrieval follow-ups into standalone queries. For
+   an explicitly requested Action, at most four recent turns are also serialized
+   as bounded, untrusted JSON so a reply to the assistant's missing-field question
+   can complete the same operation without treating unrelated history as intent.
    When eligible Business Data exists, the same call may also produce one
    constrained public lookup plan and one private collection routing hint; there
    is no separate planner or summarizer completion. The classifier sees at most
@@ -313,11 +316,21 @@ can only disable an Action or add a confirmation requirement; it cannot make a
 registry-required verification or confirmation optional. `create_support_request`
 keeps its compatible default of enabled when no setting exists. The order and
 reservation mutations are disabled by default and are not exposed to the intent
-call until an eligible Business Data capability, a selected internal or external
-destination, complete field mappings, and the owner's enabled setting all agree.
+call until an eligible Business Data capability, the owner's selected dataset,
+the server's inferred destination and field contract, and the owner's enabled
+setting all agree. The owner selects datasets only. On configuration save and
+again when enabling an Action, the server checks the current dataset structure,
+derives semantic field mappings, stock behavior, source destination, and status
+defaults, then persists that generated configuration. Browser-supplied field
+mappings and operational defaults are ignored.
 The compact schema goes to the final reply completion only when the current
 customer message directly matches an enabled operation but cannot yet execute;
 that lets the assistant ask only for missing fields without adding another call.
+For order and reservation creation, required customer-provided dataset fields
+are exposed as neutral `field_N` slots with bounded labels and types. Labels are
+explicitly marked untrusted; real dataset keys never enter model context. The
+server maps and type-checks every slot again before confirmation and rejects
+unknown, missing, generated, status, reference, or internal-only values.
 
 Confirmation-required actions are stored server-side for five minutes and are
 bound to the business, channel connection, hashed customer identity,
@@ -336,15 +349,20 @@ The registry includes `check_availability`, `create_reservation`,
 `cancel_reservation`, `create_order`, and `cancel_order` in addition to
 `create_support_request`. Availability is a bounded read from the configured
 internal Business Data collection or external Supabase source. Creates write
-only owner-mapped business concepts to the selected destination and return only
-after the authoritative write succeeds. Internal creates keep execution and
+only server-inferred business concepts and validated dataset-derived customer
+values to the selected destination and return only after the authoritative
+write succeeds. Internal creates keep execution and
 idempotency references in the Action infrastructure and generate required
 Business Data titles when the destination schema needs one; owners do not have
 to add technical fields for those values. A single datetime field may represent
-both reservation date and time. Internal order execution locks the
-authoritative product row, re-checks price and availability, and performs the
-stock decrement and order insert in one service-only transaction. Internal
-reservation capacity changes and record creation use the same transactional
+both reservation date and time, and party size is requested only when the
+reservation dataset has a compatible field. Public Business Data retrieval can
+check the requested product on the first order turn; recent action conversation
+context then carries the explicit order request while the customer supplies the
+dataset-derived name, address, or other required fields. Internal order
+execution locks the authoritative product row, re-checks price and availability,
+and performs the stock decrement and order insert in one service-only transaction.
+Internal reservation capacity changes and record creation use the same transactional
 boundary. Server-controlled execution references make these writes idempotent.
 Cancellations accept no model-authored record ID: they resolve the exact record
 from the active, record-scoped verified-customer session, re-check ownership and

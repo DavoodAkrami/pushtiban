@@ -6,6 +6,7 @@ import type {
   BusinessDataCollectionKind,
   BusinessDataFieldRole,
   BusinessDataFieldType,
+  BusinessDataFieldValidation,
 } from "@/lib/business-data/types";
 import {
   businessActionRequiresCollectionRequiredFieldValidation,
@@ -31,6 +32,15 @@ export type BusinessActionFieldConcept = {
   serverGenerated?: boolean;
   types: BusinessDataFieldType[];
   roles?: BusinessDataFieldRole[];
+};
+
+export type BusinessActionCustomerField = {
+  slot: string;
+  key: string;
+  label: string;
+  type: BusinessDataFieldType;
+  required: boolean;
+  options: string[];
 };
 
 export type BusinessActionConfigurationSpec = {
@@ -68,9 +78,7 @@ export const BUSINESS_ACTION_CONFIGURATION_SPECS: Record<
     fields: [
       { key: "date", label: "تاریخ رزرو", side: "primary", required: true, types: dateTypes, roles: ["start_at"] },
       { key: "time", label: "ساعت رزرو", side: "primary", required: true, types: dateTypes, roles: ["start_at"] },
-      { key: "party_size", label: "تعداد نفرات", side: "primary", required: true, types: ["number"], roles: ["quantity"] },
-      { key: "customer_name", label: "نام مشتری", side: "primary", required: true, serverGenerated: true, types: textTypes, roles: ["title"] },
-      { key: "customer_contact", label: "راه تماس مشتری", side: "primary", required: true, types: textTypes, roles: ["phone", "email", "customer_identifier"] },
+      { key: "party_size", label: "تعداد نفرات", side: "primary", required: false, types: ["number"], roles: ["quantity"] },
       { key: "execution_id", label: "شناسه یکتای عملیات", side: "primary", required: true, serverGenerated: true, types: textTypes, roles: ["reference"] },
       { key: "status", label: "وضعیت اولیه", side: "primary", required: false, types: textTypes, roles: ["status"] },
     ],
@@ -91,16 +99,14 @@ export const BUSINESS_ACTION_CONFIGURATION_SPECS: Record<
     relatedKinds: ["product", "menu_item"],
     relatedAccessScopes: ["public_catalog"],
     fields: [
-      { key: "destination_product_reference", label: "شناسه محصول در سفارش", side: "primary", required: true, types: textTypes, roles: ["reference", "sku"] },
-      { key: "destination_quantity", label: "تعداد سفارش", side: "primary", required: true, types: ["number"], roles: ["quantity"] },
-      { key: "destination_unit_price", label: "قیمت واحد", side: "primary", required: true, types: numberTypes, roles: ["price"] },
+      { key: "destination_product_reference", label: "محصول سفارش", side: "primary", required: false, types: textTypes, roles: ["sku", "reference"] },
+      { key: "destination_quantity", label: "تعداد سفارش", side: "primary", required: false, types: ["number"], roles: ["quantity"] },
+      { key: "destination_unit_price", label: "قیمت واحد", side: "primary", required: false, types: numberTypes, roles: ["price"] },
       { key: "destination_total_price", label: "مبلغ کل", side: "primary", required: false, types: numberTypes, roles: ["price"] },
-      { key: "destination_customer_name", label: "نام مشتری", side: "primary", required: true, serverGenerated: true, types: textTypes, roles: ["title"] },
-      { key: "destination_customer_contact", label: "راه تماس مشتری", side: "primary", required: true, types: textTypes, roles: ["phone", "email", "customer_identifier"] },
       { key: "execution_id", label: "شناسه یکتای عملیات", side: "primary", required: true, serverGenerated: true, types: textTypes, roles: ["reference"] },
       { key: "destination_status", label: "وضعیت اولیه", side: "primary", required: false, types: textTypes, roles: ["status"] },
       { key: "product_name", label: "نام محصول", side: "related", required: true, types: textTypes, roles: ["title"] },
-      { key: "product_reference", label: "شناسه محصول", side: "related", required: true, types: textTypes, roles: ["sku", "reference"] },
+      { key: "product_reference", label: "شناسه محصول", side: "related", required: false, types: textTypes, roles: ["sku", "reference"] },
       { key: "product_price", label: "قیمت فعلی محصول", side: "related", required: true, types: numberTypes, roles: ["price"] },
       { key: "product_currency", label: "واحد پول", side: "related", required: false, types: textTypes, roles: ["currency"] },
       { key: "product_available", label: "وضعیت موجودی", side: "related", required: false, types: ["boolean", "select", "text"], roles: ["availability", "status"] },
@@ -124,6 +130,7 @@ export type BusinessActionCatalogField = {
   type: BusinessDataFieldType;
   role: BusinessDataFieldRole;
   required: boolean;
+  validation: BusinessDataFieldValidation;
 };
 
 type BusinessActionCatalogSource = {
@@ -163,6 +170,7 @@ export type ResolvedBusinessActionConfiguration = StoredBusinessActionConfigurat
   primary: BusinessActionCatalogCollection;
   related: BusinessActionCatalogCollection | null;
   source: BusinessActionCatalogSource | null;
+  customerFields: BusinessActionCustomerField[];
 };
 
 const configurationCache = new Map<
@@ -194,6 +202,7 @@ type FieldRow = {
   data_type: BusinessDataFieldType;
   semantic_role: BusinessDataFieldRole;
   required: boolean;
+  validation: BusinessDataFieldValidation;
 };
 
 type SourceRow = {
@@ -224,7 +233,7 @@ const loadCatalog = async (userId: string): Promise<BusinessActionCatalogCollect
   const [fieldResult, sourceResult, privateResult] = await Promise.all([
     admin
       .from("business_data_fields")
-      .select("collection_id, key, label, data_type, semantic_role, required")
+      .select("collection_id, key, label, data_type, semantic_role, required, validation")
       .eq("user_id", userId)
       .in("collection_id", ids)
       .order("position", { ascending: true }),
@@ -272,6 +281,7 @@ const loadCatalog = async (userId: string): Promise<BusinessActionCatalogCollect
           type: field.data_type,
           role: field.semantic_role,
           required: field.required,
+          validation: isPlainObject(field.validation) ? field.validation : {},
         })),
       source:
         sourceRow && typeof tableName === "string" && tableName
@@ -315,6 +325,217 @@ const parseFieldMapping = (value: unknown) => {
   return result;
 };
 
+const FIELD_MAPPING_SIGNALS: Record<string, string[]> = {
+  date: ["date", "day", "تاریخ", "روز"],
+  time: ["time", "hour", "ساعت", "زمان"],
+  party_size: ["party", "guest", "people", "تعدادنفر", "نفرات"],
+  available: ["available", "availability", "موجود", "ظرفیت"],
+  remaining_capacity: ["remainingcapacity", "capacity", "remaining", "ظرفیتباقیمانده"],
+  destination_product_reference: ["product", "item", "sku", "محصول", "کالا"],
+  destination_quantity: ["quantity", "qty", "count", "تعداد"],
+  destination_unit_price: ["unitprice", "priceeach", "قیمتواحد"],
+  destination_total_price: ["totalprice", "total", "amount", "مبلغکل", "جمع"],
+  destination_status: ["status", "state", "وضعیت"],
+  execution_id: ["execution", "reference", "tracking", "شناسه", "پیگیری"],
+  product_name: ["name", "title", "product", "نام", "عنوان", "محصول"],
+  product_reference: ["sku", "reference", "code", "کد", "شناسه"],
+  product_price: ["price", "cost", "قیمت", "هزینه"],
+  product_currency: ["currency", "واحدپول", "ارز"],
+  product_available: ["available", "availability", "موجود"],
+  product_stock: ["stock", "inventory", "quantity", "موجودی", "تعداد"],
+  status: ["status", "state", "وضعیت"],
+};
+
+const normalizeFieldSignal = (value: string) =>
+  value
+    .toLocaleLowerCase("fa-IR")
+    .replace(/[ي]/g, "ی")
+    .replace(/[ك]/g, "ک")
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+
+const fieldMatchesSignals = (
+  field: BusinessActionCatalogField,
+  conceptKey: string
+) => {
+  const haystack = normalizeFieldSignal(`${field.key} ${field.label}`);
+  return (FIELD_MAPPING_SIGNALS[conceptKey] ?? []).some((signal) =>
+    haystack.includes(normalizeFieldSignal(signal))
+  );
+};
+
+const isGeneratedTitleField = (field: BusinessActionCatalogField) => {
+  if (field.role !== "title") return false;
+  const haystack = normalizeFieldSignal(`${field.key} ${field.label}`);
+  return [
+    "title",
+    "summary",
+    "ordertitle",
+    "reservationtitle",
+    "عنوان",
+    "خلاصه",
+    "شرحسفارش",
+    "شرحرزرو",
+  ].some((signal) => haystack.includes(signal));
+};
+
+const isSystemGeneratedCollectionField = (
+  actionKey: BusinessActionKey,
+  field: BusinessActionCatalogField
+) =>
+  businessActionWritesRecords(actionKey) &&
+  (field.role === "reference" ||
+    field.role === "status" ||
+    field.role === "internal_notes" ||
+    isGeneratedTitleField(field));
+
+const inferSideFieldMapping = ({
+  actionKey,
+  collection,
+  destination,
+  side,
+}: {
+  actionKey: BusinessActionKey;
+  collection: BusinessActionCatalogCollection | null;
+  destination: BusinessActionDestination;
+  side: "primary" | "related";
+}) => {
+  if (!collection) return {};
+  const result: Record<string, string> = {};
+  const used = new Set<string>();
+  const concepts = BUSINESS_ACTION_CONFIGURATION_SPECS[actionKey].fields.filter(
+    (concept) =>
+      concept.side === side &&
+      !(destination === "internal_business_data" && concept.serverGenerated)
+  );
+
+  for (const concept of concepts) {
+    const compatible = collection.fields.filter((field) => {
+      if (!concept.types.includes(field.type)) return false;
+      if (
+        actionKey === "create_order" &&
+        concept.key === "destination_product_reference" &&
+        field.role === "reference" &&
+        !fieldMatchesSignals(field, concept.key)
+      ) {
+        return false;
+      }
+      return !used.has(field.key);
+    });
+    const exact = compatible.find((field) => field.key === concept.key);
+    const signalMatches = compatible.filter((field) =>
+      fieldMatchesSignals(field, concept.key)
+    );
+    const roleMatches = compatible.filter((field) =>
+      concept.roles?.includes(field.role)
+    );
+    const selected =
+      exact ??
+      (signalMatches.length === 1
+        ? signalMatches[0]
+        : signalMatches.length === 0 && roleMatches.length === 1
+          ? roleMatches[0]
+          : null);
+
+    if (selected) {
+      result[concept.key] = selected.key;
+      used.add(selected.key);
+      continue;
+    }
+    if (
+      actionKey === "create_reservation" &&
+      concept.key === "time" &&
+      result.date &&
+      collection.fields.find((field) => field.key === result.date)?.type ===
+        "datetime"
+    ) {
+      result.time = result.date;
+    }
+  }
+  return result;
+};
+
+const inferFieldMapping = ({
+  actionKey,
+  destination,
+  primary,
+  related,
+}: {
+  actionKey: BusinessActionKey;
+  destination: BusinessActionDestination;
+  primary: BusinessActionCatalogCollection;
+  related: BusinessActionCatalogCollection | null;
+}) => ({
+  ...inferSideFieldMapping({
+    actionKey,
+    collection: primary,
+    destination,
+    side: "primary",
+  }),
+  ...inferSideFieldMapping({
+    actionKey,
+    collection: related,
+    destination,
+    side: "related",
+  }),
+});
+
+const customerFieldsFor = ({
+  actionKey,
+  fieldMapping,
+  primary,
+}: {
+  actionKey: BusinessActionKey;
+  fieldMapping: Record<string, string>;
+  primary: BusinessActionCatalogCollection;
+}): BusinessActionCustomerField[] => {
+  if (!businessActionWritesRecords(actionKey)) return [];
+  const mappedFields = new Set(Object.values(fieldMapping));
+  return primary.fields
+    .filter(
+      (field) =>
+        field.required &&
+        !mappedFields.has(field.key) &&
+        !isSystemGeneratedCollectionField(actionKey, field)
+    )
+    .map(({ key, label, type, required, validation }, index) => ({
+      slot: `field_${index + 1}`,
+      key,
+      label: label.replace(/[\u0000-\u001f\u007f]+/g, " ").slice(0, 80),
+      type,
+      required,
+      options: Array.isArray(validation.options)
+        ? validation.options.filter(
+            (option): option is string => typeof option === "string"
+          ).slice(0, 20)
+        : [],
+    }));
+};
+
+const statusValueFor = (
+  actionKey: BusinessActionKey,
+  field: BusinessActionCatalogField | undefined,
+  mode: "initial" | "cancel"
+) => {
+  const options = Array.isArray(field?.validation.options)
+    ? field.validation.options.filter(
+        (option): option is string => typeof option === "string" && option.trim().length > 0
+      )
+    : [];
+  const preferred =
+    mode === "cancel"
+      ? ["cancelled", "canceled", "لغوشده", "لغو شده", "کنسل"]
+      : actionKey === "create_order"
+        ? ["new", "pending", "جدید", "در انتظار"]
+        : ["pending", "new", "در انتظار", "جدید"];
+  const matched = options.find((option) => {
+    const normalized = normalizeFieldSignal(option);
+    return preferred.some((candidate) =>
+      normalized.includes(normalizeFieldSignal(candidate))
+    );
+  });
+  return matched ?? options[0] ?? preferred[0];
+};
+
 const fieldForConcept = (
   concept: BusinessActionFieldConcept,
   mapping: Record<string, string>,
@@ -339,8 +560,7 @@ const isInternalGeneratedCollectionField = (
   field: BusinessActionCatalogField
 ) =>
   destination === "internal_business_data" &&
-  ["create_order", "create_reservation"].includes(actionKey) &&
-  (field.role === "title" || field.role === "reference");
+  isSystemGeneratedCollectionField(actionKey, field);
 
 const canMapGeneratedOrderField = (
   actionKey: BusinessActionKey,
@@ -393,6 +613,52 @@ const isBusinessActionDestination = (
 ): value is BusinessActionDestination =>
   value === "internal_business_data" || value === "external_supabase";
 
+const inferStoredConfiguration = ({
+  actionKey,
+  primary,
+  related,
+}: {
+  actionKey: BusinessActionKey;
+  primary: BusinessActionCatalogCollection;
+  related: BusinessActionCatalogCollection | null;
+}): StoredBusinessActionConfiguration => {
+  const destination: BusinessActionDestination = primary.source
+    ? "external_supabase"
+    : "internal_business_data";
+  const fieldMapping = inferFieldMapping({
+    actionKey,
+    destination,
+    primary,
+    related,
+  });
+  const statusConcept =
+    actionKey === "create_order" ? "destination_status" : "status";
+  const statusField = primary.fields.find(
+    (field) => field.key === fieldMapping[statusConcept]
+  );
+  const writesInitialStatus =
+    actionKey === "create_order" || actionKey === "create_reservation";
+  return {
+    collectionId: primary.id,
+    sourceId: destination === "external_supabase" ? primary.source?.id ?? null : null,
+    relatedCollectionId: related?.id ?? null,
+    fieldMapping,
+    cancellationValue: BUSINESS_ACTION_CONFIGURATION_SPECS[actionKey]
+      .cancellationValue
+      ? statusValueFor(actionKey, statusField, "cancel")
+      : null,
+    initialStatus:
+      writesInitialStatus && statusField
+        ? statusValueFor(actionKey, statusField, "initial")
+        : null,
+    destination,
+    stockTrackingEnabled:
+      actionKey === "create_order" &&
+      destination === "internal_business_data" &&
+      Boolean(fieldMapping.product_stock),
+  };
+};
+
 const resolveAgainstCatalog = ({
   actionKey,
   cancellationValue,
@@ -432,6 +698,8 @@ const resolveAgainstCatalog = ({
       .map((concept) => fieldMapping[concept.key])
       .filter(Boolean)
   );
+  const customerFields = customerFieldsFor({ actionKey, fieldMapping, primary });
+  const customerFieldKeys = new Set(customerFields.map((field) => field.key));
   const writesRecords = businessActionWritesRecords(actionKey);
   const mapsGeneratedFieldToBusinessConcept =
     destination === "internal_business_data" &&
@@ -467,6 +735,7 @@ const resolveAgainstCatalog = ({
       )) ||
     hasMappingConflict(actionKey, primaryConcepts, fieldMapping, primary) ||
     hasMappingConflict(actionKey, relatedConcepts, fieldMapping, related) ||
+    customerFields.length > 16 ||
     mapsGeneratedFieldToBusinessConcept ||
     (destination === "internal_business_data" &&
       businessActionRequiresCollectionRequiredFieldValidation(actionKey) &&
@@ -474,6 +743,7 @@ const resolveAgainstCatalog = ({
         (field) =>
           field.required &&
           !primaryMappedFieldKeys.has(field.key) &&
+          !customerFieldKeys.has(field.key) &&
           !isInternalGeneratedCollectionField(actionKey, destination, field)
       )) ||
     spec.fields.some(
@@ -485,6 +755,10 @@ const resolveAgainstCatalog = ({
           fieldMapping[concept.key]
         )
     ) ||
+    (usesExternalSource &&
+      customerFields.some(
+        (field) => !Object.values(source!.fieldMapping).includes(field.key)
+      )) ||
     (spec.cancellationValue &&
       (!cancellationValue || cancellationValue.length > 80)) ||
     (destination === "internal_business_data" &&
@@ -517,6 +791,7 @@ const resolveAgainstCatalog = ({
     primary,
     related,
     source: usesExternalSource ? source! : null,
+    customerFields,
   } satisfies ResolvedBusinessActionConfiguration;
 };
 
@@ -612,39 +887,54 @@ export const parseBusinessActionConfigurationUpdate = async ({
     typeof input.relatedCollectionId === "string"
       ? input.relatedCollectionId
       : null;
-  const fieldMapping = parseFieldMapping(input.fieldMapping);
-  const cancellationValue =
-    typeof input.cancellationValue === "string"
-      ? input.cancellationValue.trim()
-      : null;
-  const initialStatus =
-    typeof input.initialStatus === "string" ? input.initialStatus.trim() : null;
-  const destination = isBusinessActionDestination(input.destination)
-    ? input.destination
-    : null;
-  const stockTrackingEnabled =
-    typeof input.stockTrackingEnabled === "boolean"
-      ? input.stockTrackingEnabled
-      : destination === "internal_business_data" && actionKey === "create_order";
-  if (!collectionId || !fieldMapping || !destination) return null;
+  if (!collectionId) return null;
   const catalog = await loadCatalog(userId);
   const primary = catalog.find((collection) => collection.id === collectionId);
   if (!primary) return null;
+  const spec = BUSINESS_ACTION_CONFIGURATION_SPECS[actionKey];
+  const eligibleRelated = spec.relatedKinds
+    ? catalog.filter(
+        (collection) =>
+          compatibleCollection(
+            collection,
+            spec.relatedKinds!,
+            spec.relatedAccessScopes
+          ) && collection.aiEnabled
+      )
+    : [];
+  const related = spec.relatedKinds
+    ? eligibleRelated.find((collection) => collection.id === relatedCollectionId) ??
+      (eligibleRelated.length === 1 ? eligibleRelated[0] : null)
+    : null;
+  const inferred = inferStoredConfiguration({ actionKey, primary, related });
   return resolveAgainstCatalog(
     {
       actionKey,
-      collectionId,
-      sourceId:
-        destination === "external_supabase" ? primary.source?.id ?? null : null,
-      relatedCollectionId,
-      fieldMapping,
-      cancellationValue,
-      initialStatus,
-      destination,
-      stockTrackingEnabled,
+      ...inferred,
     },
     catalog
   );
+};
+
+export const refreshBusinessActionConfiguration = async (
+  userId: string,
+  actionKey: BusinessActionKey
+) => {
+  const { data, error } = await createAdminClient()
+    .from("business_action_settings")
+    .select("collection_id, related_collection_id")
+    .eq("user_id", userId)
+    .eq("action_key", actionKey)
+    .maybeSingle();
+  if (error || !data?.collection_id) return null;
+  return parseBusinessActionConfigurationUpdate({
+    actionKey,
+    userId,
+    input: {
+      collectionId: data.collection_id,
+      relatedCollectionId: data.related_collection_id,
+    },
+  });
 };
 
 export const listSafeBusinessActionCatalog = async (userId: string) =>

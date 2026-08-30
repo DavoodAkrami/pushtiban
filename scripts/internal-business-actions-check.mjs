@@ -67,7 +67,11 @@ for (const rpc of [availabilityRpc, reservationRpc, orderRpc, cancellationRpc]) 
 
 assert.match(configuration, /"internal_business_data"/);
 assert.match(configuration, /"external_supabase"/);
-assert.match(configuration, /sourceId:\s*usesExternalSource \? source!\.id : null/);
+assert.match(configuration, /const inferFieldMapping/);
+assert.match(configuration, /const customerFieldsFor/);
+assert.match(configuration, /slot: `field_\$\{index \+ 1\}`/);
+assert.match(configuration, /customerFields\.length > 16/);
+assert.match(configuration, /refreshBusinessActionConfiguration/);
 assert.match(configuration, /destination === "internal_business_data"/);
 assert.match(configuration, /primary\.fields\.some/);
 assert.match(configuration, /hasMappingConflict/);
@@ -96,6 +100,10 @@ assert.match(orderRpc, /record\.external_id = order_reference/);
 assert.match(businessDataSql, /business_data_records_external_id_unique/);
 assert.match(orderRpc, /jsonb_typeof\([\s\S]*stockTrackingEnabled/);
 assert.match(orderRpc, /'status', 'created'/);
+assert.match(orderRpc, /p_customer_values jsonb/);
+assert.match(orderRpc, /jsonb_object_keys\(p_customer_values\)/);
+assert.match(orderRpc, /Invalid order customer field/);
+assert.match(orderRpc, /uuid, uuid, uuid, text, numeric, integer, jsonb/);
 assert.ok(
   orderRpc.indexOf("for update") < orderRpc.indexOf("current_stock - p_quantity"),
   "The product row is locked before stock changes"
@@ -115,6 +123,10 @@ assert.match(reservationRpc, /availability_match_count <> 1/);
 assert.match(reservationRpc, /insert into public\.business_data_records/);
 assert.match(reservationRpc, /date_key = time_key/);
 assert.match(reservationRpc, /semantic_role = 'title'/);
+assert.match(reservationRpc, /p_customer_values jsonb/);
+assert.match(reservationRpc, /jsonb_object_keys\(p_customer_values\)/);
+assert.match(reservationRpc, /Invalid reservation customer field/);
+assert.match(reservationRpc, /uuid, uuid, text, text, integer, jsonb/);
 
 assert.match(availabilityRpc, /business_data_records/);
 assert.match(availabilityRpc, /matched_count <> 1/);
@@ -137,15 +149,19 @@ assert.match(business, /updateSupabaseActionRow/);
 assert.match(business, /readSupabaseActionRows/);
 assert.match(business, /new ActionPublicError\(/);
 assert.match(business, /قیمت محصول تغییر کرده/);
+assert.match(business, /validateCustomerValues/);
+assert.match(business, /p_customer_values: input\.datasetValues/);
 
-assert.match(route, /destination: parsedConfiguration\.destination/);
+assert.match(route, /destination: effectiveConfiguration\.destination/);
 assert.match(route, /stockTrackingEnabled/);
 assert.match(route, /buildBusinessActionPrerequisite/);
+assert.match(route, /refreshBusinessActionConfiguration/);
 assert.match(sql, /business_action_settings_collection_owner_idx/);
 assert.match(sql, /business_action_settings_related_collection_owner_idx/);
 assert.match(sql, /business_action_settings_source_collection_owner_idx/);
 assert.match(panel, /داده‌های پشتیبان/);
-assert.match(panel, /کنترل و کاهش موجودی/);
+assert.match(panel, /اتصال مجموعه‌داده/);
+assert.match(panel, /اطلاعاتی که دستیار از مشتری می‌پرسد/);
 assert.match(configuration, /datasetRequirement\("محصولات"\)/);
 assert.match(configuration, /datasetRequirement\("سفارش‌ها"\)/);
 assert.match(configuration, /datasetRequirement\("رزروها"\)/);
@@ -155,22 +171,19 @@ assert.match(configuration, /برای فعال‌سازی این اقدام، ا
 assert.match(configuration, /تنظیم تأیید هویت/);
 assert.match(panel, /datasetRequirements\.length > 0/);
 assert.match(panel, /requirement\.cta\.label/);
-assert.match(panel, /اتصال منبع خارجی/);
-assert.match(panel, /suggestedMappings/);
-assert.match(panel, /concept\.side === "primary"/);
-assert.match(panel, /mappingSignals/);
-assert.match(panel, /hasValidMapping/);
-assert.match(panel, /فیلد انتخاب‌شده برای/);
-assert.match(panel, /businessActionRequiresCollectionRequiredFieldValidation\(action\.key\)/);
+assert.match(panel, /ActionConfigurationUpdate = Pick</);
+assert.match(panel, /relatedCandidates\.length === 1/);
+assert.doesNotMatch(panel, /suggestedMappings/);
+assert.doesNotMatch(panel, /mappingSignals/);
+assert.doesNotMatch(panel, /hasValidMapping/);
+assert.doesNotMatch(panel, /فیلد انتخاب‌شده برای/);
+assert.doesNotMatch(panel, /businessActionRequiresCollectionRequiredFieldValidation/);
 assert.match(actionRules, /businessActionWritesRecords/);
 assert.match(
   actionRules,
   /actionKey === "create_order" \|\| actionKey === "create_reservation"/
 );
-assert.match(
-  panel,
-  /draft\.destination === "internal_business_data"[\s\S]*businessActionRequiresCollectionRequiredFieldValidation\(action\.key\)/
-);
+assert.doesNotMatch(panel, /draft\.fieldMapping|draft\.destination/);
 assert.doesNotMatch(panel, /مجموعه فعال و متصل به Supabase با ساختار مناسب پیدا نشد/);
 
 console.log(

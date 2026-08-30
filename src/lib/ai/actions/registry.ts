@@ -157,6 +157,13 @@ export type SafeActionSettingsMetadata = {
     initialStatus: string | null;
     destination: "internal_business_data" | "external_supabase";
     stockTrackingEnabled: boolean;
+    customerFields: Array<{
+      slot: string;
+      label: string;
+      type: string;
+      required: boolean;
+      options: string[];
+    }>;
   } | null;
 };
 
@@ -200,6 +207,15 @@ export const listSafeActionSettings = async (
               destination: businessConfiguration.destination,
               stockTrackingEnabled:
                 businessConfiguration.stockTrackingEnabled,
+              customerFields: businessConfiguration.customerFields.map(
+                ({ slot, label, type, required, options }) => ({
+                  slot,
+                  label,
+                  type,
+                  required,
+                  options,
+                })
+              ),
             }
           : null,
       };
@@ -227,10 +243,33 @@ export const describeAvailableActions = async ({
     )
     .map((setting) => {
       const definition = ACTION_REGISTRY.get(setting.key)!;
+      const customerFields = setting.configuration?.customerFields ?? [];
+      const customerValueShape = Object.fromEntries(
+        customerFields.map((field) => [
+          field.slot,
+          `${field.required ? "required" : "optional"} ${field.type}; ask for «${field.label}»${field.options.length ? `; allowed values: ${field.options.join(" | ")}` : ""}`,
+        ])
+      );
+      const baseArguments =
+        setting.key === "create_reservation" &&
+        !setting.configuration?.fieldMapping.party_size
+          ? Object.fromEntries(
+              Object.entries(definition.modelArguments).filter(
+                ([key]) => key !== "party_size"
+              )
+            )
+          : definition.modelArguments;
+      const argumentsWithDatasetFields =
+        setting.key === "create_order" || setting.key === "create_reservation"
+          ? {
+              ...baseArguments,
+              customer_values: `required object with exactly these dataset-derived slots: ${JSON.stringify(customerValueShape)}`,
+            }
+          : definition.modelArguments;
       return {
         key: definition.key,
         description: definition.description,
-        arguments: definition.modelArguments,
+        arguments: argumentsWithDatasetFields,
       };
     });
   return actions.length ? JSON.stringify(actions) : "";

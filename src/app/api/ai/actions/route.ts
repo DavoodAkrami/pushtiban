@@ -11,6 +11,7 @@ import {
   isBusinessActionKey,
   listSafeBusinessActionCatalog,
   parseBusinessActionConfigurationUpdate,
+  refreshBusinessActionConfiguration,
   resolveBusinessActionConfiguration,
 } from "@/lib/ai/actions/business-config";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -115,42 +116,47 @@ export const PUT = async (request: NextRequest) => {
       : null;
   if (businessAction && body.configuration !== undefined && !parsedConfiguration) {
     return jsonError(
-      "محل انجام یا فیلدهای این اقدام کامل و معتبر نیست.",
+      "ساختار مجموعهٔ انتخاب‌شده برای این اقدام کامل و معتبر نیست.",
       400
     );
   }
+  const refreshedConfiguration =
+    businessAction && body.enabled === true && !parsedConfiguration
+      ? await refreshBusinessActionConfiguration(user.id, actionKey)
+      : null;
   const currentCapability =
-    businessAction && !parsedConfiguration
+    businessAction && !parsedConfiguration && !refreshedConfiguration
       ? await resolveBusinessActionConfiguration(user.id, actionKey)
       : null;
-  if (businessAction && body.enabled === true && !parsedConfiguration && !currentCapability) {
+  const effectiveConfiguration =
+    parsedConfiguration ?? refreshedConfiguration ?? currentCapability;
+  if (businessAction && body.enabled === true && !effectiveConfiguration) {
     return jsonError(
-      "پیش از فعال‌سازی، مجموعه‌ها و فیلدهای لازم این اقدام را تنظیم کنید.",
+      "پیش از فعال‌سازی، مجموعهٔ مناسب این اقدام را انتخاب کنید.",
       409
     );
   }
 
   const row = {
-      user_id: user.id,
-      action_key: actionKey,
-      is_enabled: body.enabled,
-      require_confirmation: body.requireConfirmation === true,
-      ...(parsedConfiguration
-        ? {
-            collection_id: parsedConfiguration.collectionId,
-            source_id: parsedConfiguration.sourceId,
-            related_collection_id: parsedConfiguration.relatedCollectionId,
-            field_mapping: parsedConfiguration.fieldMapping,
-            configuration: {
-              cancellationValue: parsedConfiguration.cancellationValue,
-              initialStatus: parsedConfiguration.initialStatus,
-              destination: parsedConfiguration.destination,
-              stockTrackingEnabled:
-                parsedConfiguration.stockTrackingEnabled,
-            },
-          }
-        : {}),
-    };
+    user_id: user.id,
+    action_key: actionKey,
+    is_enabled: body.enabled,
+    require_confirmation: body.requireConfirmation === true,
+    ...(effectiveConfiguration
+      ? {
+          collection_id: effectiveConfiguration.collectionId,
+          source_id: effectiveConfiguration.sourceId,
+          related_collection_id: effectiveConfiguration.relatedCollectionId,
+          field_mapping: effectiveConfiguration.fieldMapping,
+          configuration: {
+            cancellationValue: effectiveConfiguration.cancellationValue,
+            initialStatus: effectiveConfiguration.initialStatus,
+            destination: effectiveConfiguration.destination,
+            stockTrackingEnabled: effectiveConfiguration.stockTrackingEnabled,
+          },
+        }
+      : {}),
+  };
   try {
     const admin = createAdminClient();
     const { error } = await admin

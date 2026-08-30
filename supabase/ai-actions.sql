@@ -450,14 +450,17 @@ grant execute on function public.business_data_check_availability_action(
   uuid, text, text, integer
 ) to service_role;
 
+drop function if exists public.business_data_create_reservation_action(
+  uuid, uuid, text, text, integer, text, text
+);
+
 create or replace function public.business_data_create_reservation_action(
   p_user_id uuid,
   p_execution_id uuid,
   p_date text,
   p_time text,
   p_party_size integer,
-  p_customer_name text,
-  p_customer_contact text
+  p_customer_values jsonb
 )
 returns jsonb
 language plpgsql
@@ -471,8 +474,6 @@ declare
   date_key text;
   time_key text;
   party_size_key text;
-  customer_name_key text;
-  customer_contact_key text;
   title_key text;
   reference_key text;
   status_key text;
@@ -493,8 +494,9 @@ declare
   remaining_capacity numeric;
 begin
   if p_party_size < 1 or p_party_size > 100
-     or char_length(btrim(p_customer_name)) not between 1 and 120
-     or char_length(btrim(p_customer_contact)) not between 1 and 160 then
+     or p_customer_values is null
+     or jsonb_typeof(p_customer_values) <> 'object'
+     or octet_length(p_customer_values::text) > 8192 then
     raise exception 'Invalid reservation action input.' using errcode = '22023';
   end if;
 
@@ -546,15 +548,7 @@ begin
     array['date', 'datetime', 'text'], true
   );
   party_size_key := public.business_action_internal_field_key(
-    p_user_id, target_collection_id, mapping, 'party_size', array['number'], true
-  );
-  customer_name_key := public.business_action_internal_field_key(
-    p_user_id, target_collection_id, mapping, 'customer_name',
-    array['text', 'long_text', 'select'], false
-  );
-  customer_contact_key := public.business_action_internal_field_key(
-    p_user_id, target_collection_id, mapping, 'customer_contact',
-    array['text', 'long_text', 'select'], true
+    p_user_id, target_collection_id, mapping, 'party_size', array['number'], false
   );
   status_key := public.business_action_internal_field_key(
     p_user_id, target_collection_id, mapping, 'status',
@@ -654,6 +648,12 @@ begin
     and field_definition.collection_id = target_collection_id
     and field_definition.required
     and field_definition.semantic_role = 'title'
+    and (
+      lower(field_definition.key) in ('title', 'summary', 'reservation_title')
+      or field_definition.label like '%عنوان%'
+      or field_definition.label like '%خلاصه%'
+      or field_definition.label like '%شرح رزرو%'
+    )
   order by field_definition.position, field_definition.key
   limit 1;
   select field_definition.key
@@ -666,6 +666,23 @@ begin
   order by field_definition.position, field_definition.key
   limit 1;
 
+  if exists (
+    select 1
+    from jsonb_object_keys(p_customer_values) customer_field(key)
+    left join public.business_data_fields field_definition
+      on field_definition.user_id = p_user_id
+     and field_definition.collection_id = target_collection_id
+     and field_definition.key = customer_field.key
+    where field_definition.key is null
+       or not field_definition.required
+       or field_definition.semantic_role in ('reference', 'status', 'internal_notes')
+       or customer_field.key in (
+         date_key, time_key, party_size_key, status_key, title_key, reference_key
+       )
+  ) then
+    raise exception 'Invalid reservation customer field.' using errcode = '22023';
+  end if;
+
   if date_key = time_key then
     if not exists (
       select 1
@@ -677,27 +694,23 @@ begin
     ) then
       raise exception 'Reservation date and time require separate fields or one datetime field.' using errcode = '22023';
     end if;
-    record_values := jsonb_build_object(
-      date_key, p_date || 'T' || p_time || ':00',
-      party_size_key, p_party_size,
-      customer_contact_key, btrim(p_customer_contact)
+    record_values := p_customer_values || jsonb_build_object(
+      date_key, p_date || 'T' || p_time || ':00'
     );
   else
-    record_values := jsonb_build_object(
+    record_values := p_customer_values || jsonb_build_object(
       date_key, p_date,
-      time_key, p_time,
-      party_size_key, p_party_size,
-      customer_contact_key, btrim(p_customer_contact)
+      time_key, p_time
     );
   end if;
-  if customer_name_key is not null then
+  if party_size_key is not null then
     record_values := record_values || jsonb_build_object(
-      customer_name_key, btrim(p_customer_name)
+      party_size_key, p_party_size
     );
   end if;
   if title_key is not null and not (record_values ? title_key) then
     record_values := record_values || jsonb_build_object(
-      title_key, left(btrim(p_customer_name) || ' · ' || p_date || ' ' || p_time, 120)
+      title_key, left('Reservation · ' || p_date || ' ' || p_time, 120)
     );
   end if;
   if reference_key is not null then
@@ -724,11 +737,15 @@ end;
 $$;
 
 revoke execute on function public.business_data_create_reservation_action(
-  uuid, uuid, text, text, integer, text, text
+  uuid, uuid, text, text, integer, jsonb
 ) from public, anon, authenticated;
 grant execute on function public.business_data_create_reservation_action(
-  uuid, uuid, text, text, integer, text, text
+  uuid, uuid, text, text, integer, jsonb
 ) to service_role;
+
+drop function if exists public.business_data_create_order_action(
+  uuid, uuid, uuid, text, numeric, integer, text, text
+);
 
 create or replace function public.business_data_create_order_action(
   p_user_id uuid,
@@ -737,8 +754,7 @@ create or replace function public.business_data_create_order_action(
   p_expected_product_reference text,
   p_expected_unit_price numeric,
   p_quantity integer,
-  p_customer_name text,
-  p_customer_contact text
+  p_customer_values jsonb
 )
 returns jsonb
 language plpgsql
@@ -761,8 +777,6 @@ declare
   order_quantity_key text;
   order_unit_price_key text;
   order_total_price_key text;
-  order_customer_name_key text;
-  order_customer_contact_key text;
   order_title_key text;
   order_reference_key text;
   order_status_key text;
@@ -781,8 +795,9 @@ begin
   if p_quantity < 1 or p_quantity > 50
      or p_expected_unit_price < 0
      or char_length(btrim(p_expected_product_reference)) not between 1 and 200
-     or char_length(btrim(p_customer_name)) not between 1 and 120
-     or char_length(btrim(p_customer_contact)) not between 1 and 160 then
+     or p_customer_values is null
+     or jsonb_typeof(p_customer_values) <> 'object'
+     or octet_length(p_customer_values::text) > 8192 then
     raise exception 'Invalid order action input.' using errcode = '22023';
   end if;
 
@@ -847,7 +862,7 @@ begin
   );
   product_reference_key := public.business_action_internal_field_key(
     p_user_id, product_collection_id, mapping, 'product_reference',
-    array['text', 'long_text', 'select'], true
+    array['text', 'long_text', 'select'], false
   );
   product_price_key := public.business_action_internal_field_key(
     p_user_id, product_collection_id, mapping, 'product_price',
@@ -868,27 +883,19 @@ begin
 
   order_product_reference_key := public.business_action_internal_field_key(
     p_user_id, order_collection_id, mapping, 'destination_product_reference',
-    array['text', 'long_text', 'select'], true
+    array['text', 'long_text', 'select'], false
   );
   order_quantity_key := public.business_action_internal_field_key(
     p_user_id, order_collection_id, mapping, 'destination_quantity',
-    array['number'], true
+    array['number'], false
   );
   order_unit_price_key := public.business_action_internal_field_key(
     p_user_id, order_collection_id, mapping, 'destination_unit_price',
-    array['number', 'currency'], true
+    array['number', 'currency'], false
   );
   order_total_price_key := public.business_action_internal_field_key(
     p_user_id, order_collection_id, mapping, 'destination_total_price',
     array['number', 'currency'], false
-  );
-  order_customer_name_key := public.business_action_internal_field_key(
-    p_user_id, order_collection_id, mapping, 'destination_customer_name',
-    array['text', 'long_text', 'select'], false
-  );
-  order_customer_contact_key := public.business_action_internal_field_key(
-    p_user_id, order_collection_id, mapping, 'destination_customer_contact',
-    array['text', 'long_text', 'select'], true
   );
   order_status_key := public.business_action_internal_field_key(
     p_user_id, order_collection_id, mapping, 'destination_status',
@@ -909,8 +916,12 @@ begin
 
   product_name := nullif(btrim(product_values ->> product_name_key), '');
   product_reference := coalesce(
-    nullif(btrim(product_values ->> product_reference_key), ''),
-    nullif(btrim(product_external_id), '')
+    case
+      when product_reference_key is null then null
+      else nullif(btrim(product_values ->> product_reference_key), '')
+    end,
+    nullif(btrim(product_external_id), ''),
+    p_product_record_id::text
   );
   if product_name is null
      or product_reference is distinct from btrim(p_expected_product_reference)
@@ -970,6 +981,12 @@ begin
     and field_definition.collection_id = order_collection_id
     and field_definition.required
     and field_definition.semantic_role = 'title'
+    and (
+      lower(field_definition.key) in ('title', 'summary', 'order_title')
+      or field_definition.label like '%عنوان%'
+      or field_definition.label like '%خلاصه%'
+      or field_definition.label like '%شرح سفارش%'
+    )
   order by field_definition.position, field_definition.key
   limit 1;
   select field_definition.key
@@ -982,20 +999,44 @@ begin
   order by field_definition.position, field_definition.key
   limit 1;
 
-  order_values := jsonb_build_object(
-    order_product_reference_key, product_reference,
-    order_quantity_key, p_quantity,
-    order_unit_price_key, current_price,
-    order_customer_contact_key, btrim(p_customer_contact)
-  );
-  if order_customer_name_key is not null then
+  if exists (
+    select 1
+    from jsonb_object_keys(p_customer_values) customer_field(key)
+    left join public.business_data_fields field_definition
+      on field_definition.user_id = p_user_id
+     and field_definition.collection_id = order_collection_id
+     and field_definition.key = customer_field.key
+    where field_definition.key is null
+       or not field_definition.required
+       or field_definition.semantic_role in ('reference', 'status', 'internal_notes')
+       or customer_field.key in (
+         order_product_reference_key, order_quantity_key, order_unit_price_key,
+         order_total_price_key, order_status_key, order_title_key,
+         order_reference_key
+       )
+  ) then
+    raise exception 'Invalid order customer field.' using errcode = '22023';
+  end if;
+
+  order_values := p_customer_values;
+  if order_product_reference_key is not null then
     order_values := order_values || jsonb_build_object(
-      order_customer_name_key, btrim(p_customer_name)
+      order_product_reference_key, product_reference
+    );
+  end if;
+  if order_quantity_key is not null then
+    order_values := order_values || jsonb_build_object(
+      order_quantity_key, p_quantity
+    );
+  end if;
+  if order_unit_price_key is not null then
+    order_values := order_values || jsonb_build_object(
+      order_unit_price_key, current_price
     );
   end if;
   if order_title_key is not null and not (order_values ? order_title_key) then
     order_values := order_values || jsonb_build_object(
-      order_title_key, left(product_name || ' · ' || btrim(p_customer_name), 120)
+      order_title_key, left(product_name, 120)
     );
   end if;
   if order_reference_key is not null
@@ -1029,10 +1070,10 @@ end;
 $$;
 
 revoke execute on function public.business_data_create_order_action(
-  uuid, uuid, uuid, text, numeric, integer, text, text
+  uuid, uuid, uuid, text, numeric, integer, jsonb
 ) from public, anon, authenticated;
 grant execute on function public.business_data_create_order_action(
-  uuid, uuid, uuid, text, numeric, integer, text, text
+  uuid, uuid, uuid, text, numeric, integer, jsonb
 ) to service_role;
 
 create or replace function public.business_data_cancel_action(

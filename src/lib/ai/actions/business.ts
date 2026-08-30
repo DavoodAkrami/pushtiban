@@ -17,6 +17,7 @@ import {
 } from "./core";
 import {
   resolveBusinessActionConfiguration,
+  type BusinessActionCustomerField,
   type BusinessActionKey,
   type ResolvedBusinessActionConfiguration,
 } from "./business-config";
@@ -33,9 +34,16 @@ type AvailabilityResult = {
   remainingCapacity: number | null;
 };
 
+type ActionFieldValue = string | number | boolean;
+
 type CreateReservationInput = AvailabilityInput & {
-  customer_name: string;
-  customer_contact: string;
+  customer_values: Record<string, ActionFieldValue>;
+};
+
+type PreparedReservationInput = AvailabilityInput & {
+  partySizeRelevant: boolean;
+  datasetValues: Record<string, ActionFieldValue>;
+  customerSummary: string[];
 };
 
 type CreateReservationResult = {
@@ -46,12 +54,13 @@ type CreateReservationResult = {
 type CreateOrderInput = {
   product_query: string;
   quantity: number;
-  customer_name: string;
-  customer_contact: string;
+  customer_values: Record<string, ActionFieldValue>;
   variant?: string;
 };
 
-type PreparedOrderInput = CreateOrderInput & {
+type PreparedOrderInput = Omit<CreateOrderInput, "customer_values"> & {
+  datasetValues: Record<string, ActionFieldValue>;
+  customerSummary: string[];
   productRecordId: string;
   productReference: string;
   productName: string;
@@ -123,6 +132,38 @@ const boundedText = (value: unknown, max = 160) =>
     ? value.trim()
     : null;
 
+const parseValueObject = (
+  value: unknown,
+  keyPattern: RegExp
+): Record<string, ActionFieldValue> | null => {
+  if (!isPlainObject(value) || Object.keys(value).length > 16) return null;
+  const result: Record<string, ActionFieldValue> = {};
+  for (const [key, candidate] of Object.entries(value)) {
+    if (!keyPattern.test(key)) return null;
+    if (typeof candidate === "string") {
+      const text = boundedText(candidate, 500);
+      if (!text) return null;
+      result[key] = text;
+      continue;
+    }
+    if (
+      (typeof candidate === "number" && Number.isFinite(candidate)) ||
+      typeof candidate === "boolean"
+    ) {
+      result[key] = candidate;
+      continue;
+    }
+    return null;
+  }
+  return result;
+};
+
+const parseSummary = (value: unknown) => {
+  if (!Array.isArray(value) || value.length > 16) return null;
+  const items = value.map((item) => boundedText(item, 180));
+  return items.some((item) => item === null) ? null : (items as string[]);
+};
+
 const emptyObjectSchema: ActionSchema<CancelInput> = {
   parse: (value) =>
     isPlainObject(value) && Object.keys(value).length === 0
@@ -163,27 +204,23 @@ const reservationInputSchema: ActionSchema<CreateReservationInput> = {
       !hasExactKeys(value, [
         "date",
         "time",
-        "party_size",
-        "customer_name",
-        "customer_contact",
-      ])
+        "customer_values",
+      ], ["party_size"])
     ) {
       return { success: false };
     }
     const availability = availabilityInputSchema.parse({
       date: value.date,
       time: value.time,
-      party_size: value.party_size,
+      party_size: value.party_size ?? 1,
     });
-    const customerName = boundedText(value.customer_name, 120);
-    const customerContact = boundedText(value.customer_contact, 160);
-    return availability.success && customerName && customerContact
+    const customerValues = parseValueObject(value.customer_values, /^field_[1-9]\d?$/);
+    return availability.success && customerValues
       ? {
           success: true,
           data: {
             ...availability.data,
-            customer_name: customerName,
-            customer_contact: customerContact,
+            customer_values: customerValues,
           },
         }
       : { success: false };
@@ -196,7 +233,7 @@ const orderInputSchema: ActionSchema<CreateOrderInput> = {
       !isPlainObject(value) ||
       !hasExactKeys(
         value,
-        ["product_query", "quantity", "customer_name", "customer_contact"],
+        ["product_query", "quantity", "customer_values"],
         ["variant"]
       ) ||
       !Number.isInteger(value.quantity) ||
@@ -206,11 +243,10 @@ const orderInputSchema: ActionSchema<CreateOrderInput> = {
       return { success: false };
     }
     const productQuery = boundedText(value.product_query, 160);
-    const customerName = boundedText(value.customer_name, 120);
-    const customerContact = boundedText(value.customer_contact, 160);
+    const customerValues = parseValueObject(value.customer_values, /^field_[1-9]\d?$/);
     const variant =
       value.variant === undefined ? undefined : boundedText(value.variant, 120);
-    if (!productQuery || !customerName || !customerContact || variant === null) {
+    if (!productQuery || !customerValues || variant === null) {
       return { success: false };
     }
     return {
@@ -218,8 +254,7 @@ const orderInputSchema: ActionSchema<CreateOrderInput> = {
       data: {
         product_query: productQuery,
         quantity: Number(value.quantity),
-        customer_name: customerName,
-        customer_contact: customerContact,
+        customer_values: customerValues,
         ...(variant ? { variant } : {}),
       },
     };
@@ -235,8 +270,8 @@ const preparedOrderSchema: ActionSchema<PreparedOrderInput> = {
         [
           "product_query",
           "quantity",
-          "customer_name",
-          "customer_contact",
+          "datasetValues",
+          "customerSummary",
           "productRecordId",
           "productReference",
           "productName",
@@ -249,13 +284,25 @@ const preparedOrderSchema: ActionSchema<PreparedOrderInput> = {
     ) {
       return { success: false };
     }
-    const base = orderInputSchema.parse(value);
+    const base = orderInputSchema.parse({
+      product_query: value.product_query,
+      quantity: value.quantity,
+      customer_values: {},
+      ...(value.variant === undefined ? {} : { variant: value.variant }),
+    });
+    const datasetValues = parseValueObject(
+      value.datasetValues,
+      /^[a-z][a-z0-9_]{0,63}$/
+    );
+    const customerSummary = parseSummary(value.customerSummary);
     const productReference = boundedText(value.productReference, 200);
     const productName = boundedText(value.productName, 200);
     const currency =
       value.currency === null ? null : boundedText(value.currency, 40);
     if (
       !base.success ||
+      !datasetValues ||
+      !customerSummary ||
       typeof value.productRecordId !== "string" ||
       !UUID_RE.test(value.productRecordId) ||
       !productReference ||
@@ -273,7 +320,11 @@ const preparedOrderSchema: ActionSchema<PreparedOrderInput> = {
     return {
       success: true,
       data: {
-        ...base.data,
+        product_query: base.data.product_query,
+        quantity: base.data.quantity,
+        ...(base.data.variant ? { variant: base.data.variant } : {}),
+        datasetValues,
+        customerSummary: customerSummary as string[],
         productRecordId: value.productRecordId,
         productReference,
         productName,
@@ -282,6 +333,43 @@ const preparedOrderSchema: ActionSchema<PreparedOrderInput> = {
         currency,
       },
     };
+  },
+};
+
+const preparedReservationSchema: ActionSchema<PreparedReservationInput> = {
+  parse: (value) => {
+    if (
+      !isPlainObject(value) ||
+      !hasExactKeys(value, [
+        "date",
+        "time",
+        "party_size",
+        "partySizeRelevant",
+        "datasetValues",
+        "customerSummary",
+      ])
+    ) {
+      return { success: false };
+    }
+    const availability = availabilityInputSchema.parse(value);
+    const datasetValues = parseValueObject(
+      value.datasetValues,
+      /^[a-z][a-z0-9_]{0,63}$/
+    );
+    const customerSummary = parseSummary(value.customerSummary);
+    return availability.success &&
+      typeof value.partySizeRelevant === "boolean" &&
+      datasetValues && customerSummary
+      ? {
+          success: true,
+          data: {
+            ...availability.data,
+            partySizeRelevant: value.partySizeRelevant,
+            datasetValues,
+            customerSummary: customerSummary as string[],
+          },
+        }
+      : { success: false };
   },
 };
 
@@ -500,6 +588,16 @@ const remoteColumn = (
   );
 };
 
+const remoteColumnForField = (
+  configuration: ResolvedBusinessActionConfiguration,
+  fieldKey: string
+) =>
+  configuration.source
+    ? Object.entries(configuration.source.fieldMapping).find(
+        ([, mappedField]) => mappedField === fieldKey
+      )?.[0] ?? null
+    : null;
+
 const credentialsFor = async (
   context: ActionExecutionContext,
   configuration: ResolvedBusinessActionConfiguration
@@ -513,13 +611,65 @@ const credentialsFor = async (
       })
     : Promise.reject(new Error("External action source unavailable."));
 
+const validatedCustomerFieldValue = (
+  field: BusinessActionCustomerField,
+  value: ActionFieldValue | undefined
+): ActionFieldValue | null => {
+  if (value === undefined) return null;
+  if (field.type === "number" || field.type === "currency") {
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  }
+  if (field.type === "boolean") {
+    return typeof value === "boolean" ? value : null;
+  }
+  if (typeof value !== "string") return null;
+  const text = boundedText(value, field.type === "long_text" ? 500 : 200);
+  if (!text) return null;
+  if (field.type === "date" && !validDate(text)) return null;
+  if (
+    field.type === "datetime" &&
+    (!Number.isFinite(Date.parse(text)) || text.length > 40)
+  ) {
+    return null;
+  }
+  if (field.type === "select" && field.options.length > 0 && !field.options.includes(text)) {
+    return null;
+  }
+  return text;
+};
+
+const validateCustomerValues = (
+  configuration: ResolvedBusinessActionConfiguration,
+  values: Record<string, ActionFieldValue>
+) => {
+  const fields = configuration.customerFields;
+  const allowedSlots = new Set(fields.map((field) => field.slot));
+  if (
+    Object.keys(values).some((slot) => !allowedSlots.has(slot)) ||
+    fields.some((field) => field.required && !Object.hasOwn(values, field.slot))
+  ) {
+    return null;
+  }
+  const datasetValues: Record<string, ActionFieldValue> = {};
+  const customerSummary: string[] = [];
+  for (const field of fields) {
+    const value = validatedCustomerFieldValue(field, values[field.slot]);
+    if (value === null) return null;
+    datasetValues[field.key] = value;
+    customerSummary.push(
+      `${field.label}: ${typeof value === "boolean" ? (value ? "بله" : "خیر") : String(value)}`
+    );
+  }
+  return { datasetValues, customerSummary };
+};
+
 const internalRpc = async (
   name:
     | "business_data_check_availability_action"
     | "business_data_create_reservation_action"
     | "business_data_create_order_action"
     | "business_data_cancel_action",
-  parameters: Record<string, string | number>
+  parameters: Record<string, unknown>
 ) => {
   const { data, error } = await createAdminClient().rpc(name, parameters);
   if (error || !isPlainObject(data)) {
@@ -622,6 +772,17 @@ const prepareReservation = async (
   context: ActionExecutionContext,
   input: CreateReservationInput
 ) => {
+  const configuration = await resolveConfiguration(context, "create_reservation");
+  if (!configuration) {
+    return { success: false as const, text: "ثبت رزرو برای این کسب‌وکار آماده نیست." };
+  }
+  const customerData = validateCustomerValues(configuration, input.customer_values);
+  if (!customerData) {
+    return {
+      success: false as const,
+      text: "اطلاعات لازم برای ثبت رزرو کامل یا معتبر نیست.",
+    };
+  }
   const availabilityConfiguration = await resolveBusinessActionConfiguration(
     context.userId,
     "check_availability"
@@ -645,7 +806,16 @@ const prepareReservation = async (
       };
     }
   }
-  return { success: true as const, data: input };
+  return {
+    success: true as const,
+    data: {
+      date: input.date,
+      time: input.time,
+      party_size: input.party_size,
+      partySizeRelevant: Boolean(configuration.fieldMapping.party_size),
+      ...customerData,
+    },
+  };
 };
 
 const existingActionWrite = async (
@@ -678,7 +848,7 @@ const existingActionWrite = async (
 
 const createReservationWrite = async (
   context: ActionExecutionContext & { executionId: string },
-  input: CreateReservationInput
+  input: PreparedReservationInput
 ): Promise<CreateReservationResult> => {
   const configuration = await resolveConfiguration(context, "create_reservation");
   if (!configuration) throw new Error("Reservation destination unavailable.");
@@ -691,8 +861,7 @@ const createReservationWrite = async (
         p_date: input.date,
         p_time: input.time,
         p_party_size: input.party_size,
-        p_customer_name: input.customer_name,
-        p_customer_contact: input.customer_contact,
+        p_customer_values: input.datasetValues,
       }
     );
     if (result.status === "unavailable") {
@@ -726,21 +895,46 @@ const createReservationWrite = async (
     }
   }
   const concepts: Array<[string, string | number]> = [
-    ["date", input.date],
-    ["time", input.time],
     ["party_size", input.party_size],
-    ["customer_name", input.customer_name],
-    ["customer_contact", input.customer_contact],
     ["execution_id", context.executionId],
   ];
   if (remoteColumn(configuration, "status") && configuration.initialStatus) {
     concepts.push(["status", configuration.initialStatus]);
   }
   const values: Record<string, string | number | boolean | null> = {};
+  const dateColumn = remoteColumn(configuration, "date");
+  const timeColumn = remoteColumn(configuration, "time");
+  if (!dateColumn || !timeColumn) throw new Error("Reservation mapping unavailable.");
+  if (dateColumn === timeColumn) {
+    values[dateColumn] = `${input.date}T${input.time}:00`;
+  } else {
+    values[dateColumn] = input.date;
+    values[timeColumn] = input.time;
+  }
+  for (const [fieldKey, value] of Object.entries(input.datasetValues)) {
+    const column = remoteColumnForField(configuration, fieldKey);
+    if (!column) throw new Error("Reservation customer field unavailable.");
+    values[column] = value;
+  }
   for (const [concept, value] of concepts) {
     const column = remoteColumn(configuration, concept);
-    if (!column) throw new Error("Reservation mapping unavailable.");
+    if (!column) {
+      if (concept === "execution_id") {
+        throw new Error("Reservation mapping unavailable.");
+      }
+      continue;
+    }
     values[column] = value;
+  }
+  const customerFieldKeys = new Set(
+    configuration.customerFields.map((field) => field.key)
+  );
+  for (const field of configuration.primary.fields) {
+    if (field.role !== "title" || customerFieldKeys.has(field.key)) continue;
+    const column = remoteColumnForField(configuration, field.key);
+    if (column && values[column] === undefined) {
+      values[column] = `Reservation · ${input.date} ${input.time}`;
+    }
   }
   const referenceField = source.externalIdField;
   const referenceColumn = referenceField
@@ -764,7 +958,7 @@ const escapeLike = (value: string) => value.replace(/[\\%_]/g, "\\$&");
 
 const resolveProduct = async (
   context: ActionExecutionContext,
-  input: CreateOrderInput,
+  input: Pick<CreateOrderInput, "product_query" | "quantity" | "variant">,
   configuration: ResolvedBusinessActionConfiguration
 ) => {
   if (!configuration.related) return null;
@@ -788,8 +982,9 @@ const resolveProduct = async (
     const values = isPlainObject(row.values) ? row.values : {};
     const name = boundedText(values[nameField], 200);
     const reference =
-      boundedText(values[referenceField], 200) ??
-      boundedText(row.external_id, 200);
+      (referenceField ? boundedText(values[referenceField], 200) : null) ??
+      boundedText(row.external_id, 200) ??
+      row.id;
     const price = values[priceField];
     const currency = currencyField
       ? boundedText(values[currencyField], 40)
@@ -853,6 +1048,13 @@ const prepareOrder = async (
   if (!configuration) {
     return { success: false as const, text: "ثبت سفارش برای این کسب‌وکار آماده نیست." };
   }
+  const customerData = validateCustomerValues(configuration, input.customer_values);
+  if (!customerData) {
+    return {
+      success: false as const,
+      text: "اطلاعات لازم برای ثبت سفارش کامل یا معتبر نیست.",
+    };
+  }
   const product = await resolveProduct(context, input, configuration);
   if (!product) {
     return {
@@ -869,7 +1071,10 @@ const prepareOrder = async (
   return {
     success: true as const,
     data: {
-      ...input,
+      product_query: input.product_query,
+      quantity: input.quantity,
+      ...(input.variant ? { variant: input.variant } : {}),
+      ...customerData,
       productRecordId: product.id,
       productReference: product.reference,
       productName: product.name,
@@ -894,8 +1099,7 @@ const createOrderWrite = async (
       p_expected_product_reference: input.productReference,
       p_expected_unit_price: input.unitPrice,
       p_quantity: input.quantity,
-      p_customer_name: input.customer_name,
-      p_customer_contact: input.customer_contact,
+      p_customer_values: input.datasetValues,
     });
     if (result.status === "price_changed") {
       const currentPrice =
@@ -962,8 +1166,6 @@ const createOrderWrite = async (
     ["destination_product_reference", input.productReference],
     ["destination_quantity", input.quantity],
     ["destination_unit_price", input.unitPrice],
-    ["destination_customer_name", input.customer_name],
-    ["destination_customer_contact", input.customer_contact],
     ["execution_id", context.executionId],
   ];
   if (remoteColumn(configuration, "destination_total_price")) {
@@ -976,10 +1178,26 @@ const createOrderWrite = async (
     concepts.push(["destination_status", configuration.initialStatus]);
   }
   const values: Record<string, string | number | boolean | null> = {};
+  for (const [fieldKey, value] of Object.entries(input.datasetValues)) {
+    const column = remoteColumnForField(configuration, fieldKey);
+    if (!column) throw new Error("Order customer field unavailable.");
+    values[column] = value;
+  }
   for (const [concept, value] of concepts) {
     const column = remoteColumn(configuration, concept);
-    if (!column) throw new Error("Order mapping unavailable.");
+    if (!column) {
+      if (concept === "execution_id") throw new Error("Order mapping unavailable.");
+      continue;
+    }
     values[column] = value;
+  }
+  const customerFieldKeys = new Set(
+    configuration.customerFields.map((field) => field.key)
+  );
+  for (const field of configuration.primary.fields) {
+    if (field.role !== "title" || customerFieldKeys.has(field.key)) continue;
+    const column = remoteColumnForField(configuration, field.key);
+    if (column && values[column] === undefined) values[column] = input.productName;
   }
   const referenceField = source.externalIdField;
   const referenceColumn = referenceField
@@ -1203,27 +1421,33 @@ const checkAvailability = defineAction<AvailabilityInput, AvailabilityResult>({
 
 const createReservation = defineAction<
   CreateReservationInput,
-  CreateReservationResult
+  CreateReservationResult,
+  PreparedReservationInput
 >({
   key: "create_reservation",
   name: "Create reservation",
   description:
-    "Create one reservation only when the customer directly asks. Required arguments: date YYYY-MM-DD, time HH:MM, party_size, customer_name, and customer_contact. If any value is missing, keep action null and ask only for the missing information.",
+    "Create one reservation only when the customer directly asks. Collect date and time, party_size when listed, and every dataset-derived customer_values slot. If any value is missing, keep action null and ask only for the missing information.",
   modelArguments: {
     date: "required YYYY-MM-DD",
     time: "required HH:MM",
     party_size: "required integer 1..100",
-    customer_name: "required string",
-    customer_contact: "required string",
   },
   inputSchema: reservationInputSchema,
+  preparedInputSchema: preparedReservationSchema,
   resultSchema: reservationResultSchema,
   verification: "none",
   confirmation: {
     required: true,
     prompt: (value) => {
-      const input = value as CreateReservationInput;
-      return `رزرو برای ${input.party_size.toLocaleString("fa-IR")} نفر در تاریخ ${input.date} ساعت ${input.time} به نام ${input.customer_name} ثبت شود؟`;
+      const input = value as PreparedReservationInput;
+      const details = input.customerSummary.length
+        ? ` (${input.customerSummary.join("، ")})`
+        : "";
+      const party = input.partySizeRelevant
+        ? ` برای ${input.party_size.toLocaleString("fa-IR")} نفر`
+        : "";
+      return `رزرو${party} در تاریخ ${input.date} ساعت ${input.time}${details} ثبت شود؟`;
     },
   },
   settings: {
@@ -1275,12 +1499,10 @@ const createOrder = defineAction<CreateOrderInput, CreateOrderResult, PreparedOr
   key: "create_order",
   name: "Create order",
   description:
-    "Create an order only after server-side product resolution. Required arguments: product_query, quantity, customer_name, customer_contact; variant is optional. Never include product ID, price, stock, table, columns, or URLs.",
+    "Create an order only after server-side product resolution. Required arguments are product_query, quantity, and every dataset-derived customer_values slot; variant is optional. Never include product ID, price, stock, table, columns, or URLs.",
   modelArguments: {
     product_query: "required customer product description",
     quantity: "required integer 1..50",
-    customer_name: "required string",
-    customer_contact: "required string",
     variant: "optional size/color/variant string",
   },
   inputSchema: orderInputSchema,
@@ -1291,7 +1513,10 @@ const createOrder = defineAction<CreateOrderInput, CreateOrderResult, PreparedOr
     required: true,
     prompt: (value) => {
       const input = value as PreparedOrderInput;
-      return `سفارش ${input.quantity.toLocaleString("fa-IR")} عدد ${input.productName} با مبلغ نهایی ${formatMoney(input.totalPrice, input.currency)} ثبت شود؟`;
+      const details = input.customerSummary.length
+        ? ` (${input.customerSummary.join("، ")})`
+        : "";
+      return `سفارش ${input.quantity.toLocaleString("fa-IR")} عدد ${input.productName} با مبلغ نهایی ${formatMoney(input.totalPrice, input.currency)}${details} ثبت شود؟`;
     },
   },
   settings: {

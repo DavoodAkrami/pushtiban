@@ -35,6 +35,7 @@ export type ActionExecutionContext = {
   conversationId: string;
   deliveryId: string;
   customerMessage: string;
+  customerIntentContext?: string;
   customerUsername?: string | null;
   customerDisplayName?: string | null;
 };
@@ -289,6 +290,8 @@ const validContext = (context: ActionExecutionContext) =>
   context.deliveryId.length <= ACTION_LIMITS.contextChars &&
   context.customerMessage.trim().length > 0 &&
   context.customerMessage.length <= ACTION_LIMITS.messageChars &&
+  (!context.customerIntentContext ||
+    context.customerIntentContext.length <= ACTION_LIMITS.messageChars) &&
   (!context.customerUsername ||
     context.customerUsername.length <= ACTION_LIMITS.contextChars) &&
   (!context.customerDisplayName ||
@@ -547,7 +550,11 @@ export const createActionEngine = ({
     if (!parsedRequest) return safeRejected();
     const definition = definitions.get(parsedRequest.key);
     if (!definition) return safeRejected(parsedRequest.key);
-    if (!definition.intentGuard(context.customerMessage)) {
+    if (
+      !definition.intentGuard(
+        context.customerIntentContext ?? context.customerMessage
+      )
+    ) {
       return safeRejected(definition.key);
     }
     const parsedInput = definition.inputSchema.parse(parsedRequest.arguments);

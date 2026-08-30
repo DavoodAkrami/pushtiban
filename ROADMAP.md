@@ -128,6 +128,9 @@ How to use:
       reservation/cancellation RPCs, and expose specific Action prerequisites
 - [x] Make missing dataset prerequisites visible directly on each AI Action,
       with a separate creation link for every required dataset
+- [x] Make AI Action setup dataset-only: infer field mappings and operational
+      defaults on the server, then ask customers for required dataset fields
+      automatically when creating orders or reservations
 - [x] Improve the Business Data creation modal: choose the data kind before
       its source and edit the initial field structure before creating a
       collection

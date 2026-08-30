@@ -373,6 +373,23 @@ export const generateAssistantReply = async (
   const previousUserMessage = [...history]
     .reverse()
     .find((turn) => turn.role === "user")?.text;
+  const actionConversation = history.length
+    ? JSON.stringify(
+        history.slice(-4).map((turn) => ({
+          role: turn.role,
+          text: turn.text.slice(0, 240),
+        }))
+      ).slice(0, 1_200)
+    : undefined;
+  const customerIntentContext = [
+    ...history
+      .filter((turn) => turn.role === "user")
+      .slice(-3)
+      .map((turn) => turn.text),
+    question,
+  ]
+    .join("\n")
+    .slice(-2_000);
 
   // When the owner has human handoff switched off, the escalation tool can
   // never lead anywhere — the webhook replies "I don't know" either way. Not
@@ -407,6 +424,7 @@ export const generateAssistantReply = async (
           question: safeQuestion,
           userId,
           previousUserMessage,
+          actionConversation,
           privateAccess: options.privateAccess,
           verifiedPrivateCollectionKey: options.verifiedPrivateCollectionKey,
           actionCapabilities: actionCapabilities || undefined,
@@ -443,6 +461,7 @@ export const generateAssistantReply = async (
         ...options.actionContext,
         userId,
         customerMessage: question,
+        customerIntentContext,
       },
     });
     if (action.handled) {
@@ -463,7 +482,7 @@ export const generateAssistantReply = async (
 
   const relevantActionFollowUp = describeRelevantActionFollowUp(
     actionCapabilities,
-    safeQuestion
+    customerIntentContext
   );
   if (relevantActionFollowUp) {
     systemPrompt = [
