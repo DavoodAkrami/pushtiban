@@ -1040,7 +1040,10 @@ begin
     );
   end if;
   if order_reference_key is not null
-     and order_reference_key <> order_product_reference_key then
+     and (
+       order_product_reference_key is null
+       or order_reference_key <> order_product_reference_key
+     ) then
     order_values := order_values || jsonb_build_object(
       order_reference_key, order_reference
     );

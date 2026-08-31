@@ -108,6 +108,10 @@ assert.match(orderRpc, /semantic_role = 'title'/);
 assert.match(orderRpc, /semantic_role = 'reference'/);
 assert.doesNotMatch(orderRpc, /'execution_id'/);
 assert.match(orderRpc, /record\.external_id = order_reference/);
+assert.match(
+  orderRpc,
+  /order_product_reference_key is null[\s\S]*order_reference_key <> order_product_reference_key/
+);
 assert.match(businessDataSql, /business_data_records_external_id_unique/);
 assert.match(orderRpc, /jsonb_typeof\([\s\S]*stockTrackingEnabled/);
 assert.match(orderRpc, /'status', 'created'/);
