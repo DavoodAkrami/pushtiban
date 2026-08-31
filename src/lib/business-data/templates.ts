@@ -218,6 +218,9 @@ export const BUSINESS_DATA_TEMPLATES: readonly BusinessDataTemplate[] = [
       { key: "total", label: "مبلغ کل", type: "currency", role: "price", aiExposure: "answer", validation: { min: 0, decimalPlaces: 2 } },
       { key: "placed_at", label: "زمان ثبت", type: "datetime", role: "start_at" },
       privateCustomerField(),
+      { key: "customer_name", label: "نام گیرنده", required: true, searchable: false, aiExposure: "hidden" },
+      { key: "phone", label: "شماره تماس", role: "phone", required: true, searchable: false, filterable: true, aiExposure: "filter_only" },
+      { key: "address", label: "نشانی تحویل", type: "long_text", role: "location", required: true, searchable: false, aiExposure: "hidden" },
       { key: "internal_notes", label: "یادداشت داخلی", type: "long_text", role: "internal_notes", searchable: false, aiExposure: "hidden" },
     ],
   }),
@@ -234,6 +237,8 @@ export const BUSINESS_DATA_TEMPLATES: readonly BusinessDataTemplate[] = [
       { key: "starts_at", label: "زمان رزرو", type: "datetime", role: "start_at", filterable: true },
       { key: "location", label: "محل", role: "location" },
       privateCustomerField(),
+      { key: "customer_name", label: "نام رزروکننده", required: true, searchable: false, aiExposure: "hidden" },
+      { key: "phone", label: "شماره تماس", role: "phone", required: true, searchable: false, filterable: true, aiExposure: "filter_only" },
     ],
   }),
   template({

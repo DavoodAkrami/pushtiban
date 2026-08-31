@@ -386,6 +386,11 @@ const isSystemGeneratedCollectionField = (
   (field.role === "reference" ||
     field.role === "status" ||
     field.role === "internal_notes" ||
+    // This is the channel's stable customer identity, never a value the model
+    // should guess or ask the customer to know. The action preparer supplies
+    // it from the authenticated webhook context.
+    field.role === "customer_identifier" ||
+    field.role === "channel_identifier" ||
     isGeneratedTitleField(field));
 
 const inferSideFieldMapping = ({

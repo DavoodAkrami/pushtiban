@@ -207,6 +207,8 @@ export type ActionHandlingResult = {
   handled: boolean;
   text: string | null;
   actionKey?: string;
+  /** Present only while a confirmation is waiting for this exact action. */
+  executionId?: string;
   status?: ActionStatus | "rejected";
 };
 
@@ -469,6 +471,7 @@ export const createActionEngine = ({
           ? confirmationPrompt(definition, existing.arguments)
           : TEXT.inProgress,
         actionKey: definition.key,
+        executionId: existing.id,
         status: existing.status,
       };
     }
@@ -636,6 +639,7 @@ export const createActionEngine = ({
         handled: true,
         text: confirmationPrompt(definition, preparedInput.data),
         actionKey: definition.key,
+        executionId: claim.execution.id,
         status: "pending_confirmation",
       };
     }
@@ -650,9 +654,11 @@ export const createActionEngine = ({
 
   const confirmPending = async ({
     context,
+    expectedExecutionId,
     message,
   }: {
     context: ActionExecutionContext;
+    expectedExecutionId?: string;
     message: string;
   }): Promise<ActionHandlingResult> => {
     const choice = confirmationChoice(message);
@@ -661,6 +667,11 @@ export const createActionEngine = ({
 
     const pending = await store.findPending(actionScopeFor(context));
     if (!pending) return { handled: false, text: null };
+    // Inline buttons carry the action ID they were rendered for. Do not let a
+    // delayed button approve a newer request in the same Telegram chat.
+    if (expectedExecutionId && pending.id !== expectedExecutionId) {
+      return { handled: false, text: null };
+    }
     const definition = definitions.get(pending.actionKey);
     if (!definition || !pending.requiresConfirmation) {
       await store.markFailed(pending.id, "definition_unavailable");

@@ -161,6 +161,9 @@ assert.match(business, /readSupabaseActionRows/);
 assert.match(business, /new ActionPublicError\(/);
 assert.match(business, /قیمت محصول تغییر کرده/);
 assert.match(business, /validateCustomerValues/);
+assert.match(business, /serverGeneratedCustomerValues/);
+assert.match(business, /customerValuesAreGrounded/);
+assert.match(business, /customerValuesPrompt/);
 assert.match(business, /p_customer_values: input\.datasetValues/);
 
 assert.match(route, /destination: effectiveConfiguration\.destination/);
@@ -177,6 +180,7 @@ assert.match(configuration, /datasetRequirement\("محصولات"\)/);
 assert.match(configuration, /datasetRequirement\("سفارش‌ها"\)/);
 assert.match(configuration, /datasetRequirement\("رزروها"\)/);
 assert.match(configuration, /datasetRequirements/);
+assert.match(configuration, /field\.role === "customer_identifier"/);
 assert.match(configuration, /missing_datasets/);
 assert.match(configuration, /برای فعال‌سازی این اقدام، ابتدا مجموعه‌های دادهٔ زیر را ایجاد کنید/);
 assert.match(configuration, /تنظیم تأیید هویت/);

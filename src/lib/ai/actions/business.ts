@@ -691,6 +691,74 @@ const validateCustomerValues = (
   return { datasetValues, customerSummary };
 };
 
+const serverGeneratedCustomerValues = (
+  context: ActionExecutionContext,
+  configuration: ResolvedBusinessActionConfiguration
+) =>
+  Object.fromEntries(
+    configuration.primary.fields
+      .filter(
+        (field) =>
+          !Object.values(configuration.fieldMapping).includes(field.key) &&
+          (field.role === "customer_identifier" ||
+            field.role === "channel_identifier")
+      )
+      .map((field) => [field.key, context.customerExternalId])
+  ) as Record<string, ActionFieldValue>;
+
+const normalizedCustomerText = (value: string) =>
+  value
+    .toLocaleLowerCase("fa-IR")
+    .replace(/[ي]/g, "ی")
+    .replace(/[ك]/g, "ک")
+    .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)))
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+/**
+ * The intent model may decide which slots are complete, but it must never
+ * invent a customer's name, address, phone number, or other supplied detail.
+ * Customer strings therefore need to occur in the customer's own recent
+ * messages before an order or reservation can reach confirmation.
+ */
+const customerValuesAreGrounded = (
+  context: ActionExecutionContext,
+  values: Record<string, ActionFieldValue>
+) => {
+  const conversation = normalizedCustomerText(
+    context.customerIntentContext ?? context.customerMessage
+  );
+  return Object.values(values).every((value) => {
+    if (typeof value !== "string") return true;
+    const candidate = normalizedCustomerText(value);
+    return candidate.length >= 2 && conversation.includes(candidate);
+  });
+};
+
+const customerValuesPrompt = (
+  context: ActionExecutionContext,
+  configuration: ResolvedBusinessActionConfiguration,
+  values: Record<string, ActionFieldValue>,
+  operation: "سفارش" | "رزرو"
+) => {
+  const conversation = normalizedCustomerText(
+    context.customerIntentContext ?? context.customerMessage
+  );
+  const needed = configuration.customerFields
+    .filter((field) => {
+      const value = values[field.slot];
+      if (field.required && value === undefined) return true;
+      if (typeof value !== "string") return false;
+      const candidate = normalizedCustomerText(value);
+      return candidate.length < 2 || !conversation.includes(candidate);
+    })
+    .map((field) => field.label);
+  return needed.length
+    ? `برای ثبت ${operation}، لطفاً ${needed.join(" و ")} را بفرستید.`
+    : null;
+};
+
 const internalRpc = async (
   name:
     | "business_data_check_availability_action"
@@ -815,8 +883,9 @@ const prepareReservation = async (
     };
   }
   const customerData = validateCustomerValues(configuration, input.customer_values);
-  if (!customerData) {
-    const missingFields = missingCustomerFieldText(
+  if (!customerData || !customerValuesAreGrounded(context, input.customer_values)) {
+    const missingFields = customerValuesPrompt(
+      context,
       configuration,
       input.customer_values,
       "رزرو"
@@ -852,13 +921,17 @@ const prepareReservation = async (
   }
   return {
     success: true as const,
-    data: {
-      date: input.date,
-      time: input.time,
-      party_size: input.party_size,
-      partySizeRelevant: Boolean(configuration.fieldMapping.party_size),
-      ...customerData,
-    },
+      data: {
+        date: input.date,
+        time: input.time,
+        party_size: input.party_size,
+        partySizeRelevant: Boolean(configuration.fieldMapping.party_size),
+        datasetValues: {
+          ...serverGeneratedCustomerValues(context, configuration),
+          ...customerData.datasetValues,
+        },
+        customerSummary: customerData.customerSummary,
+      },
   };
 };
 
@@ -1042,19 +1115,6 @@ const hasSpecificProductQuery = (value: string) => {
   );
 };
 
-const missingCustomerFieldText = (
-  configuration: ResolvedBusinessActionConfiguration,
-  values: Record<string, ActionFieldValue>,
-  operation: "سفارش" | "رزرو"
-) => {
-  const missing = configuration.customerFields
-    .filter((field) => field.required && !Object.hasOwn(values, field.slot))
-    .map((field) => field.label);
-  return missing.length
-    ? `برای ثبت ${operation}، لطفاً ${missing.join(" و ")} را بفرستید.`
-    : null;
-};
-
 const resolveProduct = async (
   context: ActionExecutionContext,
   input: Pick<CreateOrderInput, "product_query" | "quantity" | "variant">,
@@ -1167,8 +1227,9 @@ const prepareOrder = async (
     };
   }
   const customerData = validateCustomerValues(configuration, input.customer_values);
-  if (!customerData) {
-    const missingFields = missingCustomerFieldText(
+  if (!customerData || !customerValuesAreGrounded(context, input.customer_values)) {
+    const missingFields = customerValuesPrompt(
+      context,
       configuration,
       input.customer_values,
       "سفارش"
@@ -1185,7 +1246,11 @@ const prepareOrder = async (
       product_query: input.product_query,
       quantity: input.quantity,
       ...(input.variant ? { variant: input.variant } : {}),
-      ...customerData,
+      datasetValues: {
+        ...serverGeneratedCustomerValues(context, configuration),
+        ...customerData.datasetValues,
+      },
+      customerSummary: customerData.customerSummary,
       productRecordId: product.id,
       productReference: product.reference,
       productName: product.name,

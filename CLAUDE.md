@@ -48,12 +48,14 @@ Full conventions: **CONTRIBUTING.md**. Live component gallery: **`/design`**.
    feature there before building it, and tick it (`- [x]`) once it ships and
    is verified. Never delete shipped items.
 
-8. **Schema changes go in `supabase/*.sql`.** Whenever you need anything
-   added or changed in Supabase (tables, columns, triggers, RLS policies,
-   functions), write the SQL into a file in the `supabase/` folder (e.g.
-   `supabase/auth.sql`) — idempotent so it can be re-run safely — and then
-   **ask the user in chat to paste/run it in the Supabase SQL Editor**.
-   Never assume the schema exists until the user confirms they ran it.
+8. **Supabase plugin changes must be mirrored in `supabase/*.sql`.** Any
+   agent that uses the Supabase plugin and makes or requests a database
+   change (tables, columns, triggers, RLS policies, functions, or migrations)
+   must also write the complete SQL into an idempotent file in this repo's
+   `supabase/` folder (e.g. `supabase/auth.sql`) so it can be re-run safely,
+   and then **ask the user in chat to paste/run it in the Supabase SQL
+   Editor**. Never assume the schema exists until the user confirms they ran
+   it.
 
 9. **Code comments and documentation are English-only.** Persian is
    exclusively the language of the app's UI (user-facing copy). All code

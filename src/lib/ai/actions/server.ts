@@ -256,13 +256,19 @@ export const executeModelAction = async ({
 
 export const handleActionConfirmation = async ({
   context,
+  expectedExecutionId,
   message,
 }: {
   context: ActionExecutionContext;
+  expectedExecutionId?: string;
   message: string;
 }): Promise<ActionHandlingResult> => {
   try {
-    return await actionEngine.confirmPending({ context, message });
+    return await actionEngine.confirmPending({
+      context,
+      expectedExecutionId,
+      message,
+    });
   } catch {
     console.error("Business action confirmation lookup failed safely.");
     return { handled: false, text: null };

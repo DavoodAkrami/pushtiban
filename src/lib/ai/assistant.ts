@@ -278,6 +278,7 @@ export type AssistantResult = {
   needsHuman: boolean;
   action?: {
     key?: string;
+    executionId?: string;
     status: "pending_confirmation" | "executing" | "succeeded" | "failed" | "expired" | "rejected";
   };
   /**
@@ -469,7 +470,11 @@ export const generateAssistantReply = async (
         text: action.text,
         needsHuman: false,
         action: action.status
-          ? { key: action.actionKey, status: action.status }
+          ? {
+              key: action.actionKey,
+              executionId: action.executionId,
+              status: action.status,
+            }
           : undefined,
         retrieval,
       };

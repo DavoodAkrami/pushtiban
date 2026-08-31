@@ -319,7 +319,18 @@ const pending = await confirmationHarness.engine.executeRequested({
   request: { key: "confirmation_test_action", arguments: {} },
 });
 assert.equal(pending.status, "pending_confirmation");
+assert.match(pending.executionId, /^[0-9a-f-]{36}$/i);
 assert.equal(confirmedExecutions, 0, "confirmation action does not execute early");
+
+const staleButton = await confirmationHarness.engine.confirmPending({
+  context: context({
+    customerMessage: "تأیید",
+    deliveryId: "telegram-update:9006-stale",
+  }),
+  expectedExecutionId: "55555555-5555-4555-8555-999999999999",
+  message: "تأیید",
+});
+assert.equal(staleButton.handled, false, "a stale inline button cannot confirm a newer action");
 
 const wrongCustomer = await confirmationHarness.engine.confirmPending({
   context: context({
@@ -565,6 +576,9 @@ assert.match(serverSource, /\.eq\("idempotency_key", input\.idempotencyKey\)/);
 assert.match(ragSource, /actionRequest: parsed\.action \?\? null/);
 assert.match(ragSource, /Information-only questions must keep action null/);
 assert.match(telegramSource, /handleActionConfirmation/);
+assert.match(telegramSource, /ACTION_CONFIRM_CALLBACK_PREFIX/);
+assert.match(telegramSource, /sendActionConfirmationPrompt/);
+assert.match(telegramSource, /expectedExecutionId: actionConfirmation\.executionId/);
 assert.match(instagramSource, /handleActionConfirmation/);
 assert.match(sqlSource, /alter table public\.business_action_executions enable row level security/);
 assert.match(sqlSource, /revoke all on table public\.business_action_executions from public, anon, authenticated/);

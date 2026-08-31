@@ -76,6 +76,14 @@ for (const template of templates.BUSINESS_DATA_TEMPLATES) {
 const products = templates.getBusinessDataTemplate("products");
 assert.ok(products);
 
+const orders = templates.getBusinessDataTemplate("orders");
+const reservations = templates.getBusinessDataTemplate("reservations");
+assert.ok(orders?.fields.some((field) => field.key === "customer_name" && field.required));
+assert.ok(orders?.fields.some((field) => field.key === "phone" && field.required));
+assert.ok(orders?.fields.some((field) => field.key === "address" && field.required));
+assert.ok(reservations?.fields.some((field) => field.key === "customer_name" && field.required));
+assert.ok(reservations?.fields.some((field) => field.key === "phone" && field.required));
+
 const privateAi = validation.validateCollectionDefinition({
   name: "سفارش‌ها",
   description: "",

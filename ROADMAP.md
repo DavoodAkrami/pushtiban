@@ -135,6 +135,9 @@ How to use:
       server-owned and resolve shared datetime/product fields deterministically
 - [x] Make order and reservation conversations recoverable: ask for missing
       creation details, keep lookup separate, and let verification yield to new questions
+- [x] Confirm new orders and reservations safely: collect standard customer
+      details first, show the exact review in Telegram with confirm/cancel
+      buttons, and bind each button to its own pending request
 - [x] Improve the Business Data creation modal: choose the data kind before
       its source and edit the initial field structure before creating a
       collection

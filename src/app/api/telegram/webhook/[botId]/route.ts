@@ -51,6 +51,8 @@ const BOT_ID_RE = /^\d{1,24}$/;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const COMPACT_UUID_RE = /^[A-Za-z0-9_-]{22}$/;
+const ACTION_CONFIRM_CALLBACK_PREFIX = "action_confirm:";
+const ACTION_CANCEL_CALLBACK_PREFIX = "action_cancel:";
 
 type RouteContext = { params: Promise<{ botId: string }> };
 
@@ -87,6 +89,19 @@ type TelegramUpdate = {
 };
 
 type ParsedCommand = { detected: boolean; keyword: string | null };
+
+const parseActionConfirmationCallback = (value: string) => {
+  const prefix = value.startsWith(ACTION_CONFIRM_CALLBACK_PREFIX)
+    ? ACTION_CONFIRM_CALLBACK_PREFIX
+    : value.startsWith(ACTION_CANCEL_CALLBACK_PREFIX)
+      ? ACTION_CANCEL_CALLBACK_PREFIX
+      : null;
+  if (!prefix) return null;
+  const executionId = value.slice(prefix.length);
+  return UUID_RE.test(executionId)
+    ? { executionId, message: prefix === ACTION_CONFIRM_CALLBACK_PREFIX ? "تأیید" : "لغو" }
+    : null;
+};
 
 const parseTelegramCommand = ({
   botUsername,
@@ -618,6 +633,34 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
     return sendToCustomer({ chat_id: chatId, text });
   };
 
+  const sendActionConfirmationPrompt = async ({
+    chatId,
+    executionId,
+    text,
+  }: {
+    chatId: number;
+    executionId: string;
+    text: string;
+  }) =>
+    sendToCustomer({
+      chat_id: chatId,
+      text,
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text: "تأیید و ثبت",
+              callback_data: `${ACTION_CONFIRM_CALLBACK_PREFIX}${executionId}`,
+            },
+            {
+              text: "لغو",
+              callback_data: `${ACTION_CANCEL_CALLBACK_PREFIX}${executionId}`,
+            },
+          ],
+        ],
+      },
+    });
+
   // Handle inline button press
   if (update.callback_query) {
     const cq = update.callback_query;
@@ -640,6 +683,57 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
 
     if (data === "flow_end") {
       return NextResponse.json({ ok: true });
+    }
+
+    const actionConfirmation = parseActionConfirmationCallback(data);
+    const callbackSender = cq.from;
+    if (actionConfirmation && callbackSender && typeof callbackSender.id === "number") {
+      const confirmation = await withTelegramTyping({
+        chatId,
+        token,
+        task: () =>
+          handleActionConfirmation({
+            context: {
+              channel: "telegram",
+              connectionId: connection.id,
+              customerExternalId: String(callbackSender.id),
+              conversationId: String(chatId),
+              deliveryId:
+                typeof update.update_id === "number"
+                  ? `telegram-update:${update.update_id}`
+                  : `telegram-callback:${cq.id ?? actionConfirmation.executionId}`,
+              customerUsername: callbackSender.username,
+              customerDisplayName: callbackSender.first_name,
+              userId: connection.user_id,
+              customerMessage: actionConfirmation.message,
+            },
+            expectedExecutionId: actionConfirmation.executionId,
+            message: actionConfirmation.message,
+          }),
+      });
+      if (!confirmation.handled) {
+        return NextResponse.json({ ok: true });
+      }
+
+      // The action ID prevents stale buttons from confirming newer requests;
+      // after a handled choice, remove this exact keyboard to make its final
+      // state visible and avoid duplicate taps.
+      if (typeof messageId === "number") {
+        void telegramPost(token, "editMessageReplyMarkup", {
+          chat_id: chatId,
+          message_id: messageId,
+          reply_markup: { inline_keyboard: [] },
+        });
+      }
+      const replyText =
+        confirmation.text ?? "امکان انجام این درخواست در حال حاضر نیست.";
+      const sent = await sendToCustomer({ chat_id: chatId, text: replyText });
+      await recordChatTurns({
+        connectionId: connection.id,
+        chatId,
+        turns: [{ role: "assistant", text: replyText }],
+      });
+      return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
     }
 
     // ---- Inbox callbacks ---------------------------------------------------
@@ -1260,7 +1354,15 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
   }
 
   const sent = aiReply.text
-    ? await sendAiTextToCustomer(chatId, aiReply.text)
+    ? aiReply.action?.status === "pending_confirmation" &&
+        aiReply.action.executionId &&
+        UUID_RE.test(aiReply.action.executionId)
+      ? await sendActionConfirmationPrompt({
+          chatId,
+          executionId: aiReply.action.executionId,
+          text: aiReply.text,
+        })
+      : await sendAiTextToCustomer(chatId, aiReply.text)
     : await sendToCustomer({
         chat_id: chatId,
         text: "در حال حاضر امکان پاسخ‌گویی هوشمند نیست؛ کمی بعد دوباره تلاش کنید.",
