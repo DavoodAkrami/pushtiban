@@ -67,12 +67,12 @@ create table if not exists public.business_data_fields (
   data_type       text not null
                   check (data_type in (
                     'text', 'long_text', 'number', 'currency', 'boolean',
-                    'date', 'datetime', 'select', 'url'
+                    'date', 'datetime', 'select', 'url', 'image'
                   )),
   semantic_role   text not null default 'custom'
                   check (semantic_role in (
                     'title', 'description', 'category', 'sku', 'price',
-                    'currency', 'availability', 'status', 'reference', 'url',
+                    'currency', 'availability', 'status', 'reference', 'url', 'image',
                     'quantity', 'start_at', 'end_at', 'location',
                     'customer_identifier', 'tracking', 'internal_notes', 'custom'
                   )),
@@ -101,6 +101,22 @@ comment on table public.business_data_fields is
   'Typed field metadata for generic Business Data collections.';
 comment on column public.business_data_fields.ai_exposure is
   'answer may be returned after access checks; filter_only may locate a row but is omitted from answers; hidden never reaches AI.';
+
+-- Record images stay private. The application service role uploads them and
+-- creates short-lived signed URLs only after an owner or channel access check.
+insert into storage.buckets (
+  id, name, public, file_size_limit, allowed_mime_types
+) values (
+  'business-data-images',
+  'business-data-images',
+  false,
+  5242880,
+  array['image/jpeg', 'image/png', 'image/webp']
+)
+on conflict (id) do update set
+  public = excluded.public,
+  file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
 
 -- 3) Source metadata ----------------------------------------------------------
 
@@ -503,6 +519,11 @@ begin
       not new.values ? field_definition.key
       or new.values -> field_definition.key = 'null'::jsonb
       or (
+        field_definition.data_type = 'image'
+        and jsonb_typeof(new.values -> field_definition.key) = 'array'
+        and jsonb_array_length(new.values -> field_definition.key) = 0
+      )
+      or (
         field_definition.data_type in ('text', 'long_text', 'select', 'url')
         and btrim(new.values ->> field_definition.key) = ''
       )
@@ -528,6 +549,18 @@ begin
         then jsonb_typeof(new.values -> field_definition.key) <> 'number'
       when field_definition.data_type = 'boolean'
         then jsonb_typeof(new.values -> field_definition.key) <> 'boolean'
+      when field_definition.data_type = 'image'
+        then case
+          when jsonb_typeof(new.values -> field_definition.key) <> 'array' then true
+          else jsonb_array_length(new.values -> field_definition.key) > 5
+            or exists (
+              select 1
+              from jsonb_array_elements(new.values -> field_definition.key) image_item(value)
+              where jsonb_typeof(image_item.value) <> 'string'
+                or char_length(image_item.value #>> '{}') > 160
+                or image_item.value #>> '{}' !~ ('^' || new.user_id::text || '/' || new.collection_id::text || '/[0-9a-f-]{36}\.(jpe?g|png|webp)$')
+            )
+        end
       else true
     end
   limit 1;
@@ -1404,6 +1437,10 @@ grant execute on function public.business_data_delete_collection(uuid, uuid)
 
 -- 11) Bounded public-catalog lookup for the assistant --------------------------
 
+drop function if exists public.business_data_lookup_public(
+  uuid, text, text, jsonb, jsonb, jsonb, integer
+);
+
 create or replace function public.business_data_lookup_public(
   p_user_id uuid,
   p_collection_key text,
@@ -1414,6 +1451,7 @@ create or replace function public.business_data_lookup_public(
   p_limit integer
 )
 returns table (
+  record_id uuid,
   record_values jsonb,
   data_updated_at timestamptz,
   matched_count bigint
@@ -1644,6 +1682,7 @@ begin
 
   return query
   select
+    record.id as record_id,
     projected.record_values,
     coalesce(record.source_updated_at, record.updated_at) as data_updated_at,
     count(*) over () as matched_count
@@ -1950,6 +1989,31 @@ begin
   from pg_constraint
   where conrelid = 'public.business_data_fields'::regclass
     and contype = 'c'
+    and pg_get_constraintdef(oid) like '%data_type%'
+  limit 1;
+  if constraint_name is not null then
+    execute format('alter table public.business_data_fields drop constraint %I', constraint_name);
+  end if;
+end;
+$$;
+
+alter table public.business_data_fields
+  drop constraint if exists business_data_fields_data_type_check;
+alter table public.business_data_fields
+  add constraint business_data_fields_data_type_check
+  check (data_type in (
+    'text', 'long_text', 'number', 'currency', 'boolean', 'date',
+    'datetime', 'select', 'url', 'image'
+  ));
+
+do $$
+declare
+  constraint_name text;
+begin
+  select conname into constraint_name
+  from pg_constraint
+  where conrelid = 'public.business_data_fields'::regclass
+    and contype = 'c'
     and pg_get_constraintdef(oid) like '%semantic_role%'
   limit 1;
   if constraint_name is not null then
@@ -1964,7 +2028,7 @@ alter table public.business_data_fields
   add constraint business_data_fields_semantic_role_check
   check (semantic_role in (
     'title', 'description', 'category', 'sku', 'price', 'currency',
-    'availability', 'status', 'reference', 'url', 'quantity', 'start_at',
+    'availability', 'status', 'reference', 'url', 'image', 'quantity', 'start_at',
     'end_at', 'location', 'customer_identifier', 'phone', 'email',
     'account_identifier', 'channel_identifier', 'tracking', 'internal_notes',
     'custom'

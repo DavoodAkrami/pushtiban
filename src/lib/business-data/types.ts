@@ -45,6 +45,7 @@ export const BUSINESS_DATA_FIELD_TYPES = [
   "datetime",
   "select",
   "url",
+  "image",
 ] as const;
 
 export type BusinessDataFieldType =
@@ -132,6 +133,7 @@ export const BUSINESS_DATA_FIELD_ROLES = [
   "status",
   "reference",
   "url",
+  "image",
   "quantity",
   "start_at",
   "end_at",
@@ -150,7 +152,9 @@ export type BusinessDataFieldRole =
   (typeof BUSINESS_DATA_FIELD_ROLES)[number];
 
 export type BusinessDataScalar = string | number | boolean | null;
-export type BusinessDataRecordValues = Record<string, BusinessDataScalar>;
+export type BusinessDataImageValue = string[];
+export type BusinessDataValue = BusinessDataScalar | BusinessDataImageValue;
+export type BusinessDataRecordValues = Record<string, BusinessDataValue>;
 
 export type BusinessDataFieldValidation = {
   minLength?: number;

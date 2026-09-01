@@ -81,6 +81,7 @@ export const getBusinessDataAiCapabilities = async (
 
   const fields = (fieldRows ?? []) as FieldRow[];
   const capabilities = collections.map((collection) => ({
+    internalId: collection.id,
     key: collection.key,
     name: collection.name,
     description: collection.description,
@@ -140,6 +141,7 @@ export const lookupBusinessData = async ({
   if (error) throw new Error(`Business Data lookup failed: ${error.message}`);
 
   const rows = (data ?? []) as Array<{
+    record_id: string;
     record_values: Record<string, unknown>;
     data_updated_at: string | null;
     matched_count: number | string;
@@ -150,6 +152,7 @@ export const lookupBusinessData = async ({
     matchedCount: Number(rows[0]?.matched_count ?? 0),
     plan,
     rows: rows.map((row) => ({
+      recordId: row.record_id,
       values: row.record_values ?? {},
       dataUpdatedAt: row.data_updated_at,
     })),

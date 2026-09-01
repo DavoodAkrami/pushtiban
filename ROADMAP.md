@@ -141,6 +141,9 @@ How to use:
 - [x] Improve the Business Data creation modal: choose the data kind before
       its source and edit the initial field structure before creating a
       collection
+- [x] Add private Storage-backed image fields to visual Business Data templates,
+      let owners upload and manage record images, and deliver public product
+      matches as separate Telegram cards with order-aware buy buttons
 - [ ] Knowledge-base ingestion for PDF and Word — needs a parser dependency and
       a Supabase Storage bucket with its own policies
 - [ ] AI assistant configuration (name, tone, model selection)

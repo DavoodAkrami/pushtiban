@@ -39,6 +39,10 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { invalidateBusinessDataAiCapabilities } from "./ai-retrieval";
 import {
+  BUSINESS_DATA_IMAGE_BUCKET,
+  businessDataImagePathBelongsTo,
+} from "./image-values";
+import {
   appendImportFieldPositions,
   findConflictingProposedImportFields,
   selectProposedImportFields,
@@ -214,6 +218,60 @@ const mapRecord = (row: RecordRow): BusinessDataRecord => ({
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
+
+const imagePathsFromValues = (
+  values: BusinessDataRecord["values"],
+  fields: readonly Pick<BusinessDataField, "key" | "type">[]
+) =>
+  fields.flatMap((field) => {
+    if (field.type !== "image") return [];
+    const value = values[field.key];
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string")
+      : [];
+  });
+
+const assertOwnedImagePaths = ({
+  collectionId,
+  fields,
+  userId,
+  values,
+}: {
+  collectionId: string;
+  fields: readonly Pick<BusinessDataField, "key" | "type">[];
+  userId: string;
+  values: BusinessDataRecord["values"];
+}) => {
+  if (
+    imagePathsFromValues(values, fields).some(
+      (path) =>
+        !businessDataImagePathBelongsTo({ collectionId, path, userId })
+    )
+  ) {
+    throw new BusinessDataServiceError(
+      "یکی از تصاویر به این مجموعه تعلق ندارد.",
+      400,
+      "invalid_image_path"
+    );
+  }
+};
+
+const removeStoredImages = async (
+  admin: SupabaseClient,
+  paths: string[]
+) => {
+  const uniquePaths = [...new Set(paths)];
+  if (!uniquePaths.length) return;
+  const { error } = await admin.storage
+    .from(BUSINESS_DATA_IMAGE_BUCKET)
+    .remove(uniquePaths);
+  if (error) {
+    console.warn("Business Data image cleanup failed", {
+      count: uniquePaths.length,
+      message: error.message.slice(0, 160),
+    });
+  }
+};
 
 const mapSyncRun = (row: SyncRunRow): BusinessDataSyncRun => ({
   id: row.id,
@@ -842,11 +900,27 @@ export const deleteCollection = async (
       "confirmation_required"
     );
   }
+  const [fields, recordsResult] = await Promise.all([
+    getFieldRows(context, collectionId).then((rows) => rows.map(mapField)),
+    context.admin
+      .from("business_data_records")
+      .select("values")
+      .eq("collection_id", collectionId)
+      .eq("user_id", context.user.id),
+  ]);
+  if (recordsResult.error) throw mapDatabaseFailure(recordsResult.error);
+  const imagePaths = (recordsResult.data ?? []).flatMap((record) =>
+    imagePathsFromValues(
+      (record as { values: BusinessDataRecord["values"] }).values,
+      fields
+    )
+  );
   const { error } = await context.admin.rpc("business_data_delete_collection", {
     p_user_id: context.user.id,
     p_collection_id: collectionId,
   });
   if (error) throw mapDatabaseFailure(error);
+  await removeStoredImages(context.admin, imagePaths);
   invalidateBusinessDataAiCapabilities(context.user.id);
 };
 
@@ -1070,6 +1144,12 @@ export const createRecord = async (
       "validation_failed"
     );
   }
+  assertOwnedImagePaths({
+    collectionId,
+    fields,
+    userId: context.user.id,
+    values: result.value,
+  });
   const { count, error: countError } = await context.admin
     .from("business_data_records")
     .select("id", { count: "exact", head: true })
@@ -1142,6 +1222,14 @@ export const updateRecord = async (
       "validation_failed"
     );
   }
+  assertOwnedImagePaths({
+    collectionId,
+    fields,
+    userId: context.user.id,
+    values: result.value,
+  });
+  const previousImages = new Set(imagePathsFromValues(current.values, fields));
+  const nextImages = new Set(imagePathsFromValues(result.value, fields));
   const { data, error } = await context.admin
     .from("business_data_records")
     .update({ values: result.value, status })
@@ -1151,6 +1239,10 @@ export const updateRecord = async (
     .select(RECORD_COLUMNS)
     .single();
   if (error || !data) throw mapDatabaseFailure(error);
+  await removeStoredImages(
+    context.admin,
+    [...previousImages].filter((path) => !nextImages.has(path))
+  );
   return mapRecord(data as RecordRow);
 };
 
@@ -1159,7 +1251,10 @@ export const deleteRecord = async (
   collectionId: string,
   recordId: string
 ) => {
-  await getRecordRow(context, collectionId, recordId);
+  const [current, fields] = await Promise.all([
+    getRecordRow(context, collectionId, recordId),
+    getFieldRows(context, collectionId).then((rows) => rows.map(mapField)),
+  ]);
   const { error } = await context.admin
     .from("business_data_records")
     .delete()
@@ -1167,6 +1262,10 @@ export const deleteRecord = async (
     .eq("collection_id", collectionId)
     .eq("user_id", context.user.id);
   if (error) throw mapDatabaseFailure(error);
+  await removeStoredImages(
+    context.admin,
+    imagePathsFromValues(current.values, fields)
+  );
 };
 
 const parseIngestionMapping = (value: unknown): IngestionMapping => {

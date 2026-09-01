@@ -35,12 +35,19 @@ const importPlan = require(path.join(businessDataDirectory, "import-plan.ts"));
 const aiRetrieval = require(
   path.join(businessDataDirectory, "ai-retrieval-core.ts")
 );
+const telegramCards = require(
+  path.join(scriptDirectory, "..", "src", "lib", "telegram", "business-data-cards.ts")
+);
 const serverSource = fs.readFileSync(
   path.join(businessDataDirectory, "server.ts"),
   "utf8"
 );
 const sqlSource = fs.readFileSync(
   path.join(scriptDirectory, "..", "supabase", "business-data.sql"),
+  "utf8"
+);
+const imageMigrationSource = fs.readFileSync(
+  path.join(scriptDirectory, "..", "supabase", "business-data-images.sql"),
   "utf8"
 );
 const ragSource = fs.readFileSync(
@@ -53,6 +60,10 @@ const importFlowSource = fs.readFileSync(
 );
 const structurePanelSource = fs.readFileSync(
   path.join(scriptDirectory, "..", "src", "components", "dashboard", "business-data", "structure-panel.tsx"),
+  "utf8"
+);
+const telegramWebhookSource = fs.readFileSync(
+  path.join(scriptDirectory, "..", "src", "app", "api", "telegram", "webhook", "[botId]", "route.ts"),
   "utf8"
 );
 
@@ -75,6 +86,31 @@ for (const template of templates.BUSINESS_DATA_TEMPLATES) {
 
 const products = templates.getBusinessDataTemplate("products");
 assert.ok(products);
+const productImageField = products.fields.find((field) => field.key === "images");
+assert.equal(productImageField?.type, "image");
+assert.equal(productImageField?.role, "image");
+assert.equal(productImageField?.searchable, false);
+assert.equal(productImageField?.filterable, false);
+for (const templateId of [
+  "products",
+  "services",
+  "menu",
+  "plans",
+  "courses",
+  "discounts",
+  "branches",
+  "teachers",
+  "rooms",
+  "packages",
+  "properties",
+]) {
+  assert.ok(
+    templates
+      .getBusinessDataTemplate(templateId)
+      ?.fields.some((field) => field.type === "image"),
+    `Visual template ${templateId} must include an image field`
+  );
+}
 
 const orders = templates.getBusinessDataTemplate("orders");
 const reservations = templates.getBusinessDataTemplate("reservations");
@@ -107,6 +143,32 @@ const validRecord = validation.validateRecordValues(
   products.fields
 );
 assert.equal(validRecord.ok, true);
+
+const userId = "11111111-1111-4111-8111-111111111111";
+const collectionId = "22222222-2222-4222-8222-222222222222";
+const validImagePath = `${userId}/${collectionId}/33333333-3333-4333-8333-333333333333.webp`;
+const validImageRecord = validation.validateRecordValues(
+  { name: "کالای تصویری", images: [validImagePath] },
+  products.fields
+);
+assert.equal(validImageRecord.ok, true);
+assert.deepEqual(validImageRecord.value.images, [validImagePath]);
+assert.equal(
+  validation.validateRecordValues(
+    { name: "کالای نامعتبر", images: ["https://example.com/private.jpg"] },
+    products.fields
+  ).ok,
+  false,
+  "Image fields must reject external URLs and accept only scoped storage paths"
+);
+assert.equal(
+  validation.validateRecordValues(
+    { name: "تصاویر زیاد", images: Array.from({ length: 6 }, () => validImagePath) },
+    products.fields
+  ).ok,
+  false,
+  "Image fields must enforce the per-field upload limit"
+);
 
 const missingTitle = validation.validateRecordValues(
   { price: 10, available: true },
@@ -229,6 +291,7 @@ assert.match(
 );
 
 const publicProductCapability = {
+  internalId: collectionId,
   key: "product_public",
   name: "محصولات",
   description: "کاتالوگ عمومی",
@@ -236,11 +299,12 @@ const publicProductCapability = {
   schemaVersion: 1,
   fields: [
     { key: "name", label: "نام", type: "text", role: "title", searchable: true, filterable: true, aiExposure: "answer", position: 0 },
-    { key: "color", label: "رنگ", type: "select", role: "custom", searchable: true, filterable: true, aiExposure: "answer", position: 1 },
-    { key: "price", label: "قیمت", type: "currency", role: "price", searchable: false, filterable: true, aiExposure: "answer", position: 2 },
-    { key: "stock", label: "موجودی", type: "number", role: "quantity", searchable: false, filterable: true, aiExposure: "filter_only", position: 3 },
-    { key: "cost", label: "بهای داخلی", type: "currency", role: "internal_notes", searchable: false, filterable: false, aiExposure: "hidden", position: 4 },
-    { key: "description", label: "توضیح", type: "long_text", role: "description", searchable: true, filterable: false, aiExposure: "answer", position: 5 },
+    { key: "images", label: "تصاویر", type: "image", role: "image", searchable: false, filterable: false, aiExposure: "answer", position: 1 },
+    { key: "color", label: "رنگ", type: "select", role: "custom", searchable: true, filterable: true, aiExposure: "answer", position: 2 },
+    { key: "price", label: "قیمت", type: "currency", role: "price", searchable: false, filterable: true, aiExposure: "answer", position: 3 },
+    { key: "stock", label: "موجودی", type: "number", role: "quantity", searchable: false, filterable: true, aiExposure: "filter_only", position: 4 },
+    { key: "cost", label: "بهای داخلی", type: "currency", role: "internal_notes", searchable: false, filterable: false, aiExposure: "hidden", position: 5 },
+    { key: "description", label: "توضیح", type: "long_text", role: "description", searchable: true, filterable: false, aiExposure: "answer", position: 6 },
   ],
 };
 
@@ -312,8 +376,10 @@ const minimized = aiRetrieval.minimizeBusinessDataResult({
   matchedCount: 20,
   plan: productLookup,
   rows: Array.from({ length: 5 }, (_, index) => ({
+    recordId: `44444444-4444-4444-8444-44444444444${index}`,
     values: {
       name: `کفش ${index + 1}`,
+      images: [validImagePath],
       color: "مشکی",
       price: 4_500_000 + index,
       stock: 12,
@@ -330,6 +396,30 @@ assert.ok(minimized.records.length <= 5, "Record result cap must be enforced");
 assert.ok(minimized.payloadChars <= 2_800, "Serialized result budget must be enforced");
 assert.equal("موجودی" in minimized.records[0], false, "Filter-only fields must not be returned");
 assert.equal("بهای داخلی" in minimized.records[0], false, "Hidden fields must not be returned");
+assert.equal("تصاویر" in minimized.records[0], false, "Storage paths must not enter model-facing records");
+assert.equal(minimized.delivery?.collectionId, collectionId);
+assert.equal(minimized.delivery?.records.length, minimized.records.length);
+assert.deepEqual(minimized.delivery?.records[0].imagePaths, [validImagePath]);
+assert.equal(minimized.delivery?.records[0].recordId, "44444444-4444-4444-8444-444444444440");
+const firstCard = minimized.delivery.records[0];
+const caption = telegramCards.buildBusinessDataCardCaption(firstCard);
+assert.match(caption, /<b>کفش ۱<\/b>/);
+assert.match(caption, /قیمت/);
+assert.match(caption, /تومان/);
+assert.equal(
+  telegramCards.buildProductOrderPrompt(firstCard),
+  "می‌خواهم کفش ۱ را سفارش دهم."
+);
+assert.ok(
+  caption.length <= telegramCards.TELEGRAM_PHOTO_CAPTION_MAX_LENGTH,
+  "Telegram photo captions must stay within the platform limit"
+);
+assert.match(telegramWebhookSource, /sendPhoto/);
+assert.match(telegramWebhookSource, /BUY_CALLBACK_PREFIX/);
+assert.match(telegramWebhookSource, /item\) => item\.key === "create_order"/);
+assert.match(telegramWebhookSource, /setting\.configuration\?\.relatedCollectionId === collectionId/);
+assert.match(telegramWebhookSource, /answerCallbackQuery/);
+assert.match(telegramWebhookSource, /buildProductOrderPrompt/);
 assert.ok(
   String(minimized.records[0]["توضیح"]).includes("Ignore previous instructions"),
   "Prompt-like business content must remain inert data rather than being rewritten as instructions"
@@ -348,6 +438,13 @@ assert.ok(capabilitySummary.length <= 3_600, "Capability summary must have a har
 assert.ok(capabilitySummary.split("\n").length <= 8, "Capability count must be capped");
 
 assert.match(sqlSource, /create or replace function public\.business_data_lookup_public\(/);
+assert.match(sqlSource, /record_id uuid/);
+assert.match(sqlSource, /'business-data-images',[\s\S]*?false,[\s\S]*?5242880/);
+assert.match(sqlSource, /field_definition\.data_type = 'image'/);
+assert.match(imageMigrationSource, /^begin;[\s\S]*commit;\s*$/m);
+assert.match(imageMigrationSource, /create or replace function public\.business_data_validate_record\(\)/);
+assert.match(imageMigrationSource, /record_id uuid/);
+assert.doesNotMatch(imageMigrationSource, /^\s*on public\.business_data_sources/m);
 assert.match(sqlSource, /collection\.user_id = p_user_id/);
 assert.match(sqlSource, /collection\.access_scope = 'public_catalog'/);
 assert.match(sqlSource, /collection\.ai_enabled/);
@@ -389,6 +486,7 @@ const mutationRoutes = [
   path.join("[collectionId]", "fields", "[fieldId]", "route.ts"),
   path.join("[collectionId]", "records", "route.ts"),
   path.join("[collectionId]", "records", "[recordId]", "route.ts"),
+  path.join("[collectionId]", "images", "route.ts"),
 ];
 for (const route of mutationRoutes) {
   const source = fs.readFileSync(path.join(routeDirectory, route), "utf8");

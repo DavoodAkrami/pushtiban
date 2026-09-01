@@ -37,6 +37,7 @@ const field = (key, label, type, role, options = {}) => ({
 
 const capabilities = [
   {
+    internalId: "22222222-2222-4222-8222-222222222222",
     key: "products_public",
     name: "محصولات",
     description: "کاتالوگ کفش",
@@ -44,11 +45,12 @@ const capabilities = [
     schemaVersion: 1,
     fields: [
       field("name", "نام", "text", "title", { searchable: true, filterable: true }),
-      field("brand", "برند", "select", "category", { searchable: true, filterable: true, position: 1 }),
-      field("color", "رنگ", "select", "custom", { searchable: true, filterable: true, position: 2 }),
-      field("price", "قیمت", "currency", "price", { filterable: true, position: 3 }),
-      field("stock", "موجودی", "number", "quantity", { filterable: true, aiExposure: "filter_only", position: 4 }),
-      field("description", "توضیح", "long_text", "description", { searchable: true, position: 5 }),
+      field("images", "تصاویر", "image", "image", { position: 1 }),
+      field("brand", "برند", "select", "category", { searchable: true, filterable: true, position: 2 }),
+      field("color", "رنگ", "select", "custom", { searchable: true, filterable: true, position: 3 }),
+      field("price", "قیمت", "currency", "price", { filterable: true, position: 4 }),
+      field("stock", "موجودی", "number", "quantity", { filterable: true, aiExposure: "filter_only", position: 5 }),
+      field("description", "توضیح", "long_text", "description", { searchable: true, position: 6 }),
     ],
   },
   {
@@ -129,12 +131,15 @@ const representative = core.minimizeBusinessDataResult({
   matchedCount: 2,
   plan: representativePlan,
   rows: [
-    { values: { name: "Nike Air Max", brand: "نایک", color: "مشکی", price: 4_900_000, stock: 3, description: "کفش روزمره" }, dataUpdatedAt: "2026-08-22T10:00:00.000Z" },
-    { values: { name: "Nike Court", brand: "نایک", color: "مشکی", price: 4_200_000, stock: 1, description: "کفش سبک" }, dataUpdatedAt: "2026-08-22T09:00:00.000Z" },
+    { recordId: "33333333-3333-4333-8333-333333333331", values: { name: "Nike Air Max", images: ["11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/44444444-4444-4444-8444-444444444441.webp"], brand: "نایک", color: "مشکی", price: 4_900_000, stock: 3, description: "کفش روزمره" }, dataUpdatedAt: "2026-08-22T10:00:00.000Z" },
+    { recordId: "33333333-3333-4333-8333-333333333332", values: { name: "Nike Court", images: [], brand: "نایک", color: "مشکی", price: 4_200_000, stock: 1, description: "کفش سبک" }, dataUpdatedAt: "2026-08-22T09:00:00.000Z" },
   ],
 });
 assert.equal(representative.records.length, 2);
 assert.equal("موجودی" in representative.records[0], false);
+assert.equal("تصاویر" in representative.records[0], false);
+assert.equal(representative.delivery.records.length, 2);
+assert.equal(representative.delivery.records[0].imagePaths.length, 1);
 
 const empty = core.minimizeBusinessDataResult({
   capability: capabilities[0],

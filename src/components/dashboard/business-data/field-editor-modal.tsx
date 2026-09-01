@@ -101,10 +101,15 @@ export const FieldEditorModal = ({
       label,
       description: draft.description,
       type: draft.type,
-      role: field?.role ?? "custom",
+      role:
+        draft.type === "image"
+          ? "image"
+          : field?.role === "image"
+            ? "custom"
+            : field?.role ?? "custom",
       required: draft.required,
-      searchable: draft.searchable,
-      filterable: draft.filterable,
+      searchable: draft.type === "image" ? false : draft.searchable,
+      filterable: draft.type === "image" ? false : draft.filterable,
       aiExposure: draft.aiExposure,
       position: "position" in (field ?? {}) && typeof field?.position === "number" ? field.position : 0,
       ...(draft.type === "select"
@@ -189,7 +194,19 @@ export const FieldEditorModal = ({
               label="نوع مقدار"
               options={Object.entries(FIELD_TYPE_LABELS).map(([value, label]) => ({ value, label }))}
               value={draft.type}
-              onChange={(value) => setDraft((current) => ({ ...current, type: value as BusinessDataFieldType }))}
+              onChange={(value) =>
+                setDraft((current) => ({
+                  ...current,
+                  type: value as BusinessDataFieldType,
+                  ...(value === "image"
+                    ? {
+                        searchable: false,
+                        filterable: false,
+                        aiExposure: "answer" as const,
+                      }
+                    : {}),
+                }))
+              }
               disabled={saving || (hasRecords && persistedField)}
             />
             {draft.type === "select" && (
@@ -210,18 +227,26 @@ export const FieldEditorModal = ({
                 onChange={(event) => setDraft((current) => ({ ...current, required: event.target.checked }))}
                 disabled={saving || (hasRecords && persistedField)}
               />
-              <Checkbox
-                label="در جستجو استفاده شود"
-                checked={draft.searchable}
-                onChange={(event) => setDraft((current) => ({ ...current, searchable: event.target.checked }))}
-                disabled={saving}
-              />
-              <Checkbox
-                label="در فیلترها قابل استفاده باشد"
-                checked={draft.filterable}
-                onChange={(event) => setDraft((current) => ({ ...current, filterable: event.target.checked }))}
-                disabled={saving}
-              />
+              {draft.type === "image" ? (
+                <p className="text-xs leading-6 text-muted">
+                  تصویر در جستجو یا فیلتر استفاده نمی‌شود؛ دستیار فقط آن را همراه نتیجهٔ مرتبط برای مشتری می‌فرستد.
+                </p>
+              ) : (
+                <>
+                  <Checkbox
+                    label="در جستجو استفاده شود"
+                    checked={draft.searchable}
+                    onChange={(event) => setDraft((current) => ({ ...current, searchable: event.target.checked }))}
+                    disabled={saving}
+                  />
+                  <Checkbox
+                    label="در فیلترها قابل استفاده باشد"
+                    checked={draft.filterable}
+                    onChange={(event) => setDraft((current) => ({ ...current, filterable: event.target.checked }))}
+                    disabled={saving}
+                  />
+                </>
+              )}
             </div>
             <Select
               id="field-ai-exposure"

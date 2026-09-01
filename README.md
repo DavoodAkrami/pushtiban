@@ -150,10 +150,19 @@ emits **nothing** — only the dials the owner moved cost tokens.
    deterministic text matching and typed comparisons in the database rather
    than loading a collection for model-side filtering.
 
-   The RPC returns no record IDs or source metadata. It projects only fields
-   marked `answer`; `filter_only` fields can constrain or sort a lookup but are
-   removed before the result crosses the database boundary, and `hidden` fields
-   cannot be searched, filtered, sorted, or returned.
+   The model-facing projection contains no record IDs or source metadata. The
+   service-only runtime may retain a record ID and private Storage image paths
+   for channel delivery, but strips them before preview responses and model
+   context. The RPC projects only fields marked `answer`; `filter_only` fields
+   can constrain or sort a lookup but are removed before the result crosses the
+   database boundary, and `hidden` fields cannot be searched, filtered, sorted,
+   or returned.
+
+   Image-capable templates add an `image` field by default. Record images are
+   stored as tenant- and collection-scoped paths in the private
+   `business-data-images` bucket; the application validates the actual JPEG,
+   PNG, or WebP signature and uses short-lived signed URLs after an owner or
+   channel access check. Storage paths never enter the assistant prompt.
 
    **Verified-customer Business Data** — `src/lib/business-data/private-access.ts`
    exposes an active `verified_customer` collection only after the owner has
@@ -293,6 +302,16 @@ converts to Telegram's HTML subset (bold, italic, strike, code, links,
 blockquote; headings become bold lines, bullets become `• `) and escapes
 everything else. If the converted form is rejected or too long, the raw text is
 sent instead — a formatting problem never costs the customer the answer.
+
+Public product matches are delivered as one Telegram card per record. A card
+uses the first private image through a short-lived signed URL, includes the
+current title, description, price, and other answer-safe fields, and falls back
+to a text card if Telegram cannot fetch the image. It shows the inline
+`خرید` button only when `create_order` is enabled and configured for that exact
+product collection. The callback revalidates the record and current Action
+setting, writes an explicit order request into the chat, and routes it through
+the existing confirmation and order pipeline; callback data cannot authorize a
+write by itself.
 
 **5. Escalation** — the `escalate_to_admin` tool
 
@@ -439,7 +458,8 @@ logs) · `supabase/channel-inbox.sql` (channel column on conversations,
 `supabase/instagram-automations.sql` (Instagram chat sessions, idempotency
 table) · `supabase/instagram-flows.sql` (channel column on `automation_flows`,
 Instagram-specific node/button limit triggers) · `supabase/business-data.sql`
-(collections, fields, records, source/sync foundation, verified-customer
+(collections, fields, records, private image bucket and image validation,
+source/sync foundation, verified-customer
 configuration/challenges/sessions/attempt audits, and the service-role-only
 bounded public and verified-record lookup RPCs) · `supabase/ai-actions.sql`
 (tenant-owned action restrictions and connector/field mappings plus server-only

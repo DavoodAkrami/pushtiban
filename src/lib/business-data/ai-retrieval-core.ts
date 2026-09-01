@@ -6,6 +6,7 @@ import type {
   BusinessDataFieldType,
   BusinessDataScalar,
 } from "./types";
+import { isBusinessDataImagePath } from "./image-values";
 
 export const BUSINESS_DATA_FILTER_OPERATORS = [
   "eq",
@@ -33,6 +34,8 @@ export type BusinessDataAiField = {
 };
 
 export type BusinessDataCapability = {
+  /** Server-only collection identifier. Never serialized into model context. */
+  internalId?: string;
   key: string;
   name: string;
   description: string;
@@ -57,6 +60,25 @@ export type BusinessDataLookupPlan = {
 
 export type BusinessDataLookupRecord = Record<string, BusinessDataScalar>;
 
+export type BusinessDataDeliveryField = {
+  label: string;
+  type: BusinessDataFieldType;
+  role: BusinessDataFieldRole;
+  value: BusinessDataScalar;
+};
+
+export type BusinessDataDeliveryRecord = {
+  recordId: string;
+  fields: BusinessDataDeliveryField[];
+  imagePaths: string[];
+};
+
+export type BusinessDataDelivery = {
+  collectionId: string;
+  collectionKind: BusinessDataCollectionKind;
+  records: BusinessDataDeliveryRecord[];
+};
+
 export type BusinessDataLookupResult = {
   collectionKey: string;
   collectionName: string;
@@ -67,6 +89,8 @@ export type BusinessDataLookupResult = {
   payloadChars: number;
   truncated: boolean;
   durationMs: number;
+  /** Channel delivery metadata. It is stripped from preview and model input. */
+  delivery: BusinessDataDelivery | null;
 };
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -244,6 +268,7 @@ export const validateBusinessDataLookupPlan = (
 
 const ROLE_PRIORITY: BusinessDataFieldRole[] = [
   "title",
+  "image",
   "price",
   "currency",
   "availability",
@@ -306,10 +331,15 @@ export const minimizeBusinessDataResult = ({
   durationMs: number;
   matchedCount: number;
   plan: BusinessDataLookupPlan;
-  rows: Array<{ values: Record<string, unknown>; dataUpdatedAt: string | null }>;
+  rows: Array<{
+    recordId?: string;
+    values: Record<string, unknown>;
+    dataUpdatedAt: string | null;
+  }>;
 }): BusinessDataLookupResult => {
   const projection = selectBusinessDataProjection(capability, plan);
   const records: BusinessDataLookupRecord[] = [];
+  const deliveryRecords: BusinessDataDeliveryRecord[] = [];
   let dataUpdatedAt: string | null = null;
   let truncated =
     matchedCount > rows.length ||
@@ -318,15 +348,36 @@ export const minimizeBusinessDataResult = ({
 
   for (const row of rows.slice(0, plan.limit)) {
     const record: BusinessDataLookupRecord = {};
+    const deliveryFields: BusinessDataDeliveryField[] = [];
+    const imagePaths: string[] = [];
     for (const field of projection) {
       const value = row.values[field.key];
+      if (field.type === "image") {
+        if (Array.isArray(value)) {
+          imagePaths.push(
+            ...value
+              .filter(isBusinessDataImagePath)
+              .slice(0, BUSINESS_DATA_LIMITS.imagesPerField)
+          );
+        }
+        continue;
+      }
       if (
         value === null ||
         typeof value === "string" ||
         typeof value === "number" ||
         typeof value === "boolean"
       ) {
-        if (value !== undefined) record[field.label] = truncateValue(value);
+        if (value !== undefined) {
+          const truncatedValue = truncateValue(value);
+          record[field.label] = truncatedValue;
+          deliveryFields.push({
+            label: field.label,
+            type: field.type,
+            role: field.role,
+            value: truncatedValue,
+          });
+        }
       }
     }
     const nextRecords = [...records, record];
@@ -340,6 +391,13 @@ export const minimizeBusinessDataResult = ({
       break;
     }
     records.push(record);
+    if (row.recordId) {
+      deliveryRecords.push({
+        recordId: row.recordId,
+        fields: deliveryFields,
+        imagePaths: [...new Set(imagePaths)],
+      });
+    }
     if (row.dataUpdatedAt && (!dataUpdatedAt || row.dataUpdatedAt > dataUpdatedAt)) {
       dataUpdatedAt = row.dataUpdatedAt;
     }
@@ -360,6 +418,14 @@ export const minimizeBusinessDataResult = ({
     payloadChars: payload.length,
     truncated,
     durationMs,
+    delivery:
+      capability.internalId && deliveryRecords.length
+        ? {
+            collectionId: capability.internalId,
+            collectionKind: capability.kind,
+            records: deliveryRecords,
+          }
+        : null,
   };
 };
 

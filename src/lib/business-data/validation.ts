@@ -10,10 +10,11 @@ import {
   type BusinessDataFieldDefinition,
   type BusinessDataFieldValidation,
   type BusinessDataRecordValues,
-  type BusinessDataScalar,
+  type BusinessDataValue,
   type BusinessDataValidationIssue,
   type BusinessDataValidationResult,
 } from "./types";
+import { isBusinessDataImagePath } from "./image-values";
 
 const FIELD_KEY_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -298,6 +299,18 @@ const parseField = (
       );
     }
   }
+  if (
+    value.type === "image" &&
+    (value.searchable === true || value.filterable === true)
+  ) {
+    issues.push(
+      issue(
+        "invalid_value",
+        path,
+        "Image fields cannot be searchable or filterable."
+      )
+    );
+  }
 
   if (
     !key ||
@@ -468,11 +481,33 @@ const normalizeScalar = (
   field: BusinessDataFieldDefinition,
   value: unknown,
   issues: BusinessDataValidationIssue[]
-): BusinessDataScalar | undefined => {
+): BusinessDataValue | undefined => {
   const path = `values.${field.key}`;
   if (value === null || value === undefined || value === "") {
     if (field.required) issues.push(issue("required", path, "Value is required."));
     return value === undefined ? undefined : null;
+  }
+
+  if (field.type === "image") {
+    if (
+      !Array.isArray(value) ||
+      value.length > BUSINESS_DATA_LIMITS.imagesPerField ||
+      value.some((item) => !isBusinessDataImagePath(item))
+    ) {
+      issues.push(
+        issue(
+          "invalid_value",
+          path,
+          `Expected up to ${BUSINESS_DATA_LIMITS.imagesPerField} uploaded images.`
+        )
+      );
+      return undefined;
+    }
+    if (field.required && value.length === 0) {
+      issues.push(issue("required", path, "At least one image is required."));
+      return undefined;
+    }
+    return [...new Set(value)];
   }
 
   if (field.type === "text" || field.type === "long_text" || field.type === "select" || field.type === "url") {

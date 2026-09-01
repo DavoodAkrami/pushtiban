@@ -35,12 +35,21 @@ import {
 import { loadChatSession, recordChatTurns } from "@/lib/ai/memory";
 import { handlePrivateVerificationMessage } from "@/lib/business-data/private-access";
 import { handleActionConfirmation } from "@/lib/ai/actions/server";
+import { listSafeActionSettings } from "@/lib/ai/actions/registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   markdownToTelegramHtml,
   TELEGRAM_MESSAGE_MAX_LENGTH,
 } from "@/lib/telegram/format";
 import { decryptTelegramToken } from "@/lib/telegram/token-crypto";
+import { createBusinessDataImageSignedUrl } from "@/lib/business-data/image-storage";
+import { businessDataImagePathBelongsTo } from "@/lib/business-data/image-values";
+import type { BusinessDataDelivery } from "@/lib/business-data/ai-retrieval-core";
+import {
+  buildBusinessDataCardCaption,
+  buildProductOrderPrompt,
+  businessDataDeliveryRecordTitle,
+} from "@/lib/telegram/business-data-cards";
 
 export const runtime = "nodejs";
 
@@ -53,6 +62,7 @@ const UUID_RE =
 const COMPACT_UUID_RE = /^[A-Za-z0-9_-]{22}$/;
 const ACTION_CONFIRM_CALLBACK_PREFIX = "action_confirm:";
 const ACTION_CANCEL_CALLBACK_PREFIX = "action_cancel:";
+const BUY_CALLBACK_PREFIX = "buy:";
 
 type RouteContext = { params: Promise<{ botId: string }> };
 
@@ -352,6 +362,11 @@ const callbackIdToUuid = (value: string) => {
     return null;
   }
 };
+
+const parseBuyCallback = (value: string) =>
+  value.startsWith(BUY_CALLBACK_PREFIX)
+    ? callbackIdToUuid(value.slice(BUY_CALLBACK_PREFIX.length))
+    : null;
 
 const buildNavigationCallback = (
   kind: "flow_go" | "flow_back",
@@ -661,6 +676,87 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
       },
     });
 
+  const orderActionForCollection = async (collectionId: string) => {
+    const setting = (await listSafeActionSettings(connection.user_id)).find(
+      (item) => item.key === "create_order"
+    );
+    return setting?.enabled &&
+      setting.capabilityAvailable &&
+      setting.configuration?.relatedCollectionId === collectionId
+      ? setting
+      : null;
+  };
+
+  const sendBusinessDataCardsToCustomer = async ({
+    chatId,
+    delivery,
+  }: {
+    chatId: number;
+    delivery: BusinessDataDelivery;
+  }) => {
+    const orderSetting =
+      delivery.collectionKind === "product"
+        ? await orderActionForCollection(delivery.collectionId)
+        : null;
+    const memoryLines: string[] = [];
+    let sent = true;
+
+    for (const record of delivery.records) {
+      const compactRecordId = uuidToCallbackId(record.recordId);
+      const replyMarkup =
+        orderSetting && compactRecordId
+          ? {
+              inline_keyboard: [
+                [
+                  {
+                    text: "خرید",
+                    callback_data: `${BUY_CALLBACK_PREFIX}${compactRecordId}`,
+                  },
+                ],
+              ],
+            }
+          : undefined;
+      const caption = buildBusinessDataCardCaption(record);
+      memoryLines.push(`پیشنهاد: ${businessDataDeliveryRecordTitle(record)}`);
+
+      const imagePath = record.imagePaths.find((path) =>
+        businessDataImagePathBelongsTo({
+          collectionId: delivery.collectionId,
+          path,
+          userId: connection.user_id,
+        })
+      );
+      const signedUrl = imagePath
+        ? await createBusinessDataImageSignedUrl({
+            admin,
+            path: imagePath,
+            expiresIn: 60 * 60,
+          })
+        : null;
+      let delivered = false;
+      if (signedUrl) {
+        delivered = await telegramPost(token, "sendPhoto", {
+          chat_id: chatId,
+          photo: signedUrl,
+          caption,
+          parse_mode: "HTML",
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+        });
+      }
+      if (!delivered) {
+        delivered = await sendToCustomer({
+          chat_id: chatId,
+          text: caption,
+          parse_mode: "HTML",
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+        });
+      }
+      sent = sent && delivered;
+    }
+
+    return { sent, memoryText: memoryLines.join("\n") };
+  };
+
   // Handle inline button press
   if (update.callback_query) {
     const cq = update.callback_query;
@@ -683,6 +779,145 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
 
     if (data === "flow_end") {
       return NextResponse.json({ ok: true });
+    }
+
+    const buyRecordId = parseBuyCallback(data);
+    if (buyRecordId && cq.from && typeof cq.from.id === "number") {
+      const { data: productRecord, error: productError } = await admin
+        .from("business_data_records")
+        .select("collection_id, values")
+        .eq("id", buyRecordId)
+        .eq("user_id", connection.user_id)
+        .eq("status", "active")
+        .maybeSingle();
+      const collectionId = productRecord?.collection_id;
+      const orderSetting =
+        !productError && typeof collectionId === "string"
+          ? await orderActionForCollection(collectionId)
+          : null;
+      const { data: productCollection } = collectionId
+        ? await admin
+            .from("business_data_collections")
+            .select("kind, access_scope, ai_enabled, status")
+            .eq("id", collectionId)
+            .eq("user_id", connection.user_id)
+            .maybeSingle()
+        : { data: null };
+      const { data: titleField } = collectionId
+        ? await admin
+            .from("business_data_fields")
+            .select("key")
+            .eq("collection_id", collectionId)
+            .eq("user_id", connection.user_id)
+            .eq("semantic_role", "title")
+            .maybeSingle()
+        : { data: null };
+      const titleValue =
+        titleField?.key &&
+        productRecord?.values &&
+        typeof productRecord.values === "object" &&
+        !Array.isArray(productRecord.values)
+          ? (productRecord.values as Record<string, unknown>)[titleField.key]
+          : null;
+      const productAvailable =
+        orderSetting &&
+        productCollection?.kind === "product" &&
+        productCollection.access_scope === "public_catalog" &&
+        productCollection.ai_enabled === true &&
+        productCollection.status === "active" &&
+        typeof titleValue === "string" &&
+        titleValue.trim();
+
+      if (!productAvailable) {
+        const sent = await sendToCustomer({
+          chat_id: chatId,
+          text: "امکان سفارش این محصول در حال حاضر فعال نیست.",
+        });
+        return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+      }
+
+      if (typeof messageId === "number") {
+        void telegramPost(token, "editMessageReplyMarkup", {
+          chat_id: chatId,
+          message_id: messageId,
+          reply_markup: { inline_keyboard: [] },
+        });
+      }
+
+      const orderPrompt = buildProductOrderPrompt({
+        recordId: buyRecordId,
+        imagePaths: [],
+        fields: [
+          {
+            label: "نام محصول",
+            role: "title",
+            type: "text",
+            value: titleValue.trim(),
+          },
+        ],
+      });
+      await sendToCustomer({ chat_id: chatId, text: `🛒 ${orderPrompt}` });
+
+      const { data: aiSettings } = await admin
+        .from("ai_assistant_settings")
+        .select("is_enabled, human_handoff_enabled")
+        .eq("user_id", connection.user_id)
+        .maybeSingle();
+      if (aiSettings?.is_enabled !== true) {
+        const sent = await sendToCustomer({
+          chat_id: chatId,
+          text: "دستیار در حال حاضر خاموش است؛ سفارش شروع نشد.",
+        });
+        return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+      }
+
+      const session = await loadChatSession({
+        connectionId: connection.id,
+        chatId,
+      });
+      const buyReply = await withTelegramTyping({
+        chatId,
+        token,
+        task: () =>
+          generateAssistantReply(orderPrompt, connection.user_id, {
+            channel: "telegram",
+            handoffEnabled: aiSettings.human_handoff_enabled === true,
+            history: session.turns,
+            actionContext: {
+              channel: "telegram",
+              connectionId: connection.id,
+              customerExternalId: String(cq.from!.id),
+              conversationId: String(chatId),
+              deliveryId:
+                typeof update.update_id === "number"
+                  ? `telegram-buy:${update.update_id}`
+                  : `telegram-buy:${cq.id ?? buyRecordId}`,
+              customerUsername: cq.from?.username,
+              customerDisplayName: cq.from?.first_name,
+            },
+          }),
+      });
+      const replyText =
+        buyReply.text ?? "امکان شروع سفارش در حال حاضر نیست؛ کمی بعد دوباره تلاش کنید.";
+      const sent =
+        buyReply.action?.status === "pending_confirmation" &&
+        buyReply.action.executionId &&
+        UUID_RE.test(buyReply.action.executionId)
+          ? await sendActionConfirmationPrompt({
+              chatId,
+              executionId: buyReply.action.executionId,
+              text: replyText,
+            })
+          : await sendAiTextToCustomer(chatId, replyText);
+      await recordChatTurns({
+        connectionId: connection.id,
+        chatId,
+        turns: [
+          { role: "user", text: orderPrompt },
+          { role: "assistant", text: replyText },
+        ],
+      });
+      return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
     }
 
     const actionConfirmation = parseActionConfirmationCallback(data);
@@ -1353,20 +1588,46 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
     return NextResponse.json({ ok: true });
   }
 
-  const sent = aiReply.text
-    ? aiReply.action?.status === "pending_confirmation" &&
-        aiReply.action.executionId &&
-        UUID_RE.test(aiReply.action.executionId)
-      ? await sendActionConfirmationPrompt({
-          chatId,
-          executionId: aiReply.action.executionId,
-          text: aiReply.text,
+  const delivery = aiReply.retrieval?.businessData?.delivery;
+  const shouldSendCards = Boolean(
+    delivery &&
+      delivery.records.length > 0 &&
+      (delivery.collectionKind === "product" ||
+        delivery.records.some((record) => record.imagePaths.length > 0))
+  );
+  const shouldSendAiText =
+    !shouldSendCards || aiReply.retrieval?.intent?.knowledgeNeeded !== false;
+  const textSent = !shouldSendAiText
+    ? true
+    : aiReply.text
+      ? aiReply.action?.status === "pending_confirmation" &&
+          aiReply.action.executionId &&
+          UUID_RE.test(aiReply.action.executionId)
+        ? await sendActionConfirmationPrompt({
+            chatId,
+            executionId: aiReply.action.executionId,
+            text: aiReply.text,
+          })
+        : await sendAiTextToCustomer(chatId, aiReply.text)
+      : false;
+  const cards =
+    shouldSendCards && delivery
+      ? await sendBusinessDataCardsToCustomer({ chatId, delivery })
+      : null;
+  const fallbackAttempted = !textSent && !cards;
+  const fallbackSent =
+    fallbackAttempted
+      ? await sendToCustomer({
+          chat_id: chatId,
+          text: "در حال حاضر امکان پاسخ‌گویی هوشمند نیست؛ کمی بعد دوباره تلاش کنید.",
         })
-      : await sendAiTextToCustomer(chatId, aiReply.text)
-    : await sendToCustomer({
-        chat_id: chatId,
-        text: "در حال حاضر امکان پاسخ‌گویی هوشمند نیست؛ کمی بعد دوباره تلاش کنید.",
-      });
-  await remember(aiReply.text, Boolean(aiReply.retrieval?.privateVerification));
+      : true;
+  const sent =
+    (textSent || cards?.sent === true || (fallbackAttempted && fallbackSent)) &&
+    (cards?.sent ?? true);
+  await remember(
+    shouldSendAiText ? aiReply.text : cards?.memoryText ?? aiReply.text,
+    Boolean(aiReply.retrieval?.privateVerification)
+  );
   return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
 };

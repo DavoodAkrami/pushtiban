@@ -93,6 +93,16 @@ const priceField = (): TemplateFieldInput => ({
   validation: { min: 0, decimalPlaces: 2 },
 });
 
+const imageField = (label = "تصاویر"): TemplateFieldInput => ({
+  key: "images",
+  label,
+  type: "image",
+  role: "image",
+  searchable: false,
+  filterable: false,
+  aiExposure: "answer",
+});
+
 const referenceField = (): TemplateFieldInput => ({
   key: "reference",
   label: "شناسه پیگیری",
@@ -121,6 +131,7 @@ export const BUSINESS_DATA_TEMPLATES: readonly BusinessDataTemplate[] = [
     kind: "product",
     definitions: [
       { key: "name", label: "نام محصول", role: "title", required: true },
+      imageField("تصاویر محصول"),
       { key: "sku", label: "کد محصول", role: "sku", filterable: true },
       priceField(),
       {
@@ -141,6 +152,7 @@ export const BUSINESS_DATA_TEMPLATES: readonly BusinessDataTemplate[] = [
     kind: "service",
     definitions: [
       { key: "name", label: "نام خدمت", role: "title", required: true },
+      imageField("تصاویر خدمت"),
       { key: "description", label: "توضیحات", type: "long_text", role: "description" },
       priceField(),
       {
@@ -160,6 +172,7 @@ export const BUSINESS_DATA_TEMPLATES: readonly BusinessDataTemplate[] = [
     kind: "menu_item",
     definitions: [
       { key: "name", label: "نام آیتم", role: "title", required: true },
+      imageField("تصاویر آیتم"),
       { key: "category", label: "دسته", role: "category", filterable: true },
       { key: "description", label: "توضیحات", type: "long_text", role: "description" },
       priceField(),
@@ -179,6 +192,7 @@ export const BUSINESS_DATA_TEMPLATES: readonly BusinessDataTemplate[] = [
     kind: "plan",
     definitions: [
       { key: "name", label: "نام پلن", role: "title", required: true },
+      imageField("تصاویر پلن"),
       { key: "description", label: "توضیحات", type: "long_text", role: "description" },
       priceField(),
       { key: "billing_period", label: "دوره پرداخت", role: "category", filterable: true },
@@ -198,6 +212,7 @@ export const BUSINESS_DATA_TEMPLATES: readonly BusinessDataTemplate[] = [
     kind: "course",
     definitions: [
       { key: "name", label: "نام دوره", role: "title", required: true },
+      imageField("تصاویر دوره"),
       { key: "description", label: "توضیحات", type: "long_text", role: "description" },
       priceField(),
       { key: "starts_at", label: "زمان شروع", type: "datetime", role: "start_at", filterable: true },
@@ -277,6 +292,7 @@ export const BUSINESS_DATA_TEMPLATES: readonly BusinessDataTemplate[] = [
     kind: "discount",
     definitions: [
       { key: "name", label: "عنوان تخفیف", role: "title", required: true },
+      imageField("تصویر پیشنهاد"),
       { key: "code", label: "کد تخفیف", role: "reference", filterable: true },
       { key: "description", label: "شرایط", type: "long_text", role: "description" },
       { key: "ends_at", label: "پایان اعتبار", type: "datetime", role: "end_at", filterable: true },
@@ -290,6 +306,7 @@ export const BUSINESS_DATA_TEMPLATES: readonly BusinessDataTemplate[] = [
     kind: "branch",
     definitions: [
       { key: "name", label: "نام شعبه", role: "title", required: true },
+      imageField("تصاویر شعبه"),
       { key: "address", label: "نشانی", type: "long_text", role: "location" },
       { key: "hours", label: "ساعت کاری", type: "long_text", role: "description" },
       { key: "active", label: "فعال است", type: "boolean", role: "availability", filterable: true },
@@ -330,6 +347,7 @@ export const BUSINESS_DATA_TEMPLATES: readonly BusinessDataTemplate[] = [
     kind: "teacher",
     definitions: [
       { key: "name", label: "نام مدرس", role: "title", required: true },
+      imageField("تصویر مدرس"),
       { key: "expertise", label: "تخصص", role: "category", filterable: true },
       { key: "bio", label: "معرفی", type: "long_text", role: "description" },
       { key: "profile_url", label: "صفحه مدرس", type: "url", role: "url" },
@@ -342,6 +360,7 @@ export const BUSINESS_DATA_TEMPLATES: readonly BusinessDataTemplate[] = [
     kind: "room",
     definitions: [
       { key: "name", label: "نام اتاق", role: "title", required: true },
+      imageField("تصاویر اتاق"),
       { key: "description", label: "امکانات", type: "long_text", role: "description" },
       priceField(),
       { key: "capacity", label: "ظرفیت", type: "number", role: "quantity", filterable: true, validation: { min: 1, decimalPlaces: 0 } },
@@ -367,6 +386,7 @@ export const BUSINESS_DATA_TEMPLATES: readonly BusinessDataTemplate[] = [
     kind: "package",
     definitions: [
       { key: "name", label: "نام پکیج", role: "title", required: true },
+      imageField("تصاویر پکیج"),
       { key: "description", label: "جزئیات", type: "long_text", role: "description" },
       priceField(),
       { key: "starts_at", label: "شروع", type: "datetime", role: "start_at" },
@@ -423,6 +443,7 @@ export const BUSINESS_DATA_TEMPLATES: readonly BusinessDataTemplate[] = [
     kind: "property",
     definitions: [
       { key: "title", label: "عنوان ملک", role: "title", required: true },
+      imageField("تصاویر ملک"),
       { key: "deal_type", label: "نوع معامله", type: "select", role: "category", filterable: true, validation: { options: ["فروش", "رهن", "اجاره"] } },
       priceField(),
       { key: "location", label: "محدوده", role: "location", filterable: true },

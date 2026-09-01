@@ -18,8 +18,10 @@ const HOLD_OPEN = "\uE000";
 const HOLD_CLOSE = "\uE001";
 const HOLD_RE = new RegExp(`${HOLD_OPEN}(\\d+)${HOLD_CLOSE}`, "g");
 
-const escapeHtml = (value: string) =>
+export const escapeTelegramHtml = (value: string) =>
   value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+const escapeHtml = escapeTelegramHtml;
 
 /** Only these schemes become links — never javascript: or data:. */
 const SAFE_URL_RE = /^(?:https?:\/\/|tg:\/\/|mailto:)/i;

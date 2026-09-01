@@ -154,6 +154,7 @@ export const FIELD_TYPE_LABELS: Record<BusinessDataFieldType, string> = {
   datetime: "تاریخ و زمان",
   select: "انتخاب از فهرست",
   url: "لینک",
+  image: "تصویر",
 };
 
 export const COLLECTION_STATUS_LABELS: Record<

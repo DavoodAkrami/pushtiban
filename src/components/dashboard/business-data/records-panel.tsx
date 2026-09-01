@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
@@ -13,6 +14,8 @@ import {
   RotateCcw,
   Search,
   Trash2,
+  Upload,
+  X,
 } from "lucide-react";
 import { DashboardPageHeader } from "@/components/dashboard/page-header";
 import { useDashboardTitle } from "@/components/dashboard/title-context";
@@ -46,11 +49,29 @@ import type {
   BusinessDataRecordStatus,
   BusinessDataRecordValues,
   BusinessDataScalar,
+  BusinessDataValue,
 } from "@/lib/business-data/types";
+import {
+  BUSINESS_DATA_IMAGE_ACCEPT,
+  BUSINESS_DATA_IMAGE_MIME_TYPES,
+  businessDataImagePreviewUrl,
+} from "@/lib/business-data/image-values";
+import { BUSINESS_DATA_LIMITS } from "@/lib/business-data/limits";
 import { cn, fa } from "@/lib/utils";
 import { useBusinessDataCollection } from "./use-collection";
 
-type RecordDraft = Record<string, string | number | boolean | null>;
+type ImageDraftItem = {
+  id: string;
+  file?: File;
+  path?: string;
+  previewUrl: string;
+};
+
+type RecordDraftValue = BusinessDataScalar | ImageDraftItem[];
+type RecordDraft = Record<string, RecordDraftValue>;
+
+const isImageDraft = (value: RecordDraftValue): value is ImageDraftItem[] =>
+  Array.isArray(value);
 
 const toInputDatetime = (value: string) => {
   const date = new Date(value);
@@ -60,12 +81,26 @@ const toInputDatetime = (value: string) => {
 };
 
 const toDraft = (
+  collectionId: string,
   fields: BusinessDataField[],
   record: BusinessDataRecord | null
 ): RecordDraft =>
   Object.fromEntries(
     fields.map((field) => {
       const value = record?.values[field.key] ?? null;
+      if (field.type === "image") {
+        const paths = Array.isArray(value)
+          ? value.filter((item): item is string => typeof item === "string")
+          : [];
+        return [
+          field.key,
+          paths.map((path) => ({
+            id: path,
+            path,
+            previewUrl: businessDataImagePreviewUrl(collectionId, path),
+          })),
+        ];
+      }
       if (field.type === "datetime" && typeof value === "string") {
         return [field.key, toInputDatetime(value)];
       }
@@ -80,6 +115,16 @@ const normalizedDraft = (
   Object.fromEntries(
     fields.map((field) => {
       const value = draft[field.key];
+      if (field.type === "image") {
+        return [
+          field.key,
+          isImageDraft(value)
+            ? value
+                .map((item) => item.path)
+                .filter((path): path is string => Boolean(path))
+            : [],
+        ];
+      }
       if (value === "" || value === undefined) return [field.key, null];
       if (field.type === "number" || field.type === "currency") {
         return [field.key, typeof value === "number" ? value : Number(value)];
@@ -102,8 +147,12 @@ const formatDateTime = (value: string) => {
   );
 };
 
-const displayValue = (field: BusinessDataField, value: BusinessDataScalar) => {
+const displayValue = (field: BusinessDataField, value: BusinessDataValue) => {
   if (value === null || value === "") return "—";
+  if (field.type === "image") {
+    const count = Array.isArray(value) ? value.length : 0;
+    return count ? `${fa(count)} تصویر` : "—";
+  }
   if (field.type === "boolean") return value ? "بله" : "خیر";
   if (field.type === "currency" && typeof value === "number") {
     return `${fa(new Intl.NumberFormat("fa-IR").format(value))} تومان`;
@@ -118,19 +167,155 @@ const displayValue = (field: BusinessDataField, value: BusinessDataScalar) => {
   return fa(String(value));
 };
 
+const RecordValue = ({
+  collectionId,
+  field,
+  value,
+}: {
+  collectionId: string;
+  field: BusinessDataField;
+  value: BusinessDataValue;
+}) => {
+  if (field.type !== "image" || !Array.isArray(value) || !value.length) {
+    return <>{displayValue(field, value)}</>;
+  }
+  const path = value.find((item): item is string => typeof item === "string");
+  if (!path) return <>—</>;
+  return (
+    <span className="flex items-center gap-2">
+      <span className="relative size-9 shrink-0 overflow-hidden rounded-xl border border-line bg-card">
+        <Image
+          src={businessDataImagePreviewUrl(collectionId, path)}
+          alt=""
+          fill
+          sizes="36px"
+          className="object-cover"
+          unoptimized
+        />
+      </span>
+      <span className="text-xs text-muted">{fa(value.length)} تصویر</span>
+    </span>
+  );
+};
+
 const RecordField = ({
   field,
   value,
   error,
   disabled,
   onChange,
+  onError,
 }: {
   field: BusinessDataField;
-  value: string | number | boolean | null;
+  value: RecordDraftValue;
   error?: string;
   disabled: boolean;
-  onChange: (value: string | number | boolean | null) => void;
+  onChange: (value: RecordDraftValue) => void;
+  onError: (message: string) => void;
 }) => {
+  if (field.type === "image") {
+    const images = isImageDraft(value) ? value : [];
+    const addFiles = (files: File[]) => {
+      const available = BUSINESS_DATA_LIMITS.imagesPerField - images.length;
+      if (available <= 0) {
+        onError(`برای هر رکورد حداکثر ${fa(BUSINESS_DATA_LIMITS.imagesPerField)} تصویر می‌توانید اضافه کنید.`);
+        return;
+      }
+      const accepted: ImageDraftItem[] = [];
+      for (const file of files.slice(0, available)) {
+        if (!(BUSINESS_DATA_IMAGE_MIME_TYPES as readonly string[]).includes(file.type)) {
+          onError("فقط تصویر JPEG، PNG یا WebP انتخاب کنید.");
+          continue;
+        }
+        if (file.size > BUSINESS_DATA_LIMITS.imageBytes) {
+          onError("حجم هر تصویر باید کمتر از ۵ مگابایت باشد.");
+          continue;
+        }
+        accepted.push({
+          id: crypto.randomUUID(),
+          file,
+          previewUrl: URL.createObjectURL(file),
+        });
+      }
+      if (files.length > available) {
+        onError(`برای هر رکورد حداکثر ${fa(BUSINESS_DATA_LIMITS.imagesPerField)} تصویر می‌توانید اضافه کنید.`);
+      }
+      if (accepted.length) onChange([...images, ...accepted]);
+    };
+
+    return (
+      <div>
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <label className="text-sm font-medium" htmlFor={`record-${field.id}`}>
+            {field.label}{field.required ? " *" : ""}
+          </label>
+          <span className="text-xs text-muted">
+            {fa(images.length)} از {fa(BUSINESS_DATA_LIMITS.imagesPerField)}
+          </span>
+        </div>
+        <label
+          htmlFor={`record-${field.id}`}
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={(event) => {
+            event.preventDefault();
+            if (!disabled) addFiles(Array.from(event.dataTransfer.files));
+          }}
+          className={cn(
+            "flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-line bg-surface/25 px-4 py-5 text-center transition-colors hover:border-accent/40 hover:bg-accent/5 focus-within:ring-2 focus-within:ring-accent/60",
+            disabled && "pointer-events-none opacity-60"
+          )}
+        >
+          <span className="flex size-10 items-center justify-center rounded-2xl bg-accent/10 text-accent">
+            <Upload className="size-4" aria-hidden />
+          </span>
+          <span className="mt-2 text-sm font-medium">تصویر را بکشید یا انتخاب کنید</span>
+          <span className="mt-1 text-xs text-muted">JPEG، PNG یا WebP · حداکثر ۵ مگابایت</span>
+          <input
+            id={`record-${field.id}`}
+            type="file"
+            accept={BUSINESS_DATA_IMAGE_ACCEPT}
+            multiple
+            className="sr-only"
+            disabled={disabled || images.length >= BUSINESS_DATA_LIMITS.imagesPerField}
+            onChange={(event) => {
+              addFiles(Array.from(event.target.files ?? []));
+              event.target.value = "";
+            }}
+          />
+        </label>
+        {field.description && <p className="mt-2 text-xs leading-6 text-muted">{field.description}</p>}
+        {error && <p className="mt-2 text-xs text-danger">{error}</p>}
+        {images.length > 0 && (
+          <ul className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-5">
+            {images.map((image, index) => (
+              <li key={image.id} className="group relative aspect-square overflow-hidden rounded-2xl border border-line bg-card">
+                <Image
+                  src={image.previewUrl}
+                  alt={`تصویر ${fa(index + 1)} از ${field.label}`}
+                  fill
+                  sizes="(max-width: 640px) 30vw, 110px"
+                  className="object-cover"
+                  unoptimized
+                />
+                <button
+                  type="button"
+                  aria-label={`حذف تصویر ${fa(index + 1)}`}
+                  disabled={disabled}
+                  onClick={() => {
+                    if (image.file) URL.revokeObjectURL(image.previewUrl);
+                    onChange(images.filter((item) => item.id !== image.id));
+                  }}
+                  className="absolute end-1.5 top-1.5 flex size-7 items-center justify-center rounded-full bg-background/85 text-foreground shadow-sm backdrop-blur transition-colors hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+                >
+                  <X className="size-3.5" aria-hidden />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
   if (field.type === "long_text") {
     return (
       <Textarea
@@ -198,7 +383,9 @@ const RecordField = ({
       hint={field.description}
       error={error}
       required={field.required}
-      value={typeof value === "boolean" || value === null ? "" : value}
+      value={
+        typeof value === "string" || typeof value === "number" ? value : ""
+      }
       onChange={(event) => onChange(event.target.value)}
       disabled={disabled}
       min={field.validation?.min}
@@ -234,7 +421,7 @@ const RecordEditorModal = ({
 }) => {
   const { toast } = useToast();
   const [draft, setDraft] = React.useState<RecordDraft>(() =>
-    toDraft(fields, record)
+    toDraft(collectionId, fields, record)
   );
   const [errors, setErrors] = React.useState<Record<string, string>>({});
   const [saving, setSaving] = React.useState(false);
@@ -244,7 +431,13 @@ const RecordEditorModal = ({
     const nextErrors: Record<string, string> = {};
     for (const field of fields) {
       const value = draft[field.key];
-      if (field.required && (value === null || value === "" || value === undefined)) {
+      if (
+        field.required &&
+        (value === null ||
+          value === "" ||
+          value === undefined ||
+          (field.type === "image" && (!isImageDraft(value) || value.length === 0)))
+      ) {
         nextErrors[field.key] = "این فیلد الزامی است.";
       }
       if (
@@ -261,12 +454,39 @@ const RecordEditorModal = ({
       return;
     }
     setSaving(true);
+    const uploadedPaths: string[] = [];
     try {
+      const resolvedDraft: RecordDraft = { ...draft };
+      for (const field of fields.filter((item) => item.type === "image")) {
+        const draftValue = draft[field.key];
+        const images = isImageDraft(draftValue) ? draftValue : [];
+        const resolvedImages: ImageDraftItem[] = [];
+        for (const image of images) {
+          if (image.path) {
+            resolvedImages.push(image);
+            continue;
+          }
+          if (!image.file) continue;
+          const form = new FormData();
+          form.set("file", image.file);
+          const response = await fetch(
+            `/api/business-data/collections/${collectionId}/images`,
+            { method: "POST", body: form }
+          );
+          const payload = (await response.json()) as { path?: string; error?: string };
+          if (!response.ok || !payload.path) {
+            throw new Error(payload.error || "بارگذاری تصویر انجام نشد.");
+          }
+          uploadedPaths.push(payload.path);
+          resolvedImages.push({ ...image, path: payload.path });
+        }
+        resolvedDraft[field.key] = resolvedImages;
+      }
       const base = `/api/business-data/collections/${collectionId}/records`;
       await businessDataRequest(
         record ? `${base}/${record.id}` : base,
         jsonRequest(record ? "PATCH" : "POST", {
-          values: normalizedDraft(fields, draft),
+          values: normalizedDraft(fields, resolvedDraft),
         })
       );
       toast({
@@ -276,6 +496,15 @@ const RecordEditorModal = ({
       onOpenChange(false);
       onSaved();
     } catch (caught) {
+      await Promise.allSettled(
+        uploadedPaths.map((path) =>
+          fetch(`/api/business-data/collections/${collectionId}/images`, {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path }),
+          })
+        )
+      );
       toast({
         title: "ذخیره رکورد انجام نشد",
         description: caught instanceof Error ? caught.message : undefined,
@@ -308,6 +537,9 @@ const RecordEditorModal = ({
                 value={draft[field.key] ?? null}
                 error={errors[field.key]}
                 disabled={saving}
+                onError={(message) =>
+                  setErrors((current) => ({ ...current, [field.key]: message }))
+                }
                 onChange={(value) => {
                   setDraft((current) => ({ ...current, [field.key]: value }));
                   setErrors((current) => ({ ...current, [field.key]: "" }));
@@ -603,7 +835,11 @@ export const BusinessDataRecordsPanel = ({ collectionId }: { collectionId: strin
                       >
                         {visibleFields.map((field) => (
                           <td key={field.id} className={cn("max-w-56 truncate px-4 py-3", field.id === titleField.id && "font-medium")} title={displayValue(field, record.values[field.key] ?? null)}>
-                            {displayValue(field, record.values[field.key] ?? null)}
+                            <RecordValue
+                              collectionId={collectionId}
+                              field={field}
+                              value={record.values[field.key] ?? null}
+                            />
                           </td>
                         ))}
                         <td className="px-4 py-3"><Badge variant={record.status === "active" ? "success" : "muted"}>{RECORD_STATUS_LABELS[record.status]}</Badge></td>
@@ -630,7 +866,7 @@ export const BusinessDataRecordsPanel = ({ collectionId }: { collectionId: strin
                     <p className="truncate text-sm font-bold">{displayValue(titleField, record.values[titleField.key] ?? null)}</p>
                     <dl className="mt-3 space-y-2">
                       {visibleFields.slice(1).map((field) => (
-                        <div key={field.id} className="flex gap-3 text-xs"><dt className="w-24 shrink-0 text-muted">{field.label}</dt><dd className="min-w-0 flex-1 truncate">{displayValue(field, record.values[field.key] ?? null)}</dd></div>
+                        <div key={field.id} className="flex gap-3 text-xs"><dt className="w-24 shrink-0 text-muted">{field.label}</dt><dd className="min-w-0 flex-1 truncate"><RecordValue collectionId={collectionId} field={field} value={record.values[field.key] ?? null} /></dd></div>
                       ))}
                     </dl>
                   </div>

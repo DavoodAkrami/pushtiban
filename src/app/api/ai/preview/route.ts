@@ -118,6 +118,17 @@ export const POST = async (request: NextRequest) => {
     handoffEnabled,
     history: parseHistory(body.history),
   });
+  const retrieval = result.retrieval
+    ? {
+        ...result.retrieval,
+        businessData: result.retrieval.businessData
+          ? { ...result.retrieval.businessData, delivery: undefined }
+          : null,
+        privateBusinessData: result.retrieval.privateBusinessData
+          ? { ...result.retrieval.privateBusinessData, delivery: undefined }
+          : null,
+      }
+    : null;
 
   // The platform kill switch and the monthly caps both return a null text
   // without throwing, exactly as they do for a real customer.
@@ -140,6 +151,6 @@ export const POST = async (request: NextRequest) => {
     text: result.text,
     needsHuman: result.needsHuman,
     handoffEnabled,
-    retrieval: result.retrieval ?? null,
+    retrieval,
   });
 };

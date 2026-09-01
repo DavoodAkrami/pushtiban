@@ -46,6 +46,7 @@ import {
 import { businessDataRequest, jsonRequest } from "@/lib/business-data/client";
 import type {
   BusinessDataAccessScope,
+  BusinessDataRecordValues,
 } from "@/lib/business-data/types";
 import { selectAiAnswerValues } from "@/lib/business-data/validation";
 import { fa } from "@/lib/utils";
@@ -79,7 +80,7 @@ const AssistantVisibilityModal = ({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) => {
-  const [sample, setSample] = React.useState<Record<string, string | number | boolean | null> | null>(null);
+  const [sample, setSample] = React.useState<BusinessDataRecordValues | null>(null);
   const [loading, setLoading] = React.useState(
     open &&
       collection.accessScope === "public_catalog" &&
@@ -187,7 +188,11 @@ const AssistantVisibilityModal = ({
               <dl className="mt-3 grid gap-2 rounded-2xl border border-line bg-surface/25 p-4 text-sm sm:grid-cols-2">
                 {Object.entries(sample).map(([key, value]) => {
                   const field = collection.fields.find((item) => item.key === key);
-                  return <div key={key} className="min-w-0"><dt className="text-xs text-muted">{field?.label ?? "فیلد"}</dt><dd className="mt-1 truncate">{fa(String(value ?? "—"))}</dd></div>;
+                  const display =
+                    field?.type === "image" && Array.isArray(value)
+                      ? `${fa(value.length)} تصویر`
+                      : fa(String(value ?? "—"));
+                  return <div key={key} className="min-w-0"><dt className="text-xs text-muted">{field?.label ?? "فیلد"}</dt><dd className="mt-1 truncate">{display}</dd></div>;
                 })}
               </dl>
             ) : (
