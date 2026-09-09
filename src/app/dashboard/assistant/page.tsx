@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Bot, Waypoints } from "lucide-react";
+import { Bot, MessageSquareText } from "lucide-react";
 import { AssistantPanel } from "@/components/dashboard/assistant-panel";
 import { DashboardPageHeader } from "@/components/dashboard/page-header";
 import { buttonVariants } from "@/components/ui/button-variants";
@@ -145,15 +145,15 @@ const AssistantPage = async () => {
     <>
       <DashboardPageHeader
         icon={Bot}
-        title="وضعیت و رفتار"
-        description="دستیار آخرین حلقهٔ پاسخ‌گویی است: هر پیامی که فلوها و کلیدواژه‌ها جواب ندهند به او می‌رسد."
+        title="نمای کلی دستیار"
+        description="از اینجا وضعیت واقعی پاسخ‌گویی، کانال‌های فعال و مسیر رسیدن پیام مشتری به دستیار را کنترل کنید."
         action={
           <Link
-            href="/how-ai-feed-data"
-            className={buttonVariants({ variant: "outline", size: "sm" })}
+            href="/dashboard/assistant/test"
+            className={buttonVariants({ size: "sm" })}
           >
-            <Waypoints className="size-4" aria-hidden />
-            ببینید دستیار چه می‌خواند
+            <MessageSquareText className="size-4" aria-hidden />
+            آزمایش پاسخ
           </Link>
         }
       />

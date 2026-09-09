@@ -11,6 +11,7 @@ import {
   Link2,
   MessageSquareText,
   Send,
+  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Store,
@@ -296,10 +297,17 @@ export const DASHBOARD_ROUTES: DashboardRoute[] = [
 
   {
     href: "/dashboard/assistant",
-    title: "وضعیت و رفتار",
+    title: "نمای کلی دستیار",
     section: ASSISTANT,
     icon: ToggleRight,
-    keywords: ["هوش مصنوعی", "روشن", "خاموش", "پیش‌نمایش", "ai", "preview"],
+    keywords: ["هوش مصنوعی", "روشن", "خاموش", "وضعیت", "ai", "status"],
+  },
+  {
+    href: "/dashboard/assistant/test",
+    title: "آزمایش پاسخ",
+    section: ASSISTANT,
+    icon: MessageSquareText,
+    keywords: ["آزمایش", "پیش‌نمایش", "گفتگو", "test", "preview", "chat"],
   },
   {
     href: "/dashboard/assistant/persona",
@@ -307,6 +315,13 @@ export const DASHBOARD_ROUTES: DashboardRoute[] = [
     section: ASSISTANT,
     icon: Wand2,
     keywords: ["پرسونا", "لحن", "معرفی", "دستورالعمل", "persona", "tone"],
+  },
+  {
+    href: "/dashboard/assistant/actions",
+    title: "اقدامات هوش مصنوعی",
+    section: ASSISTANT,
+    icon: ShieldCheck,
+    keywords: ["اقدام", "سفارش", "رزرو", "تأیید", "action", "order"],
   },
 
   {

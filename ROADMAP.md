@@ -160,6 +160,11 @@ How to use:
       through the Telegram HTML converter. Shows the retrieval inspector per
       answer and states that a test message costs a real message. The old
       unauthenticated /ai/rag-test now redirects here
+- [x] Redesign the assistant dashboard as a task-oriented control center:
+      make response testing a first-class routed tab, summarize operational
+      readiness on the overview, connect persona changes to testing, group
+      Actions by readiness, and progressively disclose technical retrieval and
+      configuration details
 - [x] RAG retrieval layer (pgvector in Supabase) with an in-app "search
       knowledge" tool: embeddings via OpenAI/Metis, HNSW cosine similarity,
       and a `/ai/rag-test` inspector page showing the chunks the AI fetched

@@ -6,17 +6,19 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   ArrowLeft,
   Bot,
+  CircleAlert,
+  CircleCheck,
   GitBranch,
   Inbox,
   MessageSquareText,
   Send,
   Sparkles,
   Users,
+  Waypoints,
   type LucideIcon,
 } from "lucide-react";
 import { TbBrandInstagram } from "react-icons/tb";
 import { luxe } from "@/components/motion/reveal";
-import { AssistantPreviewPane } from "@/components/dashboard/assistant/preview-pane";
 import {
   ReplyPipeline,
   stageCountHint,
@@ -24,6 +26,7 @@ import {
 } from "@/components/dashboard/reply-pipeline";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button-variants";
 import { Switch } from "@/components/ui/checkbox";
 import { Icon, type AppIcon } from "@/components/ui/icon";
 import { useToast } from "@/components/ui/toast";
@@ -272,6 +275,42 @@ export const AssistantPanel = ({
     },
   ];
 
+  const activeChannelLabels = [
+    telegramConnected && telegramEnabled ? "تلگرام" : null,
+    instagramConnected && instagramEnabled ? "اینستاگرام" : null,
+  ].filter((label): label is string => Boolean(label));
+  const hasConnectedChannel = telegramConnected || instagramConnected;
+  const operational =
+    enabled &&
+    providerConfigured &&
+    channelSwitchesReady &&
+    activeChannelLabels.length > 0 &&
+    !setupRequired &&
+    !loadError;
+
+  let readinessTitle = "دستیار آمادهٔ پاسخ‌گویی است";
+  let readinessDescription = `پیام‌های بی‌پاسخ در ${activeChannelLabels.join(" و ")} به دستیار می‌رسند.`;
+
+  if (setupRequired || loadError) {
+    readinessTitle = "وضعیت دستیار نیاز به بررسی دارد";
+    readinessDescription = "تنظیمات از پایگاه داده خوانده نشد؛ هشدارهای زیر را برطرف کنید.";
+  } else if (!providerConfigured) {
+    readinessTitle = "ارائه‌دهندهٔ هوش مصنوعی آماده نیست";
+    readinessDescription = "تا وقتی کلید ارائه‌دهنده روی سرور تنظیم نشود، دستیار نمی‌تواند پاسخ بدهد.";
+  } else if (!enabled) {
+    readinessTitle = "دستیار خاموش است";
+    readinessDescription = "فلوها و پیام‌های آماده کار می‌کنند، اما پیام باقی‌مانده به هوش مصنوعی فرستاده نمی‌شود.";
+  } else if (!hasConnectedChannel) {
+    readinessTitle = "هنوز کانالی به دستیار متصل نیست";
+    readinessDescription = "یک کانال را وصل کنید تا دستیار جایی برای پاسخ‌گویی داشته باشد.";
+  } else if (!channelSwitchesReady) {
+    readinessTitle = "تنظیمات کانال‌ها کامل نشده است";
+    readinessDescription = "دستیار روشن است، اما وضعیت پاسخ‌گویی هر کانال قابل تأیید نیست.";
+  } else if (activeChannelLabels.length === 0) {
+    readinessTitle = "پاسخ‌گویی در همهٔ کانال‌ها خاموش است";
+    readinessDescription = "حداقل یک کانال متصل را روشن کنید تا پیام‌ها به دستیار برسند.";
+  }
+
   return (
     <div className="space-y-4">
       {setupRequired && (
@@ -296,7 +335,67 @@ export const AssistantPanel = ({
         />
       )}
 
-      <ReplyPipeline stages={pipelineStages} loading={false} />
+      <section
+        aria-labelledby="assistant-readiness-title"
+        aria-live="polite"
+        className={cn(
+          "rounded-3xl border bg-surface/40 p-5 sm:p-6",
+          operational ? "border-success/30" : "border-warning/30"
+        )}
+      >
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex min-w-0 items-start gap-4">
+            <Icon
+              icon={operational ? CircleCheck : CircleAlert}
+              tile
+              size="md"
+              tone={operational ? "success" : "warning"}
+              className="shrink-0"
+            />
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 id="assistant-readiness-title" className="font-bold">
+                  {readinessTitle}
+                </h2>
+                <Badge variant={operational ? "success" : "warning"} dot>
+                  {operational ? "آماده" : "نیازمند توجه"}
+                </Badge>
+              </div>
+              <p className="mt-2 max-w-2xl text-sm leading-7 text-muted">
+                {readinessDescription}
+              </p>
+            </div>
+          </div>
+          <Link
+            href="/how-ai-feed-data"
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            <Waypoints className="size-4" aria-hidden />
+            دستیار چه می‌خواند؟
+          </Link>
+        </div>
+
+        <dl className="mt-5 grid gap-2 sm:grid-cols-3">
+          <div className="rounded-2xl border border-line bg-background/35 px-4 py-3">
+            <dt className="text-xs text-muted">پاسخ‌گویی هوشمند</dt>
+            <dd className="mt-1 text-sm font-bold">{enabled ? "روشن" : "خاموش"}</dd>
+          </div>
+          <div className="rounded-2xl border border-line bg-background/35 px-4 py-3">
+            <dt className="text-xs text-muted">کانال فعال</dt>
+            <dd className="mt-1 text-sm font-bold">
+              {activeChannelLabels.length > 0
+                ? activeChannelLabels.join(" و ")
+                : "هیچ‌کدام"}
+            </dd>
+          </div>
+          <div className="rounded-2xl border border-line bg-background/35 px-4 py-3">
+            <dt className="text-xs text-muted">ارجاع به انسان</dt>
+            <dd className="mt-1 text-sm font-bold">
+              {humanHandoff ? "روشن" : "خاموش"}
+            </dd>
+          </div>
+        </dl>
+      </section>
 
       <ToggleCard
         icon={Bot}
@@ -411,7 +510,9 @@ export const AssistantPanel = ({
         )}
       </AnimatePresence>
 
-      <AssistantPreviewPane enabled={enabled} />
+      <div className="pt-2">
+        <ReplyPipeline stages={pipelineStages} loading={false} />
+      </div>
     </div>
   );
 };

@@ -1,12 +1,14 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   Building2,
   Check,
   Heart,
   List,
+  MessageSquareText,
   Smile,
   Sparkles,
   Wand2,
@@ -17,6 +19,7 @@ import { luxe } from "@/components/motion/reveal";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button-variants";
 import { Icon } from "@/components/ui/icon";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
@@ -170,6 +173,15 @@ export const AiPersonaPanel = ({
         title="شخصیت و لحن دستیار"
         description="به دستیار بگویید کسب‌وکار شما چیست و چطور باید حرف بزند؛ این تنظیمات در همهٔ پاسخ‌ها — به‌ویژه معرفی کسب‌وکار — به کار می‌رود."
         icon={Wand2}
+        action={
+          <Link
+            href="/dashboard/assistant/test"
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            <MessageSquareText className="size-4" aria-hidden />
+            آزمایش پاسخ
+          </Link>
+        }
       />
 
       <div className="space-y-4">

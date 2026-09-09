@@ -34,7 +34,37 @@ type PreviewBody = {
 
 const hasValidOrigin = (request: NextRequest) => {
   const origin = request.headers.get("origin");
-  return !origin || origin === new URL(request.url).origin;
+  if (!origin) return true;
+
+  let originUrl: URL;
+  try {
+    originUrl = new URL(origin);
+  } catch {
+    return false;
+  }
+
+  const requestUrl = new URL(request.url);
+  const requestHost = request.headers.get("host");
+  const forwardedHost = request.headers
+    .get("x-forwarded-host")
+    ?.split(",")[0]
+    .trim();
+  const forwardedProto = request.headers
+    .get("x-forwarded-proto")
+    ?.split(",")[0]
+    .trim();
+
+  // Next can build request.url from an internal host while the browser uses
+  // the public host. Keep the CSRF check strict by allowing only the request
+  // host or its trusted proxy equivalent, with the matching protocol.
+  const allowedOrigins = new Set([
+    requestUrl.origin,
+    requestHost && `${requestUrl.protocol}//${requestHost}`,
+    forwardedHost &&
+      `${forwardedProto || requestUrl.protocol}//${forwardedHost}`,
+  ].filter((value): value is string => Boolean(value)));
+
+  return allowedOrigins.has(originUrl.origin);
 };
 
 /** Coerce client-held turns into the shape the generator expects. */

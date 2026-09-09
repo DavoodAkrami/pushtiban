@@ -76,13 +76,16 @@ export const ReplyPipeline = ({
       پاسخش را بدهد؛ مرحله‌های خاموش نادیده گرفته می‌شوند.
     </p>
 
-    <ol className="mt-5 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+    <ol className="-mx-1 mt-4 flex snap-x gap-2 overflow-x-auto px-1 pb-2 lg:mx-0 lg:grid lg:grid-cols-5 lg:overflow-visible lg:px-0 lg:pb-0">
       {stages.map((stage, index) => (
-        <li key={stage.href} className="flex min-w-0 flex-1 items-center gap-2">
+        <li
+          key={stage.href}
+          className="flex min-w-[10rem] snap-start items-center gap-2 lg:min-w-0"
+        >
           <Stage stage={stage} loading={loading} />
           {index < stages.length - 1 && (
             <ChevronLeft
-              className="hidden size-4 shrink-0 text-muted lg:block"
+              className="size-4 shrink-0 text-muted"
               aria-hidden
             />
           )}

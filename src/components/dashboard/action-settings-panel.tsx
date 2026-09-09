@@ -20,7 +20,7 @@ import { Icon } from "@/components/ui/icon";
 import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { useToast } from "@/components/ui/toast";
-import { cn } from "@/lib/utils";
+import { cn, fa } from "@/lib/utils";
 
 type ActionSettingsItem = {
   key: string;
@@ -187,6 +187,35 @@ export const ActionSettingsPanel = () => {
     }
   };
 
+  const groupedActions = actions
+    ? [
+        {
+          key: "enabled",
+          title: "فعال",
+          description: "این اقدام‌ها اکنون می‌توانند در گفتگوی مشتری اجرا شوند.",
+          items: actions.filter((action) => action.enabled),
+        },
+        {
+          key: "ready",
+          title: "آمادهٔ فعال‌سازی",
+          description:
+            "پیش‌نیازها کامل‌اند؛ هر زمان بخواهید می‌توانید آن‌ها را روشن کنید.",
+          items: actions.filter(
+            (action) => !action.enabled && action.capabilityAvailable
+          ),
+        },
+        {
+          key: "setup",
+          title: "نیازمند راه‌اندازی",
+          description:
+            "ابتدا داده یا تأیید هویت لازم را کامل کنید، سپس اقدام را روشن کنید.",
+          items: actions.filter(
+            (action) => !action.enabled && !action.capabilityAvailable
+          ),
+        },
+      ]
+    : [];
+
   return (
     <div className="space-y-4">
       <section className="rounded-3xl border border-line bg-surface/25 p-5 sm:p-6">
@@ -195,9 +224,25 @@ export const ActionSettingsPanel = () => {
           <div className="min-w-0 flex-1">
             <h2 className="font-bold">کنترل اقدامات</h2>
             <p className="mt-2 max-w-2xl text-sm leading-7 text-muted">
-              فقط اقدام‌های ثبت‌شده در پشتیبان اینجا دیده می‌شوند. شما می‌توانید
-              آن‌ها را محدودتر کنید، اما نمی‌توانید لایه‌های امنیتی الزامی را کم کنید.
+              هر اقدام فقط پس از تکمیل داده و کنترل‌های امنیتی خودش قابل فعال‌شدن
+              است. جزئیات را فقط وقتی نیاز دارید باز کنید.
             </p>
+            {actions && (
+              <div
+                className="mt-4 flex flex-wrap gap-2"
+                aria-label="خلاصه وضعیت اقدامات"
+              >
+                <Badge variant="success" dot>
+                  {fa(groupedActions[0].items.length)} فعال
+                </Badge>
+                <Badge variant="muted" dot>
+                  {fa(groupedActions[1].items.length)} آماده
+                </Badge>
+                <Badge variant="warning" dot>
+                  {fa(groupedActions[2].items.length)} نیازمند راه‌اندازی
+                </Badge>
+              </div>
+            )}
           </div>
         </div>
       </section>
@@ -210,28 +255,62 @@ export const ActionSettingsPanel = () => {
         />
       )}
       {error && (
-        <Alert variant="error" title="تنظیمات اقدامات در دسترس نیست" description={error} />
+        <Alert
+          variant="error"
+          title="تنظیمات اقدامات در دسترس نیست"
+          description={error}
+        />
       )}
 
       {actions === null && !error ? (
-        <div className="flex justify-center py-10" role="status" aria-label="در حال بارگذاری">
+        <div
+          className="flex justify-center py-10"
+          role="status"
+          aria-label="در حال بارگذاری"
+        >
           <Spinner />
         </div>
       ) : (
-        actions?.map((action) => (
-          <ActionCard
-            key={action.key}
-            action={action}
-            saving={savingKey === action.key}
-            disabled={Boolean(error) || setupRequired}
-            reduce={reduce}
-            catalog={catalog}
-            configurationSpec={configurationSpecs[action.key]}
-            onChange={(next, configuration) =>
-              void save(action, next, configuration)
-            }
-          />
-        ))
+        <div className="space-y-8">
+          {groupedActions
+            .filter((group) => group.items.length > 0)
+            .map((group) => (
+              <section
+                key={group.key}
+                aria-labelledby={`action-group-${group.key}`}
+              >
+                <div className="mb-3 flex flex-wrap items-end justify-between gap-2 px-1">
+                  <div>
+                    <h2 id={`action-group-${group.key}`} className="font-bold">
+                      {group.title}
+                    </h2>
+                    <p className="mt-1 text-xs leading-6 text-muted">
+                      {group.description}
+                    </p>
+                  </div>
+                  <Badge variant={group.key === "setup" ? "warning" : "muted"}>
+                    {fa(group.items.length)} اقدام
+                  </Badge>
+                </div>
+                <div className="space-y-3">
+                  {group.items.map((action) => (
+                    <ActionCard
+                      key={action.key}
+                      action={action}
+                      saving={savingKey === action.key}
+                      disabled={Boolean(error) || setupRequired}
+                      reduce={reduce}
+                      catalog={catalog}
+                      configurationSpec={configurationSpecs[action.key]}
+                      onChange={(next, configuration) =>
+                        void save(action, next, configuration)
+                      }
+                    />
+                  ))}
+                </div>
+              </section>
+            ))}
+        </div>
       )}
     </div>
   );
@@ -297,7 +376,9 @@ const ActionCard = ({
         />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 id={titleId} className="font-bold">{action.name}</h2>
+            <h2 id={titleId} className="font-bold">
+              {action.name}
+            </h2>
             <Badge
               variant={
                 action.enabled
@@ -324,71 +405,97 @@ const ActionCard = ({
           }
           aria-label={`${action.enabled ? "غیرفعال کردن" : "فعال کردن"} ${action.name}`}
           aria-busy={saving}
-          onChange={(event) => onChange({ ...action, enabled: event.target.checked })}
+          onChange={(event) =>
+            onChange({ ...action, enabled: event.target.checked })
+          }
         />
       </div>
 
-      <div className="mt-5 grid gap-3 border-t border-line pt-4 sm:grid-cols-2">
-        <SecurityRule
-          icon={UserCheck}
-          label="تأیید هویت مشتری"
-          value={
-            action.registryRequiresVerification
-              ? "الزامی از طرف سامانه"
-              : "برای این اقدام لازم نیست"
-          }
-        />
-        <SecurityRule
-          icon={Check}
-          label="تأیید نهایی مشتری"
-          value={confirmationState}
-          control={
-            !confirmationIsLocked ? (
-              <Switch
-                checked={action.requireConfirmation}
-                disabled={disabled || saving || !action.enabled}
-                aria-label={`الزام تأیید نهایی برای ${action.name}`}
-                onChange={(event) =>
-                  onChange({ ...action, requireConfirmation: event.target.checked })
+      <Accordion type="single" collapsible className="mt-4">
+        <AccordionItem
+          value={`details-${action.key}`}
+          className="rounded-2xl border border-line bg-background/35 px-4"
+        >
+          <AccordionTrigger className="py-3 text-sm">
+            {action.configurationRequired
+              ? "راه‌اندازی و کنترل‌های امنیتی"
+              : "کنترل‌های امنیتی"}
+          </AccordionTrigger>
+          <AccordionContent className="pb-1">
+            <div className="grid gap-3 border-t border-line pt-4 sm:grid-cols-2">
+              <SecurityRule
+                icon={UserCheck}
+                label="تأیید هویت مشتری"
+                value={
+                  action.registryRequiresVerification
+                    ? "الزامی از طرف سامانه"
+                    : "برای این اقدام لازم نیست"
                 }
               />
-            ) : undefined
-          }
-        />
-      </div>
-
-      {!action.capabilityAvailable &&
-        action.prerequisite &&
-        action.prerequisite.datasetRequirements.length > 0 && (
-          <div className="mt-5 rounded-2xl border border-warning/20 bg-warning/10 p-4">
-            <p className="text-sm font-bold text-warning">{action.prerequisite.message}</p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {action.prerequisite.datasetRequirements.map((requirement) => (
-                <Link
-                  key={requirement.label}
-                  href={requirement.cta.href}
-                  className={buttonVariants({ variant: "outline", size: "sm" })}
-                >
-                  {requirement.cta.label}
-                  <ArrowUpLeft className="size-4" aria-hidden />
-                </Link>
-              ))}
+              <SecurityRule
+                icon={Check}
+                label="تأیید نهایی مشتری"
+                value={confirmationState}
+                control={
+                  !confirmationIsLocked ? (
+                    <Switch
+                      checked={action.requireConfirmation}
+                      disabled={disabled || saving || !action.enabled}
+                      aria-label={`الزام تأیید نهایی برای ${action.name}`}
+                      onChange={(event) =>
+                        onChange({
+                          ...action,
+                          requireConfirmation: event.target.checked,
+                        })
+                      }
+                    />
+                  ) : undefined
+                }
+              />
             </div>
-          </div>
-        )}
 
-      {action.configurationRequired && configurationSpec && (
-        <ActionConfigurationEditor
-          key={`${action.key}:${JSON.stringify(action.configuration)}`}
-          action={action}
-          catalog={catalog}
-          configurationSpec={configurationSpec}
-          prerequisite={action.prerequisite}
-          disabled={disabled || saving}
-          saving={saving}
-          onSave={(configuration) => onChange(action, configuration)}
-        />
-      )}
+            {!action.capabilityAvailable &&
+              action.prerequisite &&
+              action.prerequisite.datasetRequirements.length > 0 && (
+                <div className="mt-5 rounded-2xl border border-warning/20 bg-warning/10 p-4">
+                  <p className="text-sm font-bold text-warning">
+                    {action.prerequisite.message}
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {action.prerequisite.datasetRequirements.map(
+                      (requirement) => (
+                        <Link
+                          key={requirement.label}
+                          href={requirement.cta.href}
+                          className={buttonVariants({
+                            variant: "outline",
+                            size: "sm",
+                          })}
+                        >
+                          {requirement.cta.label}
+                          <ArrowUpLeft className="size-4" aria-hidden />
+                        </Link>
+                      )
+                    )}
+                  </div>
+                </div>
+              )}
+
+            {action.configurationRequired && configurationSpec && (
+              <ActionConfigurationEditor
+                key={`${action.key}:${JSON.stringify(action.configuration)}`}
+                action={action}
+                catalog={catalog}
+                configurationSpec={configurationSpec}
+                prerequisite={action.prerequisite}
+                disabled={disabled || saving}
+                saving={saving}
+                onSave={(configuration) => onChange(action, configuration)}
+              />
+            )}
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
     </section>
   );
 };

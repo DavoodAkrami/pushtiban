@@ -69,6 +69,7 @@ export const RagInspector = ({
 }: RagInspectorProps) => {
   const [expanded, setExpanded] = React.useState(false);
   const reduce = useReducedMotion() ?? false;
+  const contentId = React.useId();
 
   const embeddingsNotice = embeddingsUnavailable ? (
     <div className="mb-3 rounded-2xl border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
@@ -88,20 +89,15 @@ export const RagInspector = ({
       <>
         {embeddingsNotice}
         <div className="mb-3 rounded-2xl border border-line bg-background/40 p-3 text-xs text-muted">
-        <span className="flex flex-wrap items-center gap-2">
-          <Database className="size-3.5 text-accent" />
-          داده‌ای بازیابی نشد
-          {intent && intent.category !== "general" && (
-            <Badge variant="accent" className="text-[10px]">
-              {intent.category} · {fa(intent.confidence.toFixed(2))}
-            </Badge>
-          )}
+          <span className="flex items-center gap-2">
+            <Database className="size-3.5 text-accent" aria-hidden />
+            منبع مرتبطی برای این پاسخ پیدا نشد
+          </span>
           {intent?.searchQuery && (
-            <Badge variant="default" className="text-[10px]" dir="rtl">
-              جستجو: {intent.searchQuery}
-            </Badge>
+            <span className="mt-1.5 block text-[10px]">
+              عبارت بررسی‌شده: {intent.searchQuery}
+            </span>
           )}
-        </span>
         </div>
       </>
     );
@@ -116,27 +112,25 @@ export const RagInspector = ({
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        aria-controls={contentId}
         className="flex w-full items-center justify-between text-start text-xs font-bold text-muted"
       >
         <span className="flex items-center gap-2">
-          <Database className="size-3.5 text-accent" />
-          داده‌های بازیابی‌شده ({fa(totalItems)})
-          {intent && intent.category !== "general" && (
-            <Badge variant="accent" className="text-[10px]">
-              {intent.category} · {fa(intent.confidence.toFixed(2))}
-            </Badge>
-          )}
-          {intent?.searchQuery && (
-            <Badge variant="default" className="text-[10px]" dir="rtl">
-              جستجو: {intent.searchQuery}
-            </Badge>
-          )}
+          <Database className="size-3.5 text-accent" aria-hidden />
+          منابع این پاسخ
+          <Badge variant="muted" className="text-[10px]">
+            {fa(totalItems)} مورد
+          </Badge>
         </span>
-        <span className="text-accent">{expanded ? "بستن" : "نمایش"}</span>
+        <span className="text-accent">
+          {expanded ? "بستن" : "بررسی منابع"}
+        </span>
       </button>
       <AnimatePresence initial={false}>
         {expanded && (
           <motion.div
+            id={contentId}
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
@@ -144,6 +138,33 @@ export const RagInspector = ({
             className="overflow-hidden"
           >
             <div className="mt-3 space-y-3">
+              <div className="flex flex-wrap gap-1.5 border-t border-line pt-3">
+                {businessData && (
+                  <Badge variant="accent">دادهٔ زندهٔ کسب‌وکار</Badge>
+                )}
+                {facts.length > 0 && (
+                  <Badge variant="muted">اطلاعات ثابت</Badge>
+                )}
+                {qa.length > 0 && (
+                  <Badge variant="muted">پرسش و پاسخ آماده</Badge>
+                )}
+                {chunks.length > 0 && (
+                  <Badge variant="muted">منابع دانش</Badge>
+                )}
+              </div>
+              {intent && (intent.category !== "general" || intent.searchQuery) && (
+                <div className="rounded-xl border border-line bg-surface/50 p-2 text-[10px] leading-5 text-muted">
+                  <span className="font-bold text-foreground">جزئیات جستجو</span>
+                  {intent.category !== "general" && (
+                    <span className="ms-2">
+                      موضوع: {intent.category} · اطمینان {fa(intent.confidence.toFixed(2))}
+                    </span>
+                  )}
+                  {intent.searchQuery && (
+                    <span className="mt-1 block">عبارت: {intent.searchQuery}</span>
+                  )}
+                </div>
+              )}
               {businessData && (
                 <div>
                   <p className="mb-1.5 text-[10px] font-bold text-accent">

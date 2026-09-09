@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   Bot,
@@ -23,8 +24,8 @@ import {
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button-variants";
 import { Input } from "@/components/ui/input";
-import { useToast } from "@/components/ui/toast";
 import { cn, fa } from "@/lib/utils";
 import { useBusinessUsage } from "@/store/use-usage";
 
@@ -63,6 +64,13 @@ type PreviewResponse = {
   blocked?: boolean;
 };
 
+const SUGGESTED_QUESTIONS = [
+  "قیمت و موجودی یکی از محصولاتتان چقدر است؟",
+  "هزینه و زمان ارسال سفارش چقدر است؟",
+  "شرایط لغو یا بازگشت سفارش چیست؟",
+  "می‌خواهم با پشتیبان انسانی صحبت کنم.",
+];
+
 const Bubble = ({ message }: { message: PreviewMessage }) => {
   const isCustomer = message.role === "user";
 
@@ -96,7 +104,10 @@ const Bubble = ({ message }: { message: PreviewMessage }) => {
           )}
         >
           {message.role === "assistant" && !message.text ? (
-            <Loader2 className="size-4 animate-spin text-muted" aria-hidden />
+            <span role="status" className="flex items-center gap-2 text-muted">
+              <Loader2 className="size-4 animate-spin" aria-hidden />
+              <span className="sr-only">دستیار در حال آماده‌کردن پاسخ است</span>
+            </span>
           ) : message.html ? (
             // Telegram's own sanitized subset — every tag is produced by
             // markdownToTelegramHtml, which escapes everything else.
@@ -128,14 +139,23 @@ const Bubble = ({ message }: { message: PreviewMessage }) => {
   );
 };
 
-export const AssistantPreviewPane = ({ enabled }: { enabled: boolean }) => {
-  const { toast } = useToast();
+export const AssistantPreviewPane = ({
+  enabled,
+  providerConfigured,
+  loadError,
+}: {
+  enabled: boolean;
+  providerConfigured: boolean;
+  loadError: boolean;
+}) => {
   const reduce = useReducedMotion();
   const { usage, refresh } = useBusinessUsage();
   const [messages, setMessages] = React.useState<PreviewMessage[]>([]);
   const [input, setInput] = React.useState("");
   const [sending, setSending] = React.useState(false);
+  const [lastError, setLastError] = React.useState<string | null>(null);
   const endRef = React.useRef<HTMLDivElement>(null);
+  const inputRef = React.useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
     endRef.current?.scrollIntoView({
@@ -146,6 +166,7 @@ export const AssistantPreviewPane = ({ enabled }: { enabled: boolean }) => {
 
   const messagesLeft = usage?.messagesLeft ?? null;
   const outOfMessages = messagesLeft !== null && messagesLeft <= 0;
+  const available = enabled && providerConfigured && !loadError;
 
   const send = async () => {
     const question = input.trim();
@@ -156,6 +177,7 @@ export const AssistantPreviewPane = ({ enabled }: { enabled: boolean }) => {
     const history = messages.map((m) => ({ role: m.role, text: m.text }));
 
     setInput("");
+    setLastError(null);
     setSending(true);
     setMessages((prev) => [
       ...prev,
@@ -188,11 +210,10 @@ export const AssistantPreviewPane = ({ enabled }: { enabled: boolean }) => {
       void refresh();
     } catch (error) {
       setMessages((prev) => prev.slice(0, -2));
-      toast({
-        title: "آزمایش انجام نشد",
-        description: error instanceof Error ? error.message : undefined,
-        variant: "error",
-      });
+      setInput(question);
+      setLastError(
+        error instanceof Error ? error.message : "دوباره تلاش کنید."
+      );
     } finally {
       setSending(false);
     }
@@ -206,11 +227,11 @@ export const AssistantPreviewPane = ({ enabled }: { enabled: boolean }) => {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 id="assistant-preview-title" className="text-sm font-bold">
-            آزمایش دستیار
+            گفتگوی آزمایشی
           </h2>
           <p className="mt-1 text-xs leading-6 text-muted">
-            دقیقاً همان مسیری که پیام مشتری طی می‌کند — همان شخصیت، دانش، دادهٔ
-            عمومی و قالب‌بندی تلگرام.
+            پاسخ از همان شخصیت، دانش، داده‌های کسب‌وکار و مسیر واقعی مشتری ساخته
+            می‌شود.
           </p>
         </div>
         {messages.length > 0 && (
@@ -219,7 +240,11 @@ export const AssistantPreviewPane = ({ enabled }: { enabled: boolean }) => {
             variant="ghost"
             size="sm"
             startIcon={<RotateCcw className="size-4" />}
-            onClick={() => setMessages([])}
+            onClick={() => {
+              setMessages([]);
+              setLastError(null);
+              inputRef.current?.focus();
+            }}
             disabled={sending}
           >
             گفتگوی تازه
@@ -227,16 +252,61 @@ export const AssistantPreviewPane = ({ enabled }: { enabled: boolean }) => {
         )}
       </div>
 
-      {!enabled && (
+      <ol className="mt-5 grid gap-2 sm:grid-cols-3" aria-label="مراحل آزمایش پاسخ">
+        {["پیام را انتخاب کنید", "پاسخ را ببینید", "منابع را بررسی کنید"].map(
+          (step, index) => (
+            <li
+              key={step}
+              className="flex items-center gap-2 rounded-2xl border border-line bg-background/35 px-3 py-2.5 text-xs text-muted"
+            >
+              <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-card font-bold text-foreground">
+                {fa(index + 1)}
+              </span>
+              {step}
+            </li>
+          )
+        )}
+      </ol>
+
+      {loadError && (
+        <Alert
+          variant="error"
+          className="mt-4"
+          title="وضعیت دستیار بارگذاری نشد"
+          description="صفحه را تازه کنید و دوباره تلاش کنید."
+        />
+      )}
+
+      {!loadError && !providerConfigured && (
+        <Alert
+          variant="warning"
+          className="mt-4"
+          title="ارائه‌دهندهٔ هوش مصنوعی آماده نیست"
+          description="پیش از آزمایش، کلید ارائه‌دهنده را روی سرور تنظیم کنید."
+        />
+      )}
+
+      {!loadError && providerConfigured && !enabled && (
         <Alert
           variant="info"
           className="mt-4"
           title="برای آزمایش، دستیار باید روشن باشد"
           description="همان‌طور که برای مشتری واقعی هم پاسخی فرستاده نمی‌شود."
-        />
+        >
+          <Link
+            href="/dashboard/assistant"
+            className={buttonVariants({
+              variant: "outline",
+              size: "sm",
+              className: "mt-3",
+            })}
+          >
+            رفتن به تنظیمات
+          </Link>
+        </Alert>
       )}
 
-      {enabled && (
+      {available && (
         <>
           <p className="mt-4 flex flex-wrap items-center gap-1.5 rounded-2xl bg-background/50 px-3 py-2 text-[11px] leading-6 text-muted">
             <Users className="size-3.5 shrink-0" aria-hidden />
@@ -248,12 +318,38 @@ export const AssistantPreviewPane = ({ enabled }: { enabled: boolean }) => {
             )}
           </p>
 
-          <div className="mt-4 max-h-[26rem] min-h-40 space-y-4 overflow-y-auto overscroll-contain rounded-2xl bg-background/30 p-4">
+          <div
+            role="log"
+            aria-live="polite"
+            aria-relevant="additions text"
+            className="mt-4 max-h-[34rem] min-h-72 space-y-4 overflow-y-auto overscroll-contain rounded-2xl border border-line bg-background/30 p-4"
+          >
             {messages.length === 0 ? (
-              <p className="py-10 text-center text-sm leading-7 text-muted">
-                یک پرسش بنویسید — مثلاً «کفش مشکی زیر پنج میلیون دارید؟» — تا
-                ببینید دستیار چه پاسخی می‌دهد.
-              </p>
+              <div className="mx-auto flex max-w-2xl flex-col items-center py-8 text-center">
+                <Bot className="size-8 text-accent" aria-hidden />
+                <h3 className="mt-3 font-bold">با یک موقعیت واقعی شروع کنید</h3>
+                <p className="mt-1 text-sm leading-7 text-muted">
+                  یکی از نمونه‌ها را انتخاب کنید یا پیام خودتان را بنویسید.
+                  انتخاب نمونه فقط متن را آماده می‌کند و چیزی ارسال نمی‌شود.
+                </p>
+                <div className="mt-5 flex flex-wrap justify-center gap-2">
+                  {SUGGESTED_QUESTIONS.map((question) => (
+                    <Button
+                      key={question}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setInput(question);
+                        setLastError(null);
+                        inputRef.current?.focus();
+                      }}
+                    >
+                      {question}
+                    </Button>
+                  ))}
+                </div>
+              </div>
             ) : (
               <AnimatePresence initial={false}>
                 {messages.map((message, index) => (
@@ -271,6 +367,16 @@ export const AssistantPreviewPane = ({ enabled }: { enabled: boolean }) => {
             <div ref={endRef} />
           </div>
 
+          {lastError && (
+            <Alert
+              variant="error"
+              className="mt-3"
+              title="آزمایش انجام نشد"
+              description={lastError}
+              onDismiss={() => setLastError(null)}
+            />
+          )}
+
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -279,6 +385,7 @@ export const AssistantPreviewPane = ({ enabled }: { enabled: boolean }) => {
             className="mt-3 flex items-end gap-2"
           >
             <Input
+              ref={inputRef}
               value={input}
               onChange={(event) => setInput(event.target.value)}
               placeholder="پیام مشتری را بنویسید…"
