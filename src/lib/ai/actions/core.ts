@@ -663,10 +663,13 @@ export const createActionEngine = ({
   }): Promise<ActionHandlingResult> => {
     const choice = confirmationChoice(message);
     if (!choice || !validContext(context)) return { handled: false, text: null };
-    if (!(await authorizeContext(context))) return { handled: false, text: null };
 
     const pending = await store.findPending(actionScopeFor(context));
     if (!pending) return { handled: false, text: null };
+    if (!(await authorizeContext(context))) {
+      await store.markFailed(pending.id, "context_unauthorized");
+      return safeRejected(pending.actionKey);
+    }
     // Inline buttons carry the action ID they were rendered for. Do not let a
     // delayed button approve a newer request in the same Telegram chat.
     if (expectedExecutionId && pending.id !== expectedExecutionId) {

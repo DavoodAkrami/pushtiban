@@ -11,6 +11,7 @@
     "test:business-data-connector": "node scripts/business-data-supabase-connector-check.mjs",
     "test:business-data-ai": "node scripts/business-data-ai-evaluation.mjs",
     "test:business-data-private": "node scripts/business-data-private-evaluation.mjs",
+    "test:ai-harness-phase-1": "node scripts/ai-harness-phase-1-check.mjs",
     "test:ai-actions": "node scripts/ai-actions-check.mjs",
     "test:ai-actions-internal": "node scripts/internal-business-actions-check.mjs"
   },

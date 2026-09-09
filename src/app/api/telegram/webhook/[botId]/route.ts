@@ -860,10 +860,13 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
 
       const { data: aiSettings } = await admin
         .from("ai_assistant_settings")
-        .select("is_enabled, human_handoff_enabled")
+        .select("is_enabled, telegram_enabled, human_handoff_enabled")
         .eq("user_id", connection.user_id)
         .maybeSingle();
-      if (aiSettings?.is_enabled !== true) {
+      if (
+        aiSettings?.is_enabled !== true ||
+        (aiSettings as { telegram_enabled?: boolean }).telegram_enabled === false
+      ) {
         const sent = await sendToCustomer({
           chat_id: chatId,
           text: "دستیار در حال حاضر خاموش است؛ سفارش شروع نشد.",
@@ -1386,12 +1389,16 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
 
   const { data: aiSettings, error: aiSettingsError } = await admin
     .from("ai_assistant_settings")
-    .select("is_enabled, human_handoff_enabled")
+    .select("is_enabled, telegram_enabled, human_handoff_enabled")
     .eq("user_id", connection.user_id)
     .maybeSingle();
 
   // Fail closed: if settings cannot be verified, do not send the message to AI.
-  if (aiSettingsError || !aiSettings?.is_enabled) {
+  if (
+    aiSettingsError ||
+    !aiSettings?.is_enabled ||
+    (aiSettings as { telegram_enabled?: boolean } | null)?.telegram_enabled === false
+  ) {
     return NextResponse.json({ ok: true });
   }
 
@@ -1505,13 +1512,6 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
           chat_id: chatId,
           text: "امکان بررسی این درخواست در حال حاضر نیست؛ کمی بعد دوباره تلاش کنید.",
         });
-    if (verifiedReply.text) {
-      await recordChatTurns({
-        connectionId: connection.id,
-        chatId,
-        turns: [{ role: "assistant", text: verifiedReply.text }],
-      });
-    }
     return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
   }
 
@@ -1591,12 +1591,15 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
   const delivery = aiReply.retrieval?.businessData?.delivery;
   const shouldSendCards = Boolean(
     delivery &&
+      !aiReply.action &&
       delivery.records.length > 0 &&
       (delivery.collectionKind === "product" ||
         delivery.records.some((record) => record.imagePaths.length > 0))
   );
   const shouldSendAiText =
-    !shouldSendCards || aiReply.retrieval?.intent?.knowledgeNeeded !== false;
+    Boolean(aiReply.action) ||
+    !shouldSendCards ||
+    aiReply.retrieval?.intent?.knowledgeNeeded !== false;
   const textSent = !shouldSendAiText
     ? true
     : aiReply.text

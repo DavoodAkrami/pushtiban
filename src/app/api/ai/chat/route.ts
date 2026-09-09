@@ -4,9 +4,14 @@ import {
   getOpenAIClient,
   getNvidiaNimClient,
   getOpenRouterClient,
+  listOpenRouterFreeModels,
+  OPENAI_MODELS,
+  NVIDIA_NIM_MODELS,
+  OPENROUTER_FREE_AUTO,
   resolveOpenRouterModel,
   type ProviderId,
 } from "@/configs";
+import { requireSiteAdmin } from "@/lib/auth/site-admin";
 
 export const runtime = "nodejs";
 
@@ -16,10 +21,91 @@ type ChatMessage = {
 };
 
 type ChatBody = {
-  provider: ProviderId;
-  model: string;
-  messages: ChatMessage[];
-  stream?: boolean;
+  provider?: unknown;
+  model?: unknown;
+  messages?: unknown;
+  stream?: unknown;
+};
+
+const MAX_MESSAGES = 24;
+const MAX_MESSAGE_CHARS = 4_000;
+const MAX_TOTAL_MESSAGE_CHARS = 16_000;
+
+const guardError = (status: 401 | 403) =>
+  NextResponse.json(
+    {
+      error:
+        status === 401
+          ? "نشست شما تمام شده؛ دوباره وارد حساب شوید."
+          : "دسترسی به آزمایش مستقیم مدل مخصوص مدیر سایت است.",
+    },
+    { status }
+  );
+
+const hasValidOrigin = (request: NextRequest) => {
+  const origin = request.headers.get("origin");
+  if (!origin) return true;
+
+  try {
+    const originUrl = new URL(origin);
+    const requestUrl = new URL(request.url);
+    const requestHost = request.headers.get("host");
+    const forwardedHost = request.headers
+      .get("x-forwarded-host")
+      ?.split(",")[0]
+      .trim();
+    const forwardedProto = request.headers
+      .get("x-forwarded-proto")
+      ?.split(",")[0]
+      .trim();
+    const allowedOrigins = new Set(
+      [
+        requestUrl.origin,
+        requestHost && `${requestUrl.protocol}//${requestHost}`,
+        forwardedHost &&
+          `${forwardedProto || requestUrl.protocol}//${forwardedHost}`,
+      ].filter((value): value is string => Boolean(value))
+    );
+    return allowedOrigins.has(originUrl.origin);
+  } catch {
+    return false;
+  }
+};
+
+const parseMessages = (value: unknown): ChatMessage[] | null => {
+  if (!Array.isArray(value) || !value.length || value.length > MAX_MESSAGES) {
+    return null;
+  }
+
+  let totalChars = 0;
+  const messages: ChatMessage[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") return null;
+    const { content, role } = item as { content?: unknown; role?: unknown };
+    if (
+      (role !== "user" && role !== "assistant" && role !== "system") ||
+      typeof content !== "string"
+    ) {
+      return null;
+    }
+    const text = content.trim();
+    if (!text || text.length > MAX_MESSAGE_CHARS) return null;
+    totalChars += text.length;
+    if (totalChars > MAX_TOTAL_MESSAGE_CHARS) return null;
+    messages.push({ role, content: text });
+  }
+  return messages;
+};
+
+const isAllowedModel = async (provider: ProviderId, model: string) => {
+  if (provider === "openai") {
+    return (OPENAI_MODELS as readonly string[]).includes(model);
+  }
+  if (provider === "nvidia-nim") {
+    return (NVIDIA_NIM_MODELS as readonly string[]).includes(model);
+  }
+  if (model === OPENROUTER_FREE_AUTO) return true;
+  return (await listOpenRouterFreeModels()).includes(model);
 };
 
 /** Extract a safe, JSON-serializable message — never log raw SDK errors (they may hold Response objects). */
@@ -200,18 +286,37 @@ const streamOpenRouter = async (
 };
 
 export const POST = async (request: NextRequest) => {
+  if (!hasValidOrigin(request)) {
+    return NextResponse.json({ error: "درخواست معتبر نیست." }, { status: 403 });
+  }
+  const guard = await requireSiteAdmin();
+  if (!guard.ok) return guardError(guard.status);
+
   try {
     const body = (await request.json()) as ChatBody;
     const { provider: providerId, model, messages, stream = true } = body;
 
-    if (!providerId || !model || !messages?.length) {
+    if (
+      (providerId !== "openai" &&
+        providerId !== "nvidia-nim" &&
+        providerId !== "openrouter") ||
+      typeof model !== "string" ||
+      !(await isAllowedModel(providerId, model))
+    ) {
       return NextResponse.json(
-        { error: "provider, model, and messages are required" },
+        { error: "مدل یا ارائه‌دهنده معتبر نیست." },
+        { status: 400 }
+      );
+    }
+    const parsedMessages = parseMessages(messages);
+    if (!parsedMessages || typeof stream !== "boolean") {
+      return NextResponse.json(
+        { error: "پیام‌ها یا نوع پاسخ معتبر نیست." },
         { status: 400 }
       );
     }
 
-    const openaiMessages = messages as ChatCompletionMessageParam[];
+    const openaiMessages = parsedMessages as ChatCompletionMessageParam[];
 
     switch (providerId) {
       case "openai": {
@@ -245,7 +350,7 @@ export const POST = async (request: NextRequest) => {
         );
       }
       case "openrouter":
-        return await streamOpenRouter(model, messages, stream);
+        return await streamOpenRouter(model, parsedMessages, stream);
       default:
         return NextResponse.json(
           { error: `Unknown provider: ${providerId as string}` },

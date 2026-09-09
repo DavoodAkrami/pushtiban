@@ -90,8 +90,10 @@ declined the message. The pipeline is the same on every channel:
   outside `src/proxy.ts`'s matcher, let the caller pick the provider and model
   (including `openrouter`, which production can never use), hard-wired the
   retrieval thresholds past the admin globals, and charged the owner a message
-  while skipping every gate. `/ai/test` remains — it is an unauthenticated raw
-  provider smoke test with no tenant data, not a product surface.
+  while skipping every gate. `/ai/test` remains as a site-admin-only raw
+  provider smoke test with no tenant data, not a product surface. Its routes
+  require an authenticated site admin, validate the same-origin request, and
+  accept only the configured diagnostic model catalog with bounded messages.
 
 ### What the model receives
 
@@ -121,7 +123,7 @@ emits **nothing** — only the dials the owner moved cost tokens.
 
 **2. Retrieval (RAG)** — `src/lib/ai/rag.ts`, `retrieveRagContext()`
 
-1. **Intent and retrieval plan** — one cheap `gpt-4o-mini` call classifies the message
+1. **Intent and retrieval plan** — one low-cost structured completion classifies the message
    (`shipping` / `pricing` / `products` / `returns` / `account` / `general`) and
    condenses it into a search query. When the chat has memory, the previous
    customer message resolves retrieval follow-ups into standalone queries. For
@@ -133,8 +135,10 @@ emits **nothing** — only the dials the owner moved cost tokens.
    is no separate planner or summarizer completion. The classifier sees at most
    **8** active public capabilities and **8** eligible private collection keys;
    their combined compact metadata remains within **3600 characters**. Names and
-   labels are serialized as untrusted data. Toggleable platform-wide by a site
-   admin.
+   labels are serialized as untrusted data. The configured OpenAI model is
+   tried first; a failed or malformed response then tries the configured NVIDIA
+   NIM model, and each attempt is logged with its actual provider and model.
+   Toggleable platform-wide by a site admin.
 2. **Facts** — rows of `ai_knowledge_facts` for the business. Always included,
    never vector-searched. This is the only section with no similarity bar to
    limit it, so it is capped at **20 facts / 1200 characters** (oldest first,
@@ -292,8 +296,9 @@ assistant introduces itself again.
 - Reads and writes **fail open** — a memory failure costs context, never a reply.
 
 Verified-customer authorization is deliberately separate from chat memory and
-shorter than it: a 10-minute private session does not outlive the 30-minute
-conversation window, and it is never a permanent customer authorization.
+shorter than it: private authorization lasts 10 minutes and is never permanent.
+Answers produced from a verified lookup are not written to chat memory, so
+private data cannot remain in later model context after that authorization ends.
 
 **4. Output** — `src/lib/telegram/format.ts`
 
@@ -404,10 +409,15 @@ request a generic database mutation.
 
 ### Gates on every message
 
-`ai_assistant_settings.is_enabled` (owner) → `ai_global_settings.ai_enabled`
-(platform kill switch) → `checkAiLimits()` (monthly token and message caps).
-Every completion is logged to `ai_usage_logs` by `logAiUsage()`, which feeds the
-admin usage charts and the sidebar's remaining-message count.
+`ai_assistant_settings.is_enabled` (owner) and the channel switch →
+`ai_global_settings.ai_enabled` (platform kill switch) → `checkAiLimits()`
+(monthly token and message caps). Live-channel reads fail closed: unreadable
+controls cannot authorize a reply or an Action confirmation. The Action server
+rechecks the same global, owner, and channel controls immediately before it
+creates or confirms a mutation; a revoked control fails its pending action.
+Quotas block only new model calls, never a confirmation that has already passed
+those controls. Every completion is logged to `ai_usage_logs` by `logAiUsage()`,
+which feeds the admin usage charts and the sidebar's remaining-message count.
 
 Structured database retrieval is not AI usage and creates no token log. The
 existing intent and final chat completions continue to be logged separately;

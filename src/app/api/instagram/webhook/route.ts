@@ -689,14 +689,6 @@ const handleWithAssistant = async ({
         ? markdownToPlainText(verifiedReply.text)
         : "امکان بررسی این درخواست در حال حاضر نیست؛ کمی بعد دوباره تلاش کنید."
     );
-    if (verifiedReply.text) {
-      await recordChatTurns({
-        channel: "instagram",
-        connectionId: connection.id,
-        chatId: senderId,
-        turns: [{ role: "assistant", text: verifiedReply.text }],
-      });
-    }
     return;
   }
 

@@ -272,6 +272,9 @@ How to use:
       question→question Q&A match, which stays at 0.45), so unrelated chunks
       stop being injected into every prompt; business facts capped at 20 items
       / 1200 characters with a warning in the facts editor
+- [x] AI harness Phase 1: enforce controls across replies and Action
+      confirmations, protect direct provider diagnostics, recover planner
+      failover, and keep verified lookup answers out of chat memory
 - [ ] Bot keyboard menu: a bot-wide set of always-visible buttons at the bottom
       of the Telegram chat, laid out in rows at /dashboard/bot/menu, each button
       wired to an existing flow or prepared reply, plus a per-message control

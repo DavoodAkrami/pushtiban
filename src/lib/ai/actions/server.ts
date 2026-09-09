@@ -12,6 +12,7 @@ import {
 } from "./core";
 import { ACTION_REGISTRY } from "./registry";
 import { getBusinessActionConfiguration } from "./settings";
+import { isAssistantChannelEnabled } from "@/lib/ai/availability";
 
 type ExecutionRow = {
   id: string;
@@ -199,13 +200,19 @@ const authorizeContext = async (context: ActionExecutionContext) => {
     context.channel === "telegram"
       ? "telegram_connections"
       : "instagram_connections";
-  const { data, error } = await createAdminClient()
-    .from(table)
-    .select("id")
-    .eq("id", context.connectionId)
-    .eq("user_id", context.userId)
-    .maybeSingle();
-  return !error && Boolean(data);
+  const [connectionResult, assistantEnabled] = await Promise.all([
+    createAdminClient()
+      .from(table)
+      .select("id")
+      .eq("id", context.connectionId)
+      .eq("user_id", context.userId)
+      .maybeSingle(),
+    isAssistantChannelEnabled({
+      channel: context.channel,
+      userId: context.userId,
+    }),
+  ]);
+  return !connectionResult.error && Boolean(connectionResult.data) && assistantEnabled;
 };
 
 const verifyCustomer = async (context: ActionExecutionContext) => {

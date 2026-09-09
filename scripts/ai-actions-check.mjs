@@ -371,6 +371,31 @@ const confirmed = await confirmedHarness.engine.confirmPending({
 assert.equal(confirmed.status, "succeeded", "valid confirmation executes once");
 assert.equal(confirmedExecutions, 1);
 
+let controlsEnabled = true;
+const revokedHarness = createHarness({
+  definitions: [[confirmationDefinition.key, confirmationDefinition]],
+  authorize: async () => controlsEnabled,
+});
+await revokedHarness.engine.executeRequested({
+  context: context({ deliveryId: "telegram-update:9014" }),
+  request: { key: "confirmation_test_action", arguments: {} },
+});
+controlsEnabled = false;
+const revokedConfirmation = await revokedHarness.engine.confirmPending({
+  context: context({
+    customerMessage: "بله",
+    deliveryId: "telegram-update:9015",
+  }),
+  message: "بله",
+});
+assert.equal(revokedConfirmation.status, "rejected");
+assert.equal(confirmedExecutions, 1, "a revoked control does not run the pending handler");
+assert.equal(
+  revokedHarness.store.records[0].status,
+  "failed",
+  "a revoked control closes the pending action instead of leaving it confirmable"
+);
+
 let preparedExecution = null;
 let preparationCount = 0;
 const preparedDefinition = definition({

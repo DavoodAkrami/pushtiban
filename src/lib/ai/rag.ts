@@ -136,6 +136,8 @@ const INTENT_CATEGORIES = new Set([
   "general",
 ]);
 const INTENT_SEARCH_QUERY_MAX_CHARS = 240;
+const DEFAULT_OPENAI_INTENT_MODEL = "gpt-4o-mini";
+const DEFAULT_NVIDIA_INTENT_MODEL = "meta/llama-3.3-70b-instruct";
 
 const PRIVATE_LOOKUP_SIGNALS = [
   /وضعیت/u,
@@ -181,6 +183,7 @@ const INTENT_FOLLOW_UP_LINE =
 const requestIntent = async (
   client: NonNullable<ReturnType<typeof getOpenAIClient>>,
   provider: "openai" | "nvidia-nim",
+  model: string,
   question: string,
   usageUserId?: string,
   previousUserMessage?: string,
@@ -194,7 +197,7 @@ const requestIntent = async (
   try {
     const completion = await client.chat.completions.create(
       {
-        model: "gpt-4o-mini",
+        model,
         messages: [
           {
             role: "system",
@@ -249,7 +252,7 @@ const requestIntent = async (
         userId: usageUserId,
         kind: "intent",
         provider,
-        model: "gpt-4o-mini",
+        model,
         usage: completion.usage,
       });
     }
@@ -315,27 +318,29 @@ export const extractIntent = async (
   privateDataCapabilities?: string,
   actionCapabilities?: string
 ): Promise<PlannedRagIntent | null> => {
-  // Prefer OpenAI (cheap, fast), fall back to NVIDIA NIM.
-  const openai = getOpenAIClient();
-  if (openai) {
-    return requestIntent(
-      openai,
-      "openai",
-      question,
-      usageUserId,
-      previousUserMessage,
-      actionConversation,
-      businessDataCapabilities,
-      privateDataCapabilities,
-      actionCapabilities
-    );
-  }
+  const providers = [
+    {
+      client: getOpenAIClient(),
+      provider: "openai" as const,
+      model:
+        process.env.TELEGRAM_AI_OPENAI_MODEL?.trim() ||
+        DEFAULT_OPENAI_INTENT_MODEL,
+    },
+    {
+      client: getNvidiaNimClient(),
+      provider: "nvidia-nim" as const,
+      model:
+        process.env.TELEGRAM_AI_NVIDIA_MODEL?.trim() ||
+        DEFAULT_NVIDIA_INTENT_MODEL,
+    },
+  ];
 
-  const nvidia = getNvidiaNimClient();
-  if (nvidia) {
-    return requestIntent(
-      nvidia,
-      "nvidia-nim",
+  for (const provider of providers) {
+    if (!provider.client) continue;
+    const intent = await requestIntent(
+      provider.client,
+      provider.provider,
+      provider.model,
       question,
       usageUserId,
       previousUserMessage,
@@ -344,6 +349,7 @@ export const extractIntent = async (
       privateDataCapabilities,
       actionCapabilities
     );
+    if (intent) return intent;
   }
 
   return null;

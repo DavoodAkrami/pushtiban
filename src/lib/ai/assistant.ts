@@ -34,6 +34,8 @@ import {
   describeRelevantActionFollowUp,
 } from "@/lib/ai/actions/registry";
 import { executeModelAction } from "@/lib/ai/actions/server";
+import { isAssistantChannelEnabled } from "@/lib/ai/availability";
+import { redactVerificationInput } from "@/lib/ai/redaction";
 
 const COMPLETION_TIMEOUT_MS = 25_000;
 const DEFAULT_NVIDIA_MODEL = "meta/llama-3.3-70b-instruct";
@@ -76,15 +78,6 @@ const truncate = (value: string, maxLength: number) =>
  * promoted into model context. This also covers a customer who sends a phone,
  * email, or labeled one-time code in the same message as an initial request.
  */
-const redactVerificationInput = (value: string) =>
-  value
-    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/giu, "[email]")
-    .replace(/(?:\+?98|0098|0)?9[0-9\s()-]{8,14}/g, "[phone]")
-    .replace(
-      /((?:otp|one[- ]?time|verification|رمز(?:\s*عبور)?|کد\s*(?:تأیید|تایید))\s*[:：-]?\s*)[0-9۰-۹]{4,8}/giu,
-      "$1[code]"
-    );
-
 type Provider = {
   id: "openai" | "nvidia-nim";
   client: OpenAI | null;
@@ -408,6 +401,13 @@ export const generateAssistantReply = async (
   // is made — the webhook sends its generic "AI unavailable" fallback.
   const settings = await getGlobalAiSettings();
   if (!settings.aiEnabled) return { text: null, needsHuman: false };
+  if (
+    userId &&
+    options.channel &&
+    !(await isAssistantChannelEnabled({ channel: options.channel, userId }))
+  ) {
+    return { text: null, needsHuman: false };
+  }
   if (userId) {
     const limits = await checkAiLimits(userId);
     if (!limits.allowed) {
