@@ -729,7 +729,8 @@ const customerValuesAreGrounded = (
   const conversation = normalizedCustomerText(
     context.customerIntentContext ?? context.customerMessage
   );
-  return Object.values(values).every((value) => {
+  return Object.entries(values).every(([slot, value]) => {
+    if (context.taskCustomerValues?.[slot] === value) return true;
     if (typeof value !== "string") return true;
     const candidate = normalizedCustomerText(value);
     return candidate.length >= 2 && conversation.includes(candidate);
@@ -748,6 +749,7 @@ const customerValuesPrompt = (
   const needed = configuration.customerFields
     .filter((field) => {
       const value = values[field.slot];
+      if (value !== undefined && context.taskCustomerValues?.[field.slot] === value) return false;
       if (field.required && value === undefined) return true;
       if (typeof value !== "string") return false;
       const candidate = normalizedCustomerText(value);

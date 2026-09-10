@@ -1,4 +1,7 @@
 import "server-only";
+import { runConversation } from "../runtime/orchestrator";
+import { conversationScope } from "../runtime/store";
+import type { RunProgressEvent } from "../runtime/contracts";
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
@@ -265,19 +268,20 @@ export const handleActionConfirmation = async ({
   context,
   expectedExecutionId,
   message,
+  onProgress,
 }: {
+  onProgress?: (event: RunProgressEvent) => Promise<void>;
   context: ActionExecutionContext;
   expectedExecutionId?: string;
   message: string;
 }): Promise<ActionHandlingResult> => {
-  try {
-    return await actionEngine.confirmPending({
-      context,
-      expectedExecutionId,
-      message,
-    });
-  } catch {
-    console.error("Business action confirmation lookup failed safely.");
-    return { handled: false, text: null };
-  }
+  // Non-confirmation text belongs to the planner, not this zero-model path.
+  if (!/^(بله|آره|اره|تأیید|تایید|اوکی|yes|ok|نه|خیر|لغو|انصراف|no|cancel|لغو سفارش|لغو درخواست)[.!؟?،,]*$/iu.test(message.trim())) return { handled: false, text: null };
+  let handled: ActionHandlingResult = { handled: false, text: null };
+  const result = await runConversation({ scope: conversationScope(context), message, onProgress, expectedExecutionId, execute: async () => {
+    handled = await actionEngine.confirmPending({ context, expectedExecutionId, message });
+    return { text: handled.text, needsHuman: false, action: handled.status ? { key: handled.actionKey, executionId: handled.executionId, status: handled.status } : undefined };
+  } });
+  if (result.text && !handled.handled) return { handled: true, text: result.text, status: result.action?.status };
+  return { ...handled, text: result.text };
 };

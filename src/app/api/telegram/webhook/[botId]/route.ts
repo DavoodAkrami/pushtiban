@@ -1,3 +1,5 @@
+import { createTelegramProgress } from "@/lib/telegram/progress";
+import type { RunProgressEvent } from "@/lib/ai/runtime/contracts";
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import {
@@ -55,7 +57,7 @@ export const runtime = "nodejs";
 
 const MAX_BODY_BYTES = 128_000;
 const TELEGRAM_TIMEOUT_MS = 8_000;
-const TELEGRAM_TYPING_REFRESH_MS = 4_000;
+
 const BOT_ID_RE = /^\d{1,24}$/;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -188,31 +190,22 @@ const telegramPost = async (
   }
 };
 
-const withTelegramTyping = async <T>({
-  chatId,
-  task,
-  token,
-}: {
-  chatId: number;
-  task: () => Promise<T>;
-  token: string;
+const withTelegramProgress = async <T>({ chatId, task, token }: {
+  chatId: number; task: (onProgress: (event: RunProgressEvent) => Promise<void>) => Promise<T>; token: string;
 }) => {
-  const sendTyping = () =>
-    telegramPost(token, "sendChatAction", {
-      chat_id: chatId,
-      action: "typing",
-    });
-
-  void sendTyping();
-  const refresh = setInterval(() => {
-    void sendTyping();
-  }, TELEGRAM_TYPING_REFRESH_MS);
-
-  try {
-    return await task();
-  } finally {
-    clearInterval(refresh);
-  }
+  const progress = createTelegramProgress({
+    send: async (text) => {
+      const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text }), signal: AbortSignal.timeout(3_000),
+      });
+      const body = await response.json();
+      return response.ok && body.ok && typeof body.result?.message_id === "number" ? body.result.message_id : null;
+    },
+    edit: (messageId, text) => telegramPost(token, "editMessageText", { chat_id: chatId, message_id: messageId, text }),
+    remove: (messageId) => telegramPost(token, "deleteMessage", { chat_id: chatId, message_id: messageId }),
+  });
+  try { return await task(progress.consume); } finally { await progress.finish(); }
 };
 
 // ---- Inbox helpers (local to the webhook) ----------------------------------
@@ -878,12 +871,13 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
         connectionId: connection.id,
         chatId,
       });
-      const buyReply = await withTelegramTyping({
+      const buyReply = await withTelegramProgress({
         chatId,
         token,
-        task: () =>
+        task: (onProgress) =>
           generateAssistantReply(orderPrompt, connection.user_id, {
             channel: "telegram",
+            onProgress,
             handoffEnabled: aiSettings.human_handoff_enabled === true,
             history: session.turns,
             actionContext: {
@@ -926,11 +920,12 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
     const actionConfirmation = parseActionConfirmationCallback(data);
     const callbackSender = cq.from;
     if (actionConfirmation && callbackSender && typeof callbackSender.id === "number") {
-      const confirmation = await withTelegramTyping({
+      const confirmation = await withTelegramProgress({
         chatId,
         token,
-        task: () =>
+        task: (onProgress) =>
           handleActionConfirmation({
+            onProgress,
             context: {
               channel: "telegram",
               connectionId: connection.id,
@@ -1423,13 +1418,14 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
       : undefined;
 
   if (actionContext) {
-    const confirmation = await handleActionConfirmation({
-      context: {
-        ...actionContext,
-        userId: connection.user_id,
-        customerMessage: text,
-      },
-      message: text,
+    const confirmation = await withTelegramProgress({
+      chatId,
+      token,
+      task: (onProgress) => handleActionConfirmation({
+        onProgress,
+        context: { ...actionContext, userId: connection.user_id, customerMessage: text },
+        message: text,
+      }),
     });
     if (confirmation.handled) {
       const replyText =
@@ -1493,12 +1489,13 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
       connectionId: connection.id,
       chatId,
     });
-    const verifiedReply = await withTelegramTyping({
+    const verifiedReply = await withTelegramProgress({
       chatId,
       token,
-      task: () =>
+      task: (onProgress) =>
         generateAssistantReply(privateVerification.verifiedQuestion!, connection.user_id, {
           channel: "telegram",
+          onProgress,
           handoffEnabled,
           history: verifiedSession.turns,
           privateAccess: privateIdentity,
@@ -1522,12 +1519,13 @@ export const POST = async (request: NextRequest, ctx: RouteContext) => {
     chatId,
   });
 
-  const aiReply = await withTelegramTyping({
+  const aiReply = await withTelegramProgress({
     chatId,
     token,
-    task: () =>
+    task: (onProgress) =>
       generateAssistantReply(text, connection.user_id, {
         channel: "telegram",
+        onProgress,
         handoffEnabled,
         history: session.turns,
         privateAccess: privateIdentity,

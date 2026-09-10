@@ -42,9 +42,8 @@ guidelines; open **`/design`** for the live component gallery.
 
 ## The AI system — how the assistant is fed
 
-Everything the assistant knows arrives through one of four channels: the
-**persona**, **retrieval**, **memory**, and the **customer's message**. Nothing
-else reaches the model. This section is the contract; keep it true (see rule 11
+The assistant receives **persona**, **retrieval**, short **conversation memory**,
+explicit **task state**, and the **customer's message**. This section is the contract; keep it true (see rule 11
 in `CLAUDE.md`).
 
 ### Where it runs
@@ -80,9 +79,10 @@ declined the message. The pipeline is the same on every channel:
   owner's `is_enabled` check and converts the reply with `markdownToTelegramHtml`
   so the owner sees the customer's real formatting.
 
-  Two honest divergences: history is held in the browser rather than read from
+  Preview-specific behavior: history is held in the browser rather than read from
   `telegram_chat_sessions`, and an escalation is *reported* as a badge rather than
-  opening a conversation. **A preview message costs a real message** off the
+  opening a conversation. Task state uses an isolated preview session and cannot
+  execute business mutations. **A preview message costs a real message** off the
   monthly cap — it is a real completion — so the pane states this up front, shows
   the remaining count, and refreshes the sidebar quota after every reply.
 
@@ -97,7 +97,8 @@ declined the message. The pipeline is the same on every channel:
 
 ### What the model receives
 
-One `system` message, then the session's remembered turns, then the new question:
+Stable platform rules in a `system` message, then business context as data,
+optional structured task state, bounded remembered turns, and the new question:
 
 ```
 system     persona identity + persona lines + format rule + source priority
@@ -381,8 +382,8 @@ Business Data titles when the destination schema needs one; owners do not have
 to add technical fields for those values. A single datetime field may represent
 both reservation date and time, and party size is requested only when the
 reservation dataset has a compatible field. Public Business Data retrieval can
-check the requested product on the first order turn; recent action conversation
-context then carries the explicit order request while the customer supplies the
+check the requested product on the first order turn; durable task state
+then carries the explicit order request while the customer supplies the
 dataset-derived name, address, or other required fields. Internal order
 execution locks the authoritative product row, re-checks price and availability,
 and performs the stock decrement and order insert in one service-only transaction.
@@ -416,7 +417,7 @@ controls cannot authorize a reply or an Action confirmation. The Action server
 rechecks the same global, owner, and channel controls immediately before it
 creates or confirms a mutation; a revoked control fails its pending action.
 Quotas block only new model calls, never a confirmation that has already passed
-those controls. Every completion is logged to `ai_usage_logs` by `logAiUsage()`,
+those controls. Every completion is logged to `ai_usage_log` by `logAiUsage()`,
 which feeds the admin usage charts and the sidebar's remaining-message count.
 
 Structured database retrieval is not AI usage and creates no token log. The
@@ -474,6 +475,105 @@ configuration/challenges/sessions/attempt audits, and the service-role-only
 bounded public and verified-record lookup RPCs) · `supabase/ai-actions.sql`
 (tenant-owned action restrictions and connector/field mappings plus server-only
 confirmation, idempotency, audit state, and support-message execution links).
+
+### Phase 2 durable conversation runtime (local; migration required)
+
+`src/lib/ai/runtime/` wraps `generateAssistantReply` for Telegram, Instagram
+and preview. `contracts.ts` defines conversation modes, incoming events,
+TaskDraft phases, bounded run steps, decisions, capability policies, context
+trust/expiry and serializable progress. The existing planner remains in place.
+The normal pipeline is bounded: planner → relevant retrieval → validated Action
+or final answer. `capability.ts` also provides a hard-limited continuation driver;
+it does not add a model loop to ordinary turns. Server code owns termination.
+
+Three states have different authority:
+
+- Recent prose stays in the existing channel session tables (30 minutes,
+  4 turns / 600 prompt characters). It is conversational context only.
+- `ai_runtime_conversations` stores a separate, server-only TaskDraft JSON value:
+  task ID/type, grounded structured fields, product query reference, missing
+  fields, phase, revision, timestamps, fixed 30-minute expiry, configuration
+  fingerprint, and confirmation execution reference. History trimming does not
+  erase it. Cancelled/expired/completed drafts have their collected fields
+  cleared. Expiry is checked on access; cold rows are not yet periodically purged.
+- Authoritative records, current price/stock, permissions and verified-customer
+  sessions remain in the existing Business Data and Action contracts. Draft
+  values cannot prove verification, confirmation, authorization or execution.
+
+`tasks.ts` merges only allowed partial fields grounded in the current customer
+message. Previously grounded fields survive later turns and corrections. New
+order/reservation drafts require the existing explicit intent guard. Switching
+an active task requires cancelling it first. Changed dataset configuration
+invalidates the task instead of reinterpreting old field slots. Codes are not
+stored as task fields. Current business validation still runs in the Action
+engine before confirmation and again where required at execution.
+
+`supabase/ai-runtime.sql` adds the table, service-only load/CAS functions and an
+Action-confirmation trigger. The load RPC validates the owner/channel connection.
+The save RPC rejects stale revisions and atomically invalidates superseded
+pending confirmations. The execution transition checks the current draft and
+mode inside PostgreSQL. A task cannot be cancelled while its linked action is
+executing. Modes support `ai_active`, `handoff_pending`, `human_active`, and
+`resolved`; active human modes block the shared runtime. Full inbox lifecycle
+synchronization remains a later handoff task; existing channel handoff behavior
+is preserved. Durable-state failures stop safely rather than reverting to prose.
+
+`context.ts` centralizes recent-history trimming and task serialization (2,000
+characters maximum). Stable platform rules are a system message; business
+persona/evidence and structured task data are lower-priority data messages.
+Only the current retrieval enters this run; tool results are not saved into the
+draft. Verification redaction applies to model-visible task/history text. The
+`ContextEvidence` expiry/scope filter is available for future context editing;
+current private lookups still enforce their existing 10-minute identity scope.
+There is no summarization call.
+
+`budget.ts` enforces these server-owned defaults for a shared assistant run:
+
+| Control | Limit |
+| --- | ---: |
+| Completion calls, including planner and failover | 4 |
+| Planner calls | 2 |
+| Capability calls | 4 |
+| Retrieval operations (pipeline, structured lookup, query embedding) | 3 |
+| Retry/repair completion attempts | 2 |
+| Clarifications | 1 |
+| Counted runtime steps | 12 |
+| Input per completion, conservative token allowance | 24,000 |
+| Reserved output tokens across completions | 2,800 |
+| Reserved total input + output allowance | 80,000 |
+| Run deadline | 55 seconds |
+
+Per-call output stays at the existing 100/240/480 planner and 700 answer tokens.
+Before dispatch, UTF-8 serialized bytes plus 512 protocol tokens provide a
+conservative input allowance for the current byte-token providers. Failed calls
+retain reservations. SDK automatic retries are disabled; explicit failover is
+counted. Query embeddings reserve input too. Provider timeouts are bounded by
+the remaining deadline; database/delivery reconciliation is still Phase 3.
+Logged actual provider usage is separate from conservative reservations and
+continues in `ai_usage_log`. Exhaustion returns a deterministic Persian retry
+message and a failed event; it cannot silently start another model call.
+
+`RunProgressEvent` contains a run ID, monotonic sequence, code/type, server-owned
+Persian display text, timestamp and allowlisted operation metadata. It contains
+no customer identifiers, raw arguments, prompts or model reasoning. The runtime
+emits only operations that actually occur. The same callback/events array can
+feed a future SSE, HTTP-stream or SDK transport without changing orchestration.
+
+Telegram's `progress.ts` consumes that display text, sends one message, and edits
+it at most once per 900 ms during normal progress. Fast transitions are coalesced;
+terminal failure is always displayed. Successful progress is removed before the
+existing final delivery path sends text, cards or confirmation buttons. Progress
+transport failures never suppress canonical results. This AI flow uses no typing
+indicator. Instagram retains its own presentation. Preview returns the safe
+`progress` timeline, run counters and a session ID; the existing pane retains
+that ID until “new conversation”. Preview shares task collection but deliberately
+cannot execute business mutations or create real confirmations.
+
+Run `npm run test:ai-harness-phase-2` for deterministic runtime/channel tests.
+`npm run test:ai-runtime-sql` validates migration reruns, CAS and permissions using
+PGlite 0.5.8 installed separately (see `docs/ai-harness-phase-2.md`). The SQL file
+is not deployed by these tests. Apply it in the SQL Editor and confirm before
+using this branch with live channels.
 
 ## Notes
 

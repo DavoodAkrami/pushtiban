@@ -275,6 +275,22 @@ How to use:
 - [x] AI harness Phase 1: enforce controls across replies and Action
       confirmations, protect direct provider diagnostics, recover planner
       failover, and keep verified lookup answers out of chat memory
+- [ ] AI harness Phase 2 (local implementation; SQL deployment and manual
+      acceptance required): shared durable, bounded conversation runtime
+  - [ ] Add server-only Supabase conversation state with versioned TaskDraft,
+        hashed channel scope, modes, expiry, cancellation, and atomic CAS updates
+        that invalidate superseded pending confirmations.
+  - [ ] Reuse the existing planner and Action engine for grounded partial order
+        and reservation fields; retain structured fields across history trimming.
+  - [ ] Enforce model/planner/retry/tool/retrieval/context/output/deadline budgets
+        at actual execution boundaries; keep ordinary call counts unchanged.
+  - [ ] Centralize bounded context and trust metadata, keeping verification
+        secrets and authoritative prices/stock outside durable task context.
+  - [ ] Emit safe transport-neutral progress events and consume them through one
+        editable Telegram message; expose the same timeline to preview.
+  - [ ] Verify long tasks, corrections, cancellation, expiry, confirmation,
+        concurrency conflicts, budget exhaustion, context bounds, progress and
+        channel parity; run existing regressions, lint and production build.
 - [ ] Bot keyboard menu: a bot-wide set of always-visible buttons at the bottom
       of the Telegram chat, laid out in rows at /dashboard/bot/menu, each button
       wired to an existing flow or prepared reply, plus a per-message control

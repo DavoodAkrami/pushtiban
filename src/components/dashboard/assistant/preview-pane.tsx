@@ -156,6 +156,7 @@ export const AssistantPreviewPane = ({
   const [lastError, setLastError] = React.useState<string | null>(null);
   const endRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const sessionRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
     endRef.current?.scrollIntoView({
@@ -189,7 +190,7 @@ export const AssistantPreviewPane = ({
       const res = await fetch("/api/ai/preview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, history }),
+        body: JSON.stringify({ question, history, sessionId: sessionRef.current ??= crypto.randomUUID() }),
       });
       const data = (await res.json()) as PreviewResponse;
 
@@ -241,6 +242,7 @@ export const AssistantPreviewPane = ({
             size="sm"
             startIcon={<RotateCcw className="size-4" />}
             onClick={() => {
+              sessionRef.current = null;
               setMessages([]);
               setLastError(null);
               inputRef.current?.focus();

@@ -13,7 +13,9 @@
     "test:business-data-private": "node scripts/business-data-private-evaluation.mjs",
     "test:ai-harness-phase-1": "node scripts/ai-harness-phase-1-check.mjs",
     "test:ai-actions": "node scripts/ai-actions-check.mjs",
-    "test:ai-actions-internal": "node scripts/internal-business-actions-check.mjs"
+    "test:ai-actions-internal": "node scripts/internal-business-actions-check.mjs",
+    "test:ai-harness-phase-2": "node scripts/ai-harness-phase-2-check.mjs",
+    "test:ai-runtime-sql": "node scripts/ai-runtime-sql-check.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",

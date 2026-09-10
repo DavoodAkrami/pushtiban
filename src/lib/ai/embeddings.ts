@@ -1,4 +1,5 @@
 import "server-only";
+import { reserveEmbedding, requestTimeout } from "./runtime/budget";
 
 import {
   EMBEDDINGS_DIMENSIONS,
@@ -66,11 +67,12 @@ export const embedQuery = async (text: string): Promise<number[] | null> => {
   const client = getEmbeddingsClient();
   if (!client) return null;
 
+  reserveEmbedding(text);
   const response = (await client.embeddings.create({
     model: EMBEDDINGS_MODEL,
     input: text,
     dimensions: EMBEDDINGS_DIMENSIONS,
-  })) as unknown as EmbeddingResponse;
+  }, { maxRetries: 0, timeout: requestTimeout(15_000) })) as unknown as EmbeddingResponse;
 
   return response.data?.[0]?.embedding ?? null;
 };

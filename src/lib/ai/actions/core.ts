@@ -36,6 +36,8 @@ export type ActionExecutionContext = {
   deliveryId: string;
   customerMessage: string;
   customerIntentContext?: string;
+  /** Server-grounded durable values; never accepted from model or browser input. */
+  taskCustomerValues?: Record<string, unknown>;
   customerUsername?: string | null;
   customerDisplayName?: string | null;
 };
@@ -209,7 +211,7 @@ export type ActionHandlingResult = {
   actionKey?: string;
   /** Present only while a confirmation is waiting for this exact action. */
   executionId?: string;
-  status?: ActionStatus | "rejected";
+  status?: ActionStatus | "rejected" | "collecting";
 };
 
 export class ActionPublicError extends Error {

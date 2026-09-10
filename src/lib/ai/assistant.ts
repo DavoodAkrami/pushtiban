@@ -1,4 +1,11 @@
 import "server-only";
+import { boundedCompletion } from "./runtime/provider";
+import { emitProgress, RunBudgetExceeded } from "./runtime/budget";
+import { CONTEXT_POLICY, taskContext, buildConversationContext } from "./runtime/context";
+import { runConversation, runtimeConversation } from "./runtime/orchestrator";
+import { handleRuntimeAction } from "./runtime/action";
+import { conversationScope, previewScope } from "./runtime/store";
+import type { RunProgressEvent, Run } from "./runtime/contracts";
 
 import type OpenAI from "openai";
 import type {
@@ -33,7 +40,7 @@ import {
   describeAvailableActions,
   describeRelevantActionFollowUp,
 } from "@/lib/ai/actions/registry";
-import { executeModelAction } from "@/lib/ai/actions/server";
+
 import { isAssistantChannelEnabled } from "@/lib/ai/availability";
 import { redactVerificationInput } from "@/lib/ai/redaction";
 
@@ -101,7 +108,7 @@ const requestCompletion = async ({
   const timeout = setTimeout(() => controller.abort(), COMPLETION_TIMEOUT_MS);
 
   try {
-    const completion = await client.chat.completions.create(
+    const completion = await boundedCompletion(client,
       {
         model,
         messages,
@@ -151,7 +158,7 @@ const requestCompletionWithEscalation = async ({
   const timeout = setTimeout(() => controller.abort(), COMPLETION_TIMEOUT_MS);
 
   try {
-    const completion = await client.chat.completions.create(
+    const completion = await boundedCompletion(client,
       {
         model,
         messages,
@@ -269,10 +276,12 @@ export const customerRequestedHuman = (text: string): boolean => {
 export type AssistantResult = {
   text: string | null;
   needsHuman: boolean;
+  progress?: RunProgressEvent[];
+  run?: { id: string; counts: Run["counts"]; budgetExhausted: boolean };
   action?: {
     key?: string;
     executionId?: string;
-    status: "pending_confirmation" | "executing" | "succeeded" | "failed" | "expired" | "rejected";
+    status: "collecting" | "pending_confirmation" | "executing" | "succeeded" | "failed" | "expired" | "rejected";
   };
   /**
    * What retrieval found for this message. The channel webhooks ignore it — it
@@ -339,11 +348,13 @@ const ESCALATE_TOOL = {
 const buildEscalationSystemPrompt = (basePrompt: string): string =>
   `${basePrompt}\nCall \`escalate_to_admin\` ONLY when the customer asks to reach a human/admin, or when you genuinely cannot answer (put a one-line apology in \`preface\`). Never call it for questions you can answer, greetings, or small talk.`;
 
-export const generateAssistantReply = async (
+const generateReply = async (
   question: string,
   userId?: string,
   options: {
     channel?: AssistantChannel;
+    onProgress?: (event: RunProgressEvent) => Promise<void>;
+    previewSession?: string;
     handoffEnabled?: boolean;
     history?: ChatTurn[];
     privateAccess?: PrivateAccessIdentity;
@@ -359,22 +370,21 @@ export const generateAssistantReply = async (
   // Chat memory (src/lib/ai/memory.ts). A non-empty history means the customer
   // is mid-session: the assistant must not re-introduce itself, and the
   // previous message helps the intent call resolve follow-ups.
-  const history = options.history ?? [];
-  const safeQuestion = options.privateAccess
-    ? redactVerificationInput(question)
-    : question;
-  const continuingSession = history.length > 0;
+  const history = CONTEXT_POLICY.trim(options.history ?? []);
+  const draftContext = taskContext(runtimeConversation()?.draft ?? null);
+  const safeQuestion = redactVerificationInput(question);
+  const continuingSession = history.length > 0 || Boolean(draftContext);
   const previousUserMessage = [...history]
     .reverse()
     .find((turn) => turn.role === "user")?.text;
-  const actionConversation = history.length
+  const actionConversation = draftContext || (history.length
     ? JSON.stringify(
         history.slice(-4).map((turn) => ({
           role: turn.role,
           text: turn.text.slice(0, 240),
         }))
       ).slice(0, 1_200)
-    : undefined;
+    : undefined);
   const customerIntentContext = [
     ...history
       .filter((turn) => turn.role === "user")
@@ -391,7 +401,7 @@ export const generateAssistantReply = async (
   // every single message.
   const escalationAvailable = options.handoffEnabled !== false;
   const actionCapabilities = await describeAvailableActions({
-    actionContextAvailable: Boolean(options.actionContext),
+    actionContextAvailable: Boolean(options.actionContext || options.previewSession),
     handoffEnabled: options.handoffEnabled === true,
     userId,
   });
@@ -430,6 +440,7 @@ export const generateAssistantReply = async (
           verifiedPrivateCollectionKey: options.verifiedPrivateCollectionKey,
           actionCapabilities: actionCapabilities || undefined,
         }).catch((error: unknown) => {
+          if (error instanceof RunBudgetExceeded) throw error;
           const message =
             error instanceof Error
               ? error.message.slice(0, 200)
@@ -454,17 +465,12 @@ export const generateAssistantReply = async (
   if (
     retrieval?.actionRequest != null &&
     userId &&
-    options.actionContext
+    (options.actionContext || options.previewSession)
   ) {
-    const action = await executeModelAction({
-      request: retrieval.actionRequest,
-      context: {
-        ...options.actionContext,
-        userId,
-        customerMessage: question,
-        customerIntentContext,
-      },
-    });
+    const action = await handleRuntimeAction(retrieval.actionRequest, {
+      ...(options.actionContext ?? { channel: "telegram", connectionId: userId, customerExternalId: userId, conversationId: options.previewSession!, deliveryId: `preview:${crypto.randomUUID()}` }),
+      userId, customerMessage: question, customerIntentContext,
+    }, Boolean(options.previewSession));
     if (action.handled) {
       return {
         text: action.text,
@@ -502,11 +508,7 @@ export const generateAssistantReply = async (
 
   // The session's recent turns sit between the system prompt and the new
   // question, so the model reads them as what they are: earlier messages.
-  const messages: ChatCompletionMessageParam[] = [
-    { role: "system", content: systemPrompt },
-    ...history.map((turn) => ({ role: turn.role, content: turn.text })),
-    { role: "user", content: safeQuestion },
-  ];
+  const messages: ChatCompletionMessageParam[] = buildConversationContext(systemPrompt, history, safeQuestion, runtimeConversation()?.draft ?? null);
 
   // The site admin can pin one chat model in /dashboard/admin/settings. It
   // overrides the env var for whichever provider owns that model id, and that
@@ -540,6 +542,7 @@ export const generateAssistantReply = async (
     );
   }
 
+  await emitProgress("generating_answer");
   for (const provider of providers) {
     if (!provider.client) continue;
 
@@ -557,6 +560,7 @@ export const generateAssistantReply = async (
         });
         if (text) return { text, needsHuman: false, retrieval };
       } catch (error) {
+        if (error instanceof RunBudgetExceeded) throw error;
         const message =
           error instanceof Error ? error.message.slice(0, 200) : "Unknown error";
         console.error(`AI provider ${provider.id} failed:`, message);
@@ -574,6 +578,7 @@ export const generateAssistantReply = async (
         usage,
       });
     } catch (error) {
+        if (error instanceof RunBudgetExceeded) throw error;
       const message =
         error instanceof Error ? error.message.slice(0, 200) : "Unknown error";
       console.error(
@@ -591,7 +596,8 @@ export const generateAssistantReply = async (
           usage,
         });
         if (text) return { text, needsHuman: false, retrieval };
-      } catch {
+      } catch (error) {
+        if (error instanceof RunBudgetExceeded) throw error;
         // fall through to the next provider
       }
     }
@@ -600,4 +606,12 @@ export const generateAssistantReply = async (
 
   // No provider succeeded — signal that a human should step in.
   return { text: null, needsHuman: true, retrieval };
+};
+
+/** Shared orchestration entry point for live channels and isolated preview. */
+export const generateAssistantReply = async (...args: Parameters<typeof generateReply>): Promise<AssistantResult> => {
+  const [question, userId, options = {}] = args;
+  const scope = userId && options.actionContext ? conversationScope({ ...options.actionContext, userId, customerMessage: question })
+    : userId && options.previewSession ? previewScope(userId, options.previewSession) : undefined;
+  return runConversation({ scope, message: question, onProgress: options.onProgress, execute: () => generateReply(...args) });
 };

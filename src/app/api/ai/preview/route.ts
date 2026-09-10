@@ -30,6 +30,7 @@ const MAX_TURN_CHARS = 400;
 type PreviewBody = {
   question?: unknown;
   history?: unknown;
+  sessionId?: unknown;
 };
 
 const hasValidOrigin = (request: NextRequest) => {
@@ -142,10 +143,12 @@ export const POST = async (request: NextRequest) => {
     );
   }
 
+  const sessionId = typeof body.sessionId === "string" && /^[a-f0-9-]{36}$/i.test(body.sessionId) ? body.sessionId : crypto.randomUUID();
   const handoffEnabled = settings?.human_handoff_enabled === true;
 
   const result = await generateAssistantReply(question, user.id, {
     handoffEnabled,
+    previewSession: sessionId,
     history: parseHistory(body.history),
   });
   const retrieval = result.retrieval
@@ -177,6 +180,9 @@ export const POST = async (request: NextRequest) => {
     // Telegram renders none of the model's Markdown, so the customer sees the
     // converted HTML. Showing the same conversion here means the preview shows
     // real formatting instead of raw **stars**.
+    sessionId,
+    progress: result.progress,
+    run: result.run,
     html: result.text ? markdownToTelegramHtml(result.text) : null,
     text: result.text,
     needsHuman: result.needsHuman,
