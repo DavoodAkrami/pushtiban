@@ -38,6 +38,7 @@ let mutations = 0;
 let nextAction = null;
 let calls = [];
 let prompts = [];
+let toolTimeouts = 0;
 const owner = "11111111-1111-4111-8111-111111111111";
 const connection = "22222222-2222-4222-8222-222222222222";
 const actionContext = (channel) => ({
@@ -158,6 +159,10 @@ const client = {
         const planner = body.temperature === 0;
         calls.push(planner ? "planner" : "answer");
         prompts.push(body.messages);
+        if (!planner && body.tools && toolTimeouts > 0) {
+          toolTimeouts--;
+          throw new Error("Request timed out");
+        }
         return {
           choices: [
             {
@@ -401,6 +406,17 @@ try {
   assert.deepEqual(calls, ["planner", "answer"]);
   assert.equal(greeting.run.counts.model, 2);
   assert.equal(greeting.run.counts.planner, 1);
+  toolTimeouts = 1;
+  calls = [];
+  const recoveredGreeting = await generateAssistantReply("سلام", owner, {
+    channel: "telegram",
+    actionContext: actionContext("telegram"),
+    handoffEnabled: true,
+    history: [],
+  });
+  assert.equal(recoveredGreeting.text, "سلام، چطور کمک کنم؟");
+  assert.equal(recoveredGreeting.run.budgetExhausted, false);
+  assert.deepEqual(calls, ["planner", "answer", "answer"]);
   metrics.push({
     scenario: "greeting",
     modelCalls: greeting.run.counts.model,
@@ -650,7 +666,7 @@ try {
   assert.equal(safeSink.text, "canonical");
 
   run = budget.createRun({ durationMs: 1 }, Date.now() - 10);
-  assert.throws(() => budget.takeStep("model", run), budget.RunBudgetExceeded);
+  assert.throws(() => budget.takeStep("model", run), budget.RunDeadlineExceeded);
   // One editable status message consumes arbitrary server text without interpretation.
   let now = 0;
   const operations = [];

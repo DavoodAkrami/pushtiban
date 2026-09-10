@@ -1,6 +1,11 @@
 import "server-only";
 import { boundedCompletion } from "./runtime/provider";
-import { emitProgress, RunBudgetExceeded } from "./runtime/budget";
+import {
+  emitProgress,
+  remainingRunMs,
+  requestTimeout,
+  RunBudgetExceeded,
+} from "./runtime/budget";
 import { CONTEXT_POLICY, taskContext, buildConversationContext } from "./runtime/context";
 import { runConversation, runtimeConversation } from "./runtime/orchestrator";
 import { handleRuntimeAction } from "./runtime/action";
@@ -44,7 +49,8 @@ import {
 import { isAssistantChannelEnabled } from "@/lib/ai/availability";
 import { redactVerificationInput } from "@/lib/ai/redaction";
 
-const COMPLETION_TIMEOUT_MS = 25_000;
+const COMPLETION_TIMEOUT_MS = 15_000;
+const MIN_COMPLETION_ATTEMPT_MS = 5_000;
 const DEFAULT_NVIDIA_MODEL = "meta/llama-3.3-70b-instruct";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 
@@ -91,6 +97,18 @@ type Provider = {
   model: string;
 };
 
+const isTimeoutError = (error: unknown) =>
+  error instanceof Error && /(?:timed out|timeout|aborted|deadline)/iu.test(error.message);
+
+const completionAbort = () => {
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    requestTimeout(COMPLETION_TIMEOUT_MS),
+  );
+  return { controller, timeout };
+};
+
 const requestCompletion = async ({
   client,
   maxLength,
@@ -104,8 +122,7 @@ const requestCompletion = async ({
   model: string;
   usage?: { userId: string; provider: string };
 }) => {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), COMPLETION_TIMEOUT_MS);
+  const { controller, timeout } = completionAbort();
 
   try {
     const completion = await boundedCompletion(client,
@@ -154,8 +171,7 @@ const requestCompletionWithEscalation = async ({
   model: string;
   usage?: { userId: string; provider: string };
 }): Promise<AssistantResult | null> => {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), COMPLETION_TIMEOUT_MS);
+  const { controller, timeout } = completionAbort();
 
   try {
     const completion = await boundedCompletion(client,
@@ -428,6 +444,7 @@ const generateReply = async (
 
   // Business identity + owner-authored persona. Retrieval and the persona are
   // independent, so they run together; a persona read never throws.
+  let retrievalTimedOut = false;
   const [persona, retrieval] = await Promise.all([
     userId ? getBusinessPersona(userId) : Promise.resolve(DEFAULT_PERSONA),
     userId
@@ -441,6 +458,7 @@ const generateReply = async (
           actionCapabilities: actionCapabilities || undefined,
         }).catch((error: unknown) => {
           if (error instanceof RunBudgetExceeded) throw error;
+          retrievalTimedOut ||= isTimeoutError(error);
           const message =
             error instanceof Error
               ? error.message.slice(0, 200)
@@ -543,8 +561,11 @@ const generateReply = async (
   }
 
   await emitProgress("generating_answer");
+  let plainFallbackUsed = false;
+  let providerTimedOut = false;
   for (const provider of providers) {
     if (!provider.client) continue;
+    if (remainingRunMs() < MIN_COMPLETION_ATTEMPT_MS) break;
 
     const usage = userId ? { userId, provider: provider.id } : undefined;
 
@@ -561,6 +582,7 @@ const generateReply = async (
         if (text) return { text, needsHuman: false, retrieval };
       } catch (error) {
         if (error instanceof RunBudgetExceeded) throw error;
+        providerTimedOut ||= isTimeoutError(error);
         const message =
           error instanceof Error ? error.message.slice(0, 200) : "Unknown error";
         console.error(`AI provider ${provider.id} failed:`, message);
@@ -578,15 +600,21 @@ const generateReply = async (
         usage,
       });
     } catch (error) {
-        if (error instanceof RunBudgetExceeded) throw error;
+      if (error instanceof RunBudgetExceeded) throw error;
+      providerTimedOut ||= isTimeoutError(error);
       const message =
         error instanceof Error ? error.message.slice(0, 200) : "Unknown error";
       console.error(
         `AI provider ${provider.id} failed with tools:`,
         message
       );
-      // Some models reject the `tools` parameter entirely. Retry the same
-      // provider without tools so the customer still gets a text reply.
+      // Some models reject the `tools` parameter entirely. One plain-text
+      // retry across all providers preserves a useful fallback without
+      // consuming the whole shared run budget after a network timeout.
+      if (plainFallbackUsed || remainingRunMs() < MIN_COMPLETION_ATTEMPT_MS) {
+        continue;
+      }
+      plainFallbackUsed = true;
       try {
         const text = await requestCompletion({
           client: provider.client,
@@ -598,10 +626,18 @@ const generateReply = async (
         if (text) return { text, needsHuman: false, retrieval };
       } catch (error) {
         if (error instanceof RunBudgetExceeded) throw error;
-        // fall through to the next provider
+        providerTimedOut ||= isTimeoutError(error);
       }
     }
     if (result) return { ...result, retrieval };
+  }
+
+  if (providerTimedOut || retrievalTimedOut) {
+    return {
+      text: "پاسخ‌گویی هوشمند موقتاً با تأخیر روبه‌روست؛ لطفاً کمی بعد دوباره تلاش کنید.",
+      needsHuman: false,
+      retrieval,
+    };
   }
 
   // No provider succeeded — signal that a human should step in.

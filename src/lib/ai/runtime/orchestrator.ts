@@ -7,6 +7,7 @@ import {
   emitProgress,
   withRun,
   RunBudgetExceeded,
+  RunDeadlineExceeded,
   checkDeadline,
   takeStep,
 } from "./budget";
@@ -149,8 +150,11 @@ export const runConversation = async ({
     } catch (error) {
       await emitProgress("failed");
       const exhausted = error instanceof RunBudgetExceeded;
+      const timedOut = error instanceof RunDeadlineExceeded;
       return {
-        text: exhausted
+        text: timedOut
+          ? "پاسخ‌گویی بیشتر از زمان مجاز طول کشید؛ لطفاً کمی بعد دوباره تلاش کنید."
+          : exhausted
           ? "پردازش این درخواست به حد مجاز رسید؛ لطفاً درخواست را کوتاه‌تر و دقیق‌تر بفرستید."
           : "ادامهٔ درخواست ممکن نشد؛ لطفاً دوباره تلاش کنید.",
         needsHuman: false,

@@ -26,6 +26,11 @@ export class RunBudgetExceeded extends Error {
     super("run_budget_exhausted");
   }
 }
+export class RunDeadlineExceeded extends Error {
+  constructor() {
+    super("run_deadline_exceeded");
+  }
+}
 const TEXT: Record<ProgressCode, string> = {
   run_started: "در حال فکر کردن…",
   thinking: "در حال بررسی پیام…",
@@ -75,9 +80,12 @@ export const withRun = <T>(
   sink: RuntimeScope["sink"],
   task: () => Promise<T>,
 ) => scope.run({ run, events, sink }, task);
+export const remainingRunMs = (run = currentRun()) =>
+  run
+    ? Math.max(0, run.budget.durationMs - (Date.now() - run.startedAt))
+    : Number.POSITIVE_INFINITY;
 export const checkDeadline = (run = currentRun()) => {
-  if (run && Date.now() - run.startedAt >= run.budget.durationMs)
-    throw new RunBudgetExceeded();
+  if (run && remainingRunMs(run) === 0) throw new RunDeadlineExceeded();
 };
 export const takeStep = (kind: RunStep, run = currentRun()) => {
   if (!run) return;
@@ -138,10 +146,7 @@ export const requestTimeout = (maximum: number) => {
   const run = currentRun();
   checkDeadline(run);
   return run
-    ? Math.max(
-        1,
-        Math.min(maximum, run.budget.durationMs - (Date.now() - run.startedAt)),
-      )
+    ? Math.min(maximum, remainingRunMs(run))
     : maximum;
 };
 export const emitProgress = async (

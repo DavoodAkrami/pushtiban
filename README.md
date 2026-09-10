@@ -547,8 +547,13 @@ Per-call output stays at the existing 100/240/480 planner and 700 answer tokens.
 Before dispatch, UTF-8 serialized bytes plus 512 protocol tokens provide a
 conservative input allowance for the current byte-token providers. Failed calls
 retain reservations. SDK automatic retries are disabled; explicit failover is
-counted. Query embeddings reserve input too. Provider timeouts are bounded by
-the remaining deadline; database/delivery reconciliation is still Phase 3.
+counted. Query embeddings reserve input too. Planner and embedding requests
+each time out after at most 8 seconds; final completions have a 15-second cap
+and start only when at least 5 seconds remain in the shared deadline. A
+tool-schema failure receives one plain-text retry across all providers, rather
+than repeatedly consuming the remaining budget. Timeouts return a clear
+temporary-delay reply instead of claiming that the customer's message exceeded
+a limit. Database/delivery reconciliation is still Phase 3.
 Logged actual provider usage is separate from conservative reservations and
 continues in `ai_usage_log`. Exhaustion returns a deterministic Persian retry
 message and a failed event; it cannot silently start another model call.

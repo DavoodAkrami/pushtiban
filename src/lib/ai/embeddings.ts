@@ -11,6 +11,7 @@ import {
 export const CHUNK_SIZE = 1200;
 /** Character overlap between consecutive chunks so context is not cut mid-sentence. */
 export const CHUNK_OVERLAP = 200;
+const EMBEDDING_TIMEOUT_MS = 8_000;
 
 type EmbeddingResponse = {
   data: Array<{ embedding?: number[] }>;
@@ -72,7 +73,7 @@ export const embedQuery = async (text: string): Promise<number[] | null> => {
     model: EMBEDDINGS_MODEL,
     input: text,
     dimensions: EMBEDDINGS_DIMENSIONS,
-  }, { maxRetries: 0, timeout: requestTimeout(15_000) })) as unknown as EmbeddingResponse;
+  }, { maxRetries: 0, timeout: requestTimeout(EMBEDDING_TIMEOUT_MS) })) as unknown as EmbeddingResponse;
 
   return response.data?.[0]?.embedding ?? null;
 };
