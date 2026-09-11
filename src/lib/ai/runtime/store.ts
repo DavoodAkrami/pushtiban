@@ -1,3 +1,11 @@
+import {
+  currentProcessing,
+  leaseArgs,
+  operationKey,
+  processingRpc,
+  readCheckpoint,
+  writeCheckpoint,
+} from "../processing/context";
 import "server-only";
 import { createHash } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -38,6 +46,10 @@ export type ConversationStore = {
 };
 export const conversationStore: ConversationStore = {
   load: async (scope) => {
+    const c = currentProcessing();
+    const key = `${c?.runtimeKey}:initial_conversation`;
+    const saved = c ? readCheckpoint<Conversation>(key) : undefined;
+    if (saved) return saved;
     const { data, error } = await createAdminClient().rpc("ai_runtime_load", {
       p_user_id: scope.userId,
       p_channel: scope.channel,
@@ -46,9 +58,23 @@ export const conversationStore: ConversationStore = {
       p_conversation_hash: scope.conversationKeyHash,
     });
     if (error || !data) throw new Error("runtime_state_unavailable");
+    if (c) await writeCheckpoint(key, data);
     return data as Conversation;
   },
   save: async (scope, previous, draft, mode = previous.mode) => {
+    const durable = currentProcessing();
+    if (durable) {
+      const key = operationKey(`${durable.runtimeKey}:draft`);
+      return processingRpc<Conversation>("ai_processing_save_draft", {
+        ...leaseArgs(),
+        p_key: key,
+        p_user_id: scope.userId,
+        p_id: previous.id,
+        p_revision: previous.revision,
+        p_draft: draft,
+        p_mode: mode,
+      });
+    }
     const { data, error } = await createAdminClient().rpc("ai_runtime_save", {
       p_user_id: scope.userId,
       p_id: previous.id,

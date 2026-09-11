@@ -138,7 +138,7 @@ try {
 }
 
 const telegramWebhook = fs.readFileSync(
-  path.join(root, "src", "app", "api", "telegram", "webhook", "[botId]", "route.ts"),
+  path.join(root, "src", "lib", "telegram", "processor.ts"),
   "utf8"
 );
 assert.match(

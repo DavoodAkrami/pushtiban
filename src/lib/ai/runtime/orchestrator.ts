@@ -1,3 +1,16 @@
+import {
+  currentProcessing,
+  operationKey,
+  readCheckpoint,
+  writeCheckpoint,
+  persistBudget,
+  assertLease,
+  trace,
+} from "../processing/context";
+import {
+  ProcessingFailure,
+  rethrowProcessingFailure,
+} from "../processing/failures";
 import "server-only";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AssistantResult } from "../assistant";
@@ -32,7 +45,7 @@ export const saveDraft = async (
 ) => {
   const current = state.getStore();
   if (!current) throw new Error("runtime_state_required");
-  checkDeadline();
+  if (!currentProcessing()?.run.action_execution_id) checkDeadline();
   current.conversation = await current.store.save(
     current.scope,
     current.conversation,
@@ -55,7 +68,22 @@ export const runConversation = async ({
   execute: () => Promise<AssistantResult>;
   store?: ConversationStore;
 }): Promise<AssistantResult> => {
-  const run = createRun();
+  const durable = currentProcessing();
+  const key = operationKey("runtime");
+  if (durable) {
+    await assertLease();
+    const saved = readCheckpoint<AssistantResult>(`${key}:result`);
+    if (saved) {
+      await (await import("../processing/replay")).authorizeReplay(saved);
+      return saved;
+    }
+    if (readCheckpoint(`${key}:private`))
+      throw new ProcessingFailure("replay_unavailable");
+    durable.runtimeKey = key;
+  }
+  const run = durable?.run.runtime ?? createRun();
+  if (durable) run.id = durable.run.id;
+  await persistBudget(run);
   const progress: RunProgressEvent[] = [];
   return withRun(run, progress, onProgress, async () => {
     await emitProgress("run_started");
@@ -115,12 +143,23 @@ export const runConversation = async ({
             revision: draft.revision + 1,
           });
         }
+        if (!durable?.run.action_execution_id) checkDeadline();
         await emitProgress("thinking");
         const result = await execute();
+        if (durable && result.action?.status === "executing")
+          throw new ProcessingFailure("action_unresolved");
         const live = activeDraft(runtimeConversation()?.draft ?? null);
-        if (live && result.action?.key === live.type && result.action.status === "succeeded")
+        if (
+          live &&
+          result.action?.key === live.type &&
+          result.action.status === "succeeded"
+        )
           await saveDraft(endTask(live, "completed"));
-        if (live && result.action?.key === live.type && result.action.status === "expired")
+        if (
+          live &&
+          result.action?.key === live.type &&
+          result.action.status === "expired"
+        )
           await saveDraft(endTask(live, "expired"));
         if (result.needsHuman) await emitProgress("handoff");
         else if (result.retrieval?.privateVerification)
@@ -142,21 +181,34 @@ export const runConversation = async ({
             ? "completed"
             : "failed",
       );
-      return {
+      if (result.action?.status === "failed")
+        await trace("runtime_failed", {
+          failure_category: "action_validation_failed",
+        });
+      const completed = {
         ...result,
         progress,
         run: { id: run.id, counts: { ...run.counts }, budgetExhausted: false },
       };
+      await persistBudget(run);
+      // Private results cannot be replayed after verification expires.
+      if (durable && result.retrieval?.privateBusinessData) {
+        await writeCheckpoint(`${key}:private`, true);
+      } else if (durable) await writeCheckpoint(`${key}:result`, completed);
+      await trace("final_response_generated");
+      return completed;
     } catch (error) {
+      rethrowProcessingFailure(error);
+      await persistBudget(run);
       await emitProgress("failed");
       const exhausted = error instanceof RunBudgetExceeded;
       const timedOut = error instanceof RunDeadlineExceeded;
-      return {
+      const failed: AssistantResult = {
         text: timedOut
           ? "پاسخ‌گویی بیشتر از زمان مجاز طول کشید؛ لطفاً کمی بعد دوباره تلاش کنید."
           : exhausted
-          ? "پردازش این درخواست به حد مجاز رسید؛ لطفاً درخواست را کوتاه‌تر و دقیق‌تر بفرستید."
-          : "ادامهٔ درخواست ممکن نشد؛ لطفاً دوباره تلاش کنید.",
+            ? "پردازش این درخواست به حد مجاز رسید؛ لطفاً درخواست را کوتاه‌تر و دقیق‌تر بفرستید."
+            : "ادامهٔ درخواست ممکن نشد؛ لطفاً دوباره تلاش کنید.",
         needsHuman: false,
         progress,
         run: {
@@ -165,6 +217,17 @@ export const runConversation = async ({
           budgetExhausted: exhausted,
         },
       };
+      if (durable) {
+        await trace("runtime_failed", {
+          failure_category: timedOut
+            ? "deadline_exceeded"
+            : exhausted
+              ? "budget_exhausted"
+              : "internal_failure",
+        });
+        await writeCheckpoint(`${key}:result`, failed);
+      }
+      return failed;
     }
   });
 };

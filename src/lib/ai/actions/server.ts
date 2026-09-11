@@ -1,3 +1,15 @@
+import {
+  currentProcessing,
+  assertLease,
+  updateProcessing,
+  processingRpc,
+  leaseArgs,
+  trace,
+} from "../processing/context";
+import {
+  ProcessingFailure,
+  rethrowProcessingFailure,
+} from "../processing/failures";
 import "server-only";
 import { runConversation } from "../runtime/orchestrator";
 import { conversationScope } from "../runtime/store";
@@ -60,6 +72,7 @@ const executionSelect =
 
 const actionStore: ActionExecutionStore = {
   claim: async (input: ClaimActionExecutionInput) => {
+    await assertLease();
     const admin = createAdminClient();
     const { data, error } = await admin
       .from("business_action_executions")
@@ -82,6 +95,10 @@ const actionStore: ActionExecutionStore = {
       .select(executionSelect)
       .single();
     if (!error && data) {
+      await updateProcessing({
+        action_execution_id: data.id,
+        stage: "action_prepared",
+      });
       return { created: true, execution: toExecution(data as ExecutionRow) };
     }
     if (error?.code !== "23505") {
@@ -113,6 +130,20 @@ const actionStore: ActionExecutionStore = {
     return data ? toExecution(data as ExecutionRow) : null;
   },
   findPending: async (scope) => {
+    const linked = currentProcessing()?.run.action_execution_id;
+    if (linked) {
+      const { data, error } = await createAdminClient()
+        .from("business_action_executions")
+        .select(executionSelect)
+        .eq("id", linked)
+        .eq("user_id", scope.userId)
+        .eq("connection_id", scope.connectionId)
+        .eq("customer_identity_hash", scope.customerIdentityHash)
+        .eq("conversation_key_hash", scope.conversationKeyHash)
+        .maybeSingle();
+      if (error) throw new ProcessingFailure("database_unavailable");
+      if (data) return toExecution(data as ExecutionRow);
+    }
     const { data, error } = await createAdminClient()
       .from("business_action_executions")
       .select(executionSelect)
@@ -129,6 +160,14 @@ const actionStore: ActionExecutionStore = {
     return data ? toExecution(data as ExecutionRow) : null;
   },
   markExecuting: async (executionId) => {
+    if (currentProcessing()) {
+      const claimed = await processingRpc<boolean>(
+        "ai_processing_action_claim",
+        { ...leaseArgs(), p_execution_id: executionId },
+      );
+      if (claimed) await updateProcessing({ action_execution_id: executionId });
+      return claimed;
+    }
     const { data, error } = await createAdminClient()
       .from("business_action_executions")
       .update({
@@ -143,6 +182,7 @@ const actionStore: ActionExecutionStore = {
     return Boolean(data);
   },
   claimStaleExecution: async (executionId, previousUpdatedAt) => {
+    await assertLease();
     const { data, error } = await createAdminClient()
       .from("business_action_executions")
       .update({ execution_started_at: new Date().toISOString() })
@@ -155,6 +195,7 @@ const actionStore: ActionExecutionStore = {
     return Boolean(data);
   },
   markSucceeded: async (executionId, result) => {
+    await assertLease();
     const { data, error } = await createAdminClient()
       .from("business_action_executions")
       .update({
@@ -169,8 +210,10 @@ const actionStore: ActionExecutionStore = {
       .select("id")
       .maybeSingle();
     if (error || !data) throw new Error("Action success audit failed.");
+    await trace("action_succeeded");
   },
   markFailed: async (executionId, failureCode) => {
+    await assertLease();
     const { error } = await createAdminClient()
       .from("business_action_executions")
       .update({
@@ -184,6 +227,7 @@ const actionStore: ActionExecutionStore = {
     if (error) throw new Error("Action failure audit failed.");
   },
   markExpired: async (executionId) => {
+    await assertLease();
     const { error } = await createAdminClient()
       .from("business_action_executions")
       .update({
@@ -199,6 +243,7 @@ const actionStore: ActionExecutionStore = {
 };
 
 const authorizeContext = async (context: ActionExecutionContext) => {
+  await assertLease();
   const table =
     context.channel === "telegram"
       ? "telegram_connections"
@@ -215,7 +260,11 @@ const authorizeContext = async (context: ActionExecutionContext) => {
       userId: context.userId,
     }),
   ]);
-  return !connectionResult.error && Boolean(connectionResult.data) && assistantEnabled;
+  return (
+    !connectionResult.error &&
+    Boolean(connectionResult.data) &&
+    assistantEnabled
+  );
 };
 
 const verifyCustomer = async (context: ActionExecutionContext) => {
@@ -258,7 +307,8 @@ export const executeModelAction = async ({
 }): Promise<ActionHandlingResult> => {
   try {
     return await actionEngine.executeRequested({ context, request });
-  } catch {
+  } catch (error) {
+    rethrowProcessingFailure(error);
     console.error("Business action request failed safely.");
     return safeFailure();
   }
@@ -276,12 +326,38 @@ export const handleActionConfirmation = async ({
   message: string;
 }): Promise<ActionHandlingResult> => {
   // Non-confirmation text belongs to the planner, not this zero-model path.
-  if (!/^(بله|آره|اره|تأیید|تایید|اوکی|yes|ok|نه|خیر|لغو|انصراف|no|cancel|لغو سفارش|لغو درخواست)[.!؟?،,]*$/iu.test(message.trim())) return { handled: false, text: null };
+  if (
+    !/^(بله|آره|اره|تأیید|تایید|اوکی|yes|ok|نه|خیر|لغو|انصراف|no|cancel|لغو سفارش|لغو درخواست)[.!؟?،,]*$/iu.test(
+      message.trim(),
+    )
+  )
+    return { handled: false, text: null };
   let handled: ActionHandlingResult = { handled: false, text: null };
-  const result = await runConversation({ scope: conversationScope(context), message, onProgress, expectedExecutionId, execute: async () => {
-    handled = await actionEngine.confirmPending({ context, expectedExecutionId, message });
-    return { text: handled.text, needsHuman: false, action: handled.status ? { key: handled.actionKey, executionId: handled.executionId, status: handled.status } : undefined };
-  } });
-  if (result.text && !handled.handled) return { handled: true, text: result.text, status: result.action?.status };
+  const result = await runConversation({
+    scope: conversationScope(context),
+    message,
+    onProgress,
+    expectedExecutionId,
+    execute: async () => {
+      handled = await actionEngine.confirmPending({
+        context,
+        expectedExecutionId,
+        message,
+      });
+      return {
+        text: handled.text,
+        needsHuman: false,
+        action: handled.status
+          ? {
+              key: handled.actionKey,
+              executionId: handled.executionId,
+              status: handled.status,
+            }
+          : undefined,
+      };
+    },
+  });
+  if (result.text && !handled.handled)
+    return { handled: true, text: result.text, status: result.action?.status };
   return { ...handled, text: result.text };
 };

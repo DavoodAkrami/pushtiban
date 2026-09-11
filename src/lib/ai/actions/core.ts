@@ -1,3 +1,5 @@
+import { currentProcessing } from "../processing/context";
+import { rethrowProcessingFailure } from "../processing/failures";
 import { createHash } from "node:crypto";
 
 export const ACTION_LIMITS = {
@@ -86,11 +88,11 @@ export type ActionDefinition<Input, Result, PreparedInput = Input> = {
   isEnabled: (context: ActionExecutionContext) => Promise<boolean>;
   prepare?: (
     context: ActionExecutionContext,
-    input: Input
+    input: Input,
   ) => Promise<ActionPreparationResult<PreparedInput>>;
   execute: (
     context: ActionHandlerContext,
-    input: PreparedInput
+    input: PreparedInput,
   ) => Promise<Result>;
   formatResult: (result: Result) => string;
 };
@@ -110,14 +112,14 @@ export type RegisteredActionDefinition = {
   isEnabled: (context: ActionExecutionContext) => Promise<boolean>;
   prepare: (
     context: ActionExecutionContext,
-    input: unknown
+    input: unknown,
   ) => Promise<ActionPreparationResult<unknown>>;
   execute: (context: ActionHandlerContext, input: unknown) => Promise<unknown>;
   formatResult: (result: unknown) => string;
 };
 
 export const defineAction = <Input, Result, PreparedInput = Input>(
-  definition: ActionDefinition<Input, Result, PreparedInput>
+  definition: ActionDefinition<Input, Result, PreparedInput>,
 ): RegisteredActionDefinition => ({
   ...definition,
   inputSchema: {
@@ -126,7 +128,7 @@ export const defineAction = <Input, Result, PreparedInput = Input>(
   preparedInputSchema: {
     parse: (value) =>
       (definition.preparedInputSchema ?? definition.inputSchema).parse(
-        value as PreparedInput & Input
+        value as PreparedInput & Input,
       ),
   },
   resultSchema: {
@@ -174,19 +176,19 @@ export type ClaimActionExecutionInput = ActionExecutionScope & {
 
 export type ActionExecutionStore = {
   claim: (
-    input: ClaimActionExecutionInput
+    input: ClaimActionExecutionInput,
   ) => Promise<{ created: boolean; execution: StoredActionExecution }>;
   findByIdempotency: (
     userId: string,
-    idempotencyKey: string
+    idempotencyKey: string,
   ) => Promise<StoredActionExecution | null>;
   findPending: (
-    scope: ActionExecutionScope
+    scope: ActionExecutionScope,
   ) => Promise<StoredActionExecution | null>;
   markExecuting: (executionId: string) => Promise<boolean>;
   claimStaleExecution: (
     executionId: string,
-    previousUpdatedAt: string
+    previousUpdatedAt: string,
   ) => Promise<boolean>;
   markSucceeded: (executionId: string, result: unknown) => Promise<void>;
   markFailed: (executionId: string, failureCode: string) => Promise<void>;
@@ -200,7 +202,7 @@ export type ActionEngineDependencies = {
   verifyCustomer: (context: ActionExecutionContext) => Promise<boolean>;
   resolveConfiguration: (
     context: ActionExecutionContext,
-    definition: RegisteredActionDefinition
+    definition: RegisteredActionDefinition,
   ) => Promise<ActionBusinessConfiguration>;
   now?: () => Date;
 };
@@ -260,7 +262,7 @@ const serializedLength = (value: unknown) => {
 };
 
 export const parseActionRequest = (
-  value: unknown
+  value: unknown,
 ): { key: string; arguments: unknown } | null => {
   if (!isPlainObject(value)) return null;
   const keys = Object.keys(value);
@@ -305,25 +307,25 @@ const hash = (value: string) =>
   createHash("sha256").update(value, "utf8").digest("hex");
 
 export const actionScopeFor = (
-  context: ActionExecutionContext
+  context: ActionExecutionContext,
 ): ActionExecutionScope => ({
   userId: context.userId,
   channel: context.channel,
   connectionId: context.connectionId,
   customerIdentityHash: hash(
-    `${context.channel}:${context.connectionId}:${context.customerExternalId}`
+    `${context.channel}:${context.connectionId}:${context.customerExternalId}`,
   ),
   conversationKeyHash: hash(
-    `${context.channel}:${context.connectionId}:${context.conversationId}`
+    `${context.channel}:${context.connectionId}:${context.conversationId}`,
   ),
 });
 
 export const actionIdempotencyKeyFor = (
   context: ActionExecutionContext,
-  actionKey: string
+  actionKey: string,
 ) =>
   hash(
-    `v1:${context.userId}:${context.channel}:${context.connectionId}:${context.deliveryId}:${actionKey}`
+    `v1:${context.userId}:${context.channel}:${context.connectionId}:${context.deliveryId}:${actionKey}`,
   );
 
 const normalizeConfirmation = (value: string) =>
@@ -341,7 +343,7 @@ const confirmationChoice = (value: string): "yes" | "no" | null => {
   const normalized = normalizeConfirmation(value);
   if (
     ["بله", "آره", "اره", "تأیید", "تایید", "اوکی", "yes", "ok"].includes(
-      normalized
+      normalized,
     )
   ) {
     return "yes";
@@ -369,7 +371,7 @@ export const createActionEngine = ({
 }: ActionEngineDependencies) => {
   const confirmationPrompt = (
     definition: RegisteredActionDefinition,
-    preparedInput: unknown
+    preparedInput: unknown,
   ) => {
     if (!definition.confirmation.required) return TEXT.confirmationRequired;
     const prompt = definition.confirmation.prompt;
@@ -390,12 +392,19 @@ export const createActionEngine = ({
     try {
       const rawResult = await definition.execute(
         { ...context, executionId: execution.id },
-        input
+        input,
       );
       parsedResult = definition.resultSchema.parse(rawResult);
     } catch (error) {
-      const publicError =
-        error instanceof ActionPublicError ? error : null;
+      rethrowProcessingFailure(error);
+      const publicError = error instanceof ActionPublicError ? error : null;
+      if (currentProcessing() && !publicError)
+        return {
+          handled: true,
+          text: TEXT.inProgress,
+          actionKey: definition.key,
+          status: "executing",
+        };
       await store
         .markFailed(execution.id, publicError?.code ?? "execution_failed")
         .catch(() => undefined);
@@ -508,7 +517,9 @@ export const createActionEngine = ({
         status: "executing",
       };
     }
-    const preparedInput = definition.preparedInputSchema.parse(existing.arguments);
+    const preparedInput = definition.preparedInputSchema.parse(
+      existing.arguments,
+    );
     if (!preparedInput.success) {
       await store.markFailed(existing.id, "invalid_prepared_arguments");
       return {
@@ -528,7 +539,7 @@ export const createActionEngine = ({
 
   const authorize = async (
     definition: RegisteredActionDefinition,
-    context: ActionExecutionContext
+    context: ActionExecutionContext,
   ): Promise<ActionAuthorization> => {
     if (!validContext(context)) return { result: "rejected" };
     if (!(await authorizeContext(context))) return { result: "rejected" };
@@ -557,7 +568,7 @@ export const createActionEngine = ({
     if (!definition) return safeRejected(parsedRequest.key);
     if (
       !definition.intentGuard(
-        context.customerIntentContext ?? context.customerMessage
+        context.customerIntentContext ?? context.customerMessage,
       )
     ) {
       return safeRejected(definition.key);
@@ -567,7 +578,8 @@ export const createActionEngine = ({
 
     const authorization = await authorize(definition, context);
     if (authorization.result !== "allowed") {
-      if (authorization.result === "rejected") return safeRejected(definition.key);
+      if (authorization.result === "rejected")
+        return safeRejected(definition.key);
       return {
         handled: true,
         text:
@@ -583,7 +595,7 @@ export const createActionEngine = ({
     const idempotencyKey = actionIdempotencyKeyFor(context, definition.key);
     const existingExecution = await store.findByIdempotency(
       context.userId,
-      idempotencyKey
+      idempotencyKey,
     );
     if (existingExecution) {
       return handleExistingExecution({
@@ -603,11 +615,14 @@ export const createActionEngine = ({
         status: "rejected",
       };
     }
-    const preparedInput = definition.preparedInputSchema.parse(preparation.data);
+    const preparedInput = definition.preparedInputSchema.parse(
+      preparation.data,
+    );
     if (!preparedInput.success) return safeRejected(definition.key);
 
     const requiresConfirmation =
-      definition.confirmation.required || authorization.configuration.requireConfirmation;
+      definition.confirmation.required ||
+      authorization.configuration.requireConfirmation;
     const confirmationTtl = definition.confirmation.required
       ? (definition.confirmation.ttlMs ?? ACTION_LIMITS.confirmationTtlMs)
       : ACTION_LIMITS.confirmationTtlMs;
@@ -620,10 +635,7 @@ export const createActionEngine = ({
       requiresVerification: definition.verification === "verified_customer",
       requiresConfirmation,
       confirmationExpiresAt: requiresConfirmation
-        ? new Date(
-            currentTime.getTime() +
-              confirmationTtl
-          ).toISOString()
+        ? new Date(currentTime.getTime() + confirmationTtl).toISOString()
         : null,
     });
 
@@ -664,7 +676,8 @@ export const createActionEngine = ({
     message: string;
   }): Promise<ActionHandlingResult> => {
     const choice = confirmationChoice(message);
-    if (!choice || !validContext(context)) return { handled: false, text: null };
+    if (!choice || !validContext(context))
+      return { handled: false, text: null };
 
     const pending = await store.findPending(actionScopeFor(context));
     if (!pending) return { handled: false, text: null };
@@ -681,6 +694,28 @@ export const createActionEngine = ({
     if (!definition || !pending.requiresConfirmation) {
       await store.markFailed(pending.id, "definition_unavailable");
       return safeRejected(pending.actionKey);
+    }
+    if (pending.status !== "pending_confirmation") {
+      const authorization = await authorize(definition, context);
+      if (authorization.result !== "allowed")
+        return safeRejected(pending.actionKey);
+      if (
+        pending.status === "executing" &&
+        (!pending.confirmationExpiresAt ||
+          Date.parse(pending.confirmationExpiresAt) <= now().getTime())
+      )
+        return {
+          handled: true,
+          text: TEXT.failed,
+          actionKey: pending.actionKey,
+          status: "failed",
+        };
+      return handleExistingExecution({
+        context,
+        currentTime: now(),
+        definition,
+        existing: pending,
+      });
     }
     if (
       !pending.confirmationExpiresAt ||
@@ -706,7 +741,10 @@ export const createActionEngine = ({
 
     const authorization = await authorize(definition, context);
     if (authorization.result !== "allowed") {
-      await store.markFailed(pending.id, `authorization_${authorization.result}`);
+      await store.markFailed(
+        pending.id,
+        `authorization_${authorization.result}`,
+      );
       return authorization.result === "verification"
         ? {
             handled: true,

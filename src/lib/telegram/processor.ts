@@ -1,0 +1,1769 @@
+import { receiveEvent, processEvent } from "@/lib/ai/processing/worker";
+import { ProcessingFailure } from "@/lib/ai/processing/failures";
+import { conversationScope } from "@/lib/ai/runtime/store";
+import { prepareReplay } from "@/lib/ai/processing/privacy";
+import { telegramRequest } from "@/lib/telegram/transport";
+import { createTelegramProgress } from "@/lib/telegram/progress";
+import type { RunProgressEvent } from "@/lib/ai/runtime/contracts";
+import { timingSafeEqual } from "node:crypto";
+import { after, NextResponse, type NextRequest } from "next/server";
+import {
+  normalizeKeyword,
+  toTelegramCommandKeyword,
+  type AutomationTriggerType,
+} from "@/lib/automations";
+import {
+  generateAssistantReply,
+  customerRequestedHuman,
+} from "@/lib/ai/assistant";
+import {
+  upsertConversationForCustomer,
+  recordOwnerReply,
+  deliverConversationReply,
+  dismissConversation,
+  getConversation,
+  setPendingOwnerReply,
+  consumePendingOwnerReply,
+  listNotificationRecipients,
+  isAdminForConnection,
+} from "@/lib/ai/inbox";
+import {
+  buildReplyKeyboard,
+  REPLY_KEYBOARD_REMOVE,
+  type MenuButtonActionType,
+  type ReplyKeyboardMarkup,
+  type TelegramMenuButton,
+} from "@/lib/telegram-menu";
+import type { FlowKeyboardAction } from "@/lib/flows";
+import { getBusinessPersona, type BusinessPersona } from "@/lib/ai/persona";
+import { loadChatSession, recordChatTurns } from "@/lib/ai/memory";
+import { handlePrivateVerificationMessage } from "@/lib/business-data/private-access";
+import { handleActionConfirmation } from "@/lib/ai/actions/server";
+import { listSafeActionSettings } from "@/lib/ai/actions/registry";
+import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  markdownToTelegramHtml,
+  TELEGRAM_MESSAGE_MAX_LENGTH,
+} from "@/lib/telegram/format";
+import { decryptTelegramToken } from "@/lib/telegram/token-crypto";
+import { createBusinessDataImageSignedUrl } from "@/lib/business-data/image-storage";
+import { businessDataImagePathBelongsTo } from "@/lib/business-data/image-values";
+import type { BusinessDataDelivery } from "@/lib/business-data/ai-retrieval-core";
+import {
+  buildBusinessDataCardCaption,
+  buildProductOrderPrompt,
+  businessDataDeliveryRecordTitle,
+} from "@/lib/telegram/business-data-cards";
+
+const MAX_BODY_BYTES = 128_000;
+
+const BOT_ID_RE = /^\d{1,24}$/;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const COMPACT_UUID_RE = /^[A-Za-z0-9_-]{22}$/;
+const ACTION_CONFIRM_CALLBACK_PREFIX = "action_confirm:";
+const ACTION_CANCEL_CALLBACK_PREFIX = "action_cancel:";
+const BUY_CALLBACK_PREFIX = "buy:";
+
+type RouteContext = { params: Promise<{ botId: string }> };
+
+type TelegramMessageEntity = {
+  type?: string;
+  offset?: number;
+  length?: number;
+};
+
+type TelegramUser = {
+  id?: number;
+  is_bot?: boolean;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+  language_code?: string;
+};
+
+type TelegramUpdate = {
+  update_id?: number;
+  message?: {
+    message_id?: number;
+    text?: string;
+    entities?: TelegramMessageEntity[];
+    chat?: { id?: number };
+    from?: TelegramUser;
+  };
+  callback_query?: {
+    id?: string;
+    data?: string;
+    message?: { message_id?: number; chat?: { id?: number } };
+    from?: TelegramUser;
+  };
+};
+
+type ParsedCommand = { detected: boolean; keyword: string | null };
+
+const parseActionConfirmationCallback = (value: string) => {
+  const prefix = value.startsWith(ACTION_CONFIRM_CALLBACK_PREFIX)
+    ? ACTION_CONFIRM_CALLBACK_PREFIX
+    : value.startsWith(ACTION_CANCEL_CALLBACK_PREFIX)
+      ? ACTION_CANCEL_CALLBACK_PREFIX
+      : null;
+  if (!prefix) return null;
+  const executionId = value.slice(prefix.length);
+  return UUID_RE.test(executionId)
+    ? {
+        executionId,
+        message: prefix === ACTION_CONFIRM_CALLBACK_PREFIX ? "تأیید" : "لغو",
+      }
+    : null;
+};
+
+const parseTelegramCommand = ({
+  botUsername,
+  entities,
+  text,
+}: {
+  botUsername: string;
+  entities?: TelegramMessageEntity[];
+  text: string;
+}): ParsedCommand => {
+  const commandEntity = entities?.find(
+    (e) =>
+      e.type === "bot_command" &&
+      e.offset === 0 &&
+      typeof e.length === "number" &&
+      e.length > 0,
+  );
+  const fallbackMatch = commandEntity
+    ? null
+    : text.match(/^\/[a-zA-Z0-9_]{1,32}(?:@[a-zA-Z0-9_]{5,32})?(?=\s|$)/);
+  const commandToken = commandEntity
+    ? text.slice(0, commandEntity.length as number)
+    : fallbackMatch?.[0];
+
+  if (!commandToken) return { detected: false, keyword: null };
+
+  const match = commandToken.match(
+    /^\/([a-zA-Z0-9_]{1,32})(?:@([a-zA-Z0-9_]{5,32}))?$/,
+  );
+  if (!match) return { detected: true, keyword: null };
+
+  const targetUsername = match[2];
+  if (
+    targetUsername &&
+    targetUsername.toLocaleLowerCase("en-US") !==
+      botUsername.toLocaleLowerCase("en-US")
+  ) {
+    return { detected: true, keyword: null };
+  }
+
+  return { detected: true, keyword: toTelegramCommandKeyword(match[1]) };
+};
+
+const secretsMatch = (received: string | null, expected: string) => {
+  if (!received || received.length > 256) return false;
+  const r = Buffer.from(received);
+  const e = Buffer.from(expected);
+  return r.length === e.length && timingSafeEqual(r, e);
+};
+
+const telegramPost = async (
+  token: string,
+  method: string,
+  body: object,
+): Promise<boolean> => {
+  const result = await telegramRequest(token, method, body);
+  return result.ok;
+};
+
+const withTelegramProgress = async <T>({
+  chatId,
+  task,
+  token,
+}: {
+  chatId: number;
+  task: (onProgress: (event: RunProgressEvent) => Promise<void>) => Promise<T>;
+  token: string;
+}) => {
+  const progress = createTelegramProgress({
+    send: async (text) => {
+      const result = await telegramRequest(
+        token,
+        "sendMessage",
+        { chat_id: chatId, text },
+        true,
+      );
+      return result.ok && result.messageId ? Number(result.messageId) : null;
+    },
+    edit: (messageId, text) =>
+      telegramRequest(
+        token,
+        "editMessageText",
+        { chat_id: chatId, message_id: messageId, text },
+        true,
+      ),
+    remove: (messageId) =>
+      telegramRequest(
+        token,
+        "deleteMessage",
+        { chat_id: chatId, message_id: messageId },
+        true,
+      ),
+  });
+  try {
+    return await task(progress.consume);
+  } finally {
+    await progress.finish();
+  }
+};
+
+// ---- Inbox helpers (local to the webhook) ----------------------------------
+
+/**
+ * Forward a support conversation to the owner + all admins via the bot.
+ * Sends each recipient a formatted message with inline "پاسخ" / "نادیده بگیر"
+ * buttons. The conversation row must already exist (created by
+ * upsertConversationForCustomer before this is called).
+ */
+const forwardConversationToRecipients = async ({
+  connectionId,
+  conversationId,
+  token,
+}: {
+  connectionId: string;
+  conversationId: string;
+  token: string;
+}) => {
+  const recipients = await listNotificationRecipients(connectionId);
+  if (!recipients.length) return;
+
+  // Fetch the conversation to get the customer's message details.
+  const admin = createAdminClient();
+  const { data: conv } = await admin
+    .from("support_conversations")
+    .select(
+      "customer_display_name, customer_username, last_customer_message_text",
+    )
+    .eq("id", conversationId)
+    .maybeSingle();
+  const row = conv as {
+    customer_display_name: string | null;
+    customer_username: string | null;
+    last_customer_message_text: string | null;
+  } | null;
+  if (!row) return;
+
+  const namePart = row.customer_display_name ?? "مشتری";
+  const usernamePart = row.customer_username ? `@${row.customer_username}` : "";
+  const header = `📩 پیام پشتیبانی\nاز: ${namePart}${usernamePart ? ` (${usernamePart})` : ""}`;
+  const body = row.last_customer_message_text ?? "(بدون متن)";
+
+  for (const recipient of recipients) {
+    await telegramPost(token, "sendMessage", {
+      chat_id: recipient.telegram_id,
+      text: `${header}\n\n${body}`,
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "پاسخ", callback_data: `reply:${conversationId}` },
+            { text: "نادیده بگیر", callback_data: `dismiss:${conversationId}` },
+          ],
+        ],
+      },
+    });
+  }
+};
+
+/** Send the customer an "ask admin?" prompt with yes/no inline buttons. */
+const sendAskAdminPrompt = async ({
+  chatId,
+  conversationId,
+  prefaceText,
+  token,
+}: {
+  chatId: number;
+  conversationId: string;
+  prefaceText: string | null;
+  token: string;
+}) => {
+  // The preface is written by the AI, so it may contain Markdown; the trailing
+  // question is ours and needs no escaping.
+  const text = prefaceText
+    ? `${markdownToTelegramHtml(prefaceText)}\n\nسوال شما را به پشتیبان ارسال کنم؟`
+    : "متأسفم، پاسخ این سوال را نمی‌دانم. آن را برای پشتیبان ارسال کنم؟";
+  await telegramPost(token, "sendMessage", {
+    chat_id: chatId,
+    text,
+    ...(prefaceText ? { parse_mode: "HTML" } : {}),
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: "بله، ارسال کن",
+            callback_data: `ask_admin:${conversationId}`,
+          },
+          { text: "نه، مشکلی نیست", callback_data: "dismiss_customer_ask" },
+        ],
+      ],
+    },
+  });
+};
+
+/**
+ * The bare `/start` greeting. It never reaches the model — it is the same
+ * introduction the AI is told to give, written from the cached persona so the
+ * first message the customer sees already names the business.
+ */
+const buildStartGreeting = (persona: BusinessPersona) => {
+  const name = persona.businessName;
+  if (!name) return "سلام! چطور می‌توانم کمکتان کنم؟";
+  return `سلام! من دستیار هوش مصنوعی ${name} هستم و اینجا هستم تا کمکتان کنم. هر سوالی دربارهٔ ${name} دارید بپرسید.`;
+};
+
+/** Telelgram /start handler — supports deep-link owner-linking payload. */
+const OWNER_LINK_PREFIX = "link_owner_";
+const ADMIN_LINK_PREFIX = "link_admin_";
+const LINK_TOKEN_RE = /^[A-Za-z0-9_-]{8,64}$/;
+
+type ButtonRow = {
+  id: string;
+  label: string;
+  action_type: "node" | "url" | "end";
+  next_node_id: string | null;
+  url: string | null;
+  position: number;
+};
+
+type NodeRow = {
+  id: string;
+  flow_id: string;
+  message_text: string;
+  replace_on_button_click: boolean;
+  back_button_enabled: boolean;
+  back_button_label: string;
+  keyboard_action: FlowKeyboardAction;
+  automation_flow_buttons: ButtonRow[];
+};
+
+const FLOW_NODE_SELECT = `
+  id, flow_id, message_text, replace_on_button_click, back_button_enabled, back_button_label,
+  keyboard_action,
+  automation_flow_buttons:automation_flow_buttons!automation_flow_buttons_node_id_fkey (
+    id, label, action_type, next_node_id, url, position
+  )
+`;
+
+const uuidToCallbackId = (value: string) => {
+  if (!UUID_RE.test(value)) return null;
+  const bytes = Buffer.from(value.replaceAll("-", ""), "hex");
+  return bytes.length === 16 ? bytes.toString("base64url") : null;
+};
+
+const callbackIdToUuid = (value: string) => {
+  if (!COMPACT_UUID_RE.test(value)) return null;
+  try {
+    const hex = Buffer.from(value, "base64url").toString("hex");
+    if (hex.length !== 32) return null;
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  } catch {
+    return null;
+  }
+};
+
+const parseBuyCallback = (value: string) =>
+  value.startsWith(BUY_CALLBACK_PREFIX)
+    ? callbackIdToUuid(value.slice(BUY_CALLBACK_PREFIX.length))
+    : null;
+
+const buildNavigationCallback = (
+  kind: "flow_go" | "flow_back",
+  sourceNodeId: string,
+  targetNodeId: string,
+) => {
+  const source = uuidToCallbackId(sourceNodeId);
+  const target = uuidToCallbackId(targetNodeId);
+  return source && target ? `${kind}:${source}:${target}` : null;
+};
+
+const parseNavigationCallback = (value: string) => {
+  const [kind, sourceValue, targetValue, extra] = value.split(":");
+  if (
+    (kind !== "flow_go" && kind !== "flow_back") ||
+    !sourceValue ||
+    !targetValue ||
+    extra
+  ) {
+    return null;
+  }
+
+  const sourceNodeId = callbackIdToUuid(sourceValue);
+  const targetNodeId = callbackIdToUuid(targetValue);
+  return sourceNodeId && targetNodeId ? { sourceNodeId, targetNodeId } : null;
+};
+
+const buildInlineKeyboard = (node: NodeRow, previousNodeId?: string) => {
+  const sorted = [...(node.automation_flow_buttons ?? [])].sort(
+    (a, b) => a.position - b.position,
+  );
+  const rows: { text: string; callback_data?: string; url?: string }[][] = [];
+  for (const btn of sorted) {
+    if (btn.action_type === "url" && btn.url) {
+      rows.push([{ text: btn.label, url: btn.url }]);
+    } else if (btn.action_type === "node" && btn.next_node_id) {
+      const callbackData = buildNavigationCallback(
+        "flow_go",
+        node.id,
+        btn.next_node_id,
+      );
+      if (callbackData) {
+        rows.push([{ text: btn.label, callback_data: callbackData }]);
+      }
+    } else if (btn.action_type === "end") {
+      rows.push([{ text: btn.label, callback_data: "flow_end" }]);
+    }
+  }
+
+  if (node.back_button_enabled && previousNodeId) {
+    const callbackData = buildNavigationCallback(
+      "flow_back",
+      node.id,
+      previousNodeId,
+    );
+    if (callbackData) {
+      rows.push([
+        { text: node.back_button_label, callback_data: callbackData },
+      ]);
+    }
+  }
+
+  return rows;
+};
+
+const deliverFlowNode = async ({
+  chatId,
+  menuKeyboard,
+  messageId,
+  node,
+  previousNodeId,
+  replace,
+  token,
+}: {
+  chatId: number;
+  /**
+   * Resolves the bot's reply keyboard. A getter rather than a value so a node
+   * that keeps the menu as-is — the common case — costs no extra query.
+   */
+  menuKeyboard?: () => Promise<ReplyKeyboardMarkup | null>;
+  messageId?: number;
+  node: NodeRow;
+  previousNodeId?: string;
+  replace?: boolean;
+  token: string;
+}) => {
+  const keyboard = buildInlineKeyboard(node, previousNodeId);
+  const body: Record<string, unknown> = {
+    chat_id: chatId,
+    text: node.message_text,
+  };
+  // editMessageText cannot change the chat's reply keyboard, so replace-mode
+  // messages ignore keyboard_action entirely.
+  if (replace && typeof messageId === "number") {
+    body.message_id = messageId;
+    body.reply_markup = { inline_keyboard: keyboard };
+    return telegramPost(token, "editMessageText", body);
+  }
+
+  // A message carries an inline keyboard or a reply keyboard, never both, so
+  // inline buttons win and the menu simply stays as the customer last saw it.
+  const keyboardAction = node.keyboard_action ?? "inherit";
+  if (keyboard.length > 0) {
+    body.reply_markup = { inline_keyboard: keyboard };
+  } else if (keyboardAction === "remove") {
+    body.reply_markup = REPLY_KEYBOARD_REMOVE;
+  } else if (keyboardAction === "show" && menuKeyboard) {
+    const keyboardMarkup = await menuKeyboard();
+    if (keyboardMarkup) body.reply_markup = keyboardMarkup;
+  }
+  return telegramPost(token, "sendMessage", body);
+};
+
+type MenuRow = {
+  is_enabled: boolean;
+  is_persistent: boolean;
+  resize_keyboard: boolean;
+  one_time_keyboard: boolean;
+  input_field_placeholder: string | null;
+  telegram_menu_buttons: {
+    label: string;
+    row_index: number;
+    position: number;
+  }[];
+};
+
+/**
+ * The bot's active reply keyboard, or null when there is no menu. Fails open:
+ * a bot whose owner has not run telegram-menu.sql keeps working without a menu.
+ */
+const loadMenuKeyboard = async (
+  connectionId: string,
+): Promise<ReplyKeyboardMarkup | null> => {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("telegram_menus")
+    .select(
+      `is_enabled, is_persistent, resize_keyboard, one_time_keyboard, input_field_placeholder,
+       telegram_menu_buttons ( label, row_index, position )`,
+    )
+    .eq("telegram_connection_id", connectionId)
+    .eq("is_enabled", true)
+    .maybeSingle();
+
+  if (error || !data) return null;
+
+  const row = data as unknown as MenuRow;
+  return buildReplyKeyboard({
+    isEnabled: row.is_enabled,
+    isPersistent: row.is_persistent,
+    resizeKeyboard: row.resize_keyboard,
+    oneTimeKeyboard: row.one_time_keyboard,
+    inputFieldPlaceholder: row.input_field_placeholder ?? "",
+    buttons: (row.telegram_menu_buttons ?? []).map(
+      (button, index): TelegramMenuButton => ({
+        id: String(index),
+        label: button.label,
+        rowIndex: button.row_index,
+        position: button.position,
+        actionType: "flow",
+        flowId: null,
+        automationId: null,
+      }),
+    ),
+  });
+};
+
+type MenuButtonTarget = {
+  action_type: MenuButtonActionType;
+  flow_id: string | null;
+  automation_id: string | null;
+};
+
+/**
+ * Resolve a plain message against the menu. A reply-keyboard press arrives as
+ * ordinary text equal to the button label, so this is the only way to tell one
+ * apart from anything else the customer typed.
+ */
+const findMenuButton = async ({
+  connectionId,
+  labelNormalized,
+}: {
+  connectionId: string;
+  labelNormalized: string;
+}): Promise<MenuButtonTarget | null> => {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("telegram_menu_buttons")
+    .select("action_type, flow_id, automation_id")
+    .eq("telegram_connection_id", connectionId)
+    .eq("label_normalized", labelNormalized)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return data as MenuButtonTarget;
+};
+
+export const telegramWebhookPost = async (
+  request: NextRequest,
+  ctx: RouteContext,
+) => {
+  const params = await ctx.params;
+  if (!BOT_ID_RE.test(params.botId)) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  const contentLength = Number(request.headers.get("content-length") ?? 0);
+  if (contentLength > MAX_BODY_BYTES) {
+    return NextResponse.json({ error: "Payload too large" }, { status: 413 });
+  }
+
+  const admin = createAdminClient();
+  const { data: connection, error: connectionError } = await admin
+    .from("telegram_connections")
+    .select("id, user_id, bot_username, token_ciphertext, webhook_secret")
+    .eq("bot_id", params.botId)
+    .maybeSingle();
+
+  if (connectionError || !connection?.webhook_secret) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  if (
+    !secretsMatch(
+      request.headers.get("x-telegram-bot-api-secret-token"),
+      connection.webhook_secret,
+    )
+  ) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let update: TelegramUpdate;
+  try {
+    const rawBody = await request.text();
+    if (Buffer.byteLength(rawBody, "utf8") > MAX_BODY_BYTES)
+      return NextResponse.json({ error: "Payload too large" }, { status: 413 });
+    update = JSON.parse(rawBody) as TelegramUpdate;
+  } catch {
+    return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
+  }
+
+  const msg = update.message;
+  const cb = update.callback_query;
+  const chatId = msg?.chat?.id ?? cb?.message?.chat?.id;
+  const sender = msg?.from?.id ?? cb?.from?.id ?? chatId;
+  if (!Number.isSafeInteger(update.update_id) || !chatId || !sender)
+    return NextResponse.json({ ok: true });
+  const safeUser = (user: TelegramUser | undefined) =>
+    user
+      ? {
+          id: user.id,
+          is_bot: user.is_bot,
+          first_name: user.first_name?.slice(0, 100),
+          username: user.username?.slice(0, 100),
+        }
+      : undefined;
+  const normalized: TelegramUpdate = {
+    update_id: update.update_id,
+    ...(msg
+      ? {
+          message: {
+            message_id: msg.message_id,
+            text: msg.text?.slice(0, 4096),
+            entities: msg.entities
+              ?.slice(0, 20)
+              .map((e) => ({
+                type: e.type,
+                offset: e.offset,
+                length: e.length,
+              })),
+            chat: { id: chatId },
+            from: safeUser(msg.from),
+          },
+        }
+      : {}),
+    ...(cb
+      ? {
+          callback_query: {
+            id: cb.id,
+            data: cb.data?.slice(0, 256),
+            message: {
+              message_id: cb.message?.message_id,
+              chat: { id: chatId },
+            },
+            from: safeUser(cb.from),
+          },
+        }
+      : {}),
+  };
+  try {
+    const scope = conversationScope({
+      userId: connection.user_id,
+      channel: "telegram",
+      connectionId: connection.id,
+      customerExternalId: String(sender),
+      conversationId: String(chatId),
+      deliveryId: String(update.update_id),
+      customerMessage: msg?.text ?? "",
+    });
+    const { replayable, text } = await prepareReplay(scope, msg?.text ?? "");
+    const persisted = structuredClone(normalized);
+    if (persisted.message) persisted.message.text = text;
+    const id = await receiveEvent({
+      scope,
+      externalId: String(update.update_id),
+      type: cb ? "callback" : "message",
+      order: update.update_id!,
+      payload: persisted,
+      replayable,
+    });
+    after(() =>
+      processEvent(id, () => processTelegramEvent(connection.id, normalized)),
+    );
+    return NextResponse.json({ ok: true });
+  } catch {
+    return NextResponse.json({ error: "Unavailable" }, { status: 503 });
+  }
+};
+
+export const processTelegramEvent = async (
+  connectionId: string,
+  update: TelegramUpdate,
+) => {
+  const admin = createAdminClient();
+  const { data: connection, error } = await admin
+    .from("telegram_connections")
+    .select("id, user_id, bot_username, token_ciphertext, webhook_secret")
+    .eq("id", connectionId)
+    .maybeSingle();
+  if (error) throw new ProcessingFailure("database_unavailable");
+  if (!connection) throw new ProcessingFailure("authorization_denied");
+  let token = "";
+  try {
+    token = decryptTelegramToken(connection.token_ciphertext);
+  } catch {
+    throw new ProcessingFailure("authorization_denied");
+  }
+
+  // The menu is read at most once per update, and only when we are about to
+  // send something the customer will see.
+  let pendingMenuKeyboard: Promise<ReplyKeyboardMarkup | null> | null = null;
+  const menuKeyboard = () =>
+    (pendingMenuKeyboard ??= loadMenuKeyboard(connection.id));
+
+  /**
+   * Send a customer-facing message with the bot's menu attached, so the
+   * keyboard stays on screen through the whole conversation.
+   */
+  const sendToCustomer = async (body: Record<string, unknown>) => {
+    const keyboard = await menuKeyboard();
+    return telegramPost(
+      token,
+      "sendMessage",
+      keyboard ? { reply_markup: keyboard, ...body } : body,
+    );
+  };
+
+  /**
+   * Send AI-authored text. The model writes Markdown, which Telegram shows
+   * literally unless it is converted to Telegram's HTML subset first. Falls
+   * back to the raw text when the rendered form would exceed the message limit
+   * or Telegram rejects the markup, so a formatting problem never costs the
+   * customer the answer.
+   */
+  const sendAiTextToCustomer = async (chatId: number, text: string) => {
+    const html = markdownToTelegramHtml(text);
+    if (html && html.length <= TELEGRAM_MESSAGE_MAX_LENGTH) {
+      const sent = await sendToCustomer({
+        chat_id: chatId,
+        text: html,
+        parse_mode: "HTML",
+      });
+      if (sent) return true;
+    }
+    return sendToCustomer({ chat_id: chatId, text });
+  };
+
+  const sendActionConfirmationPrompt = async ({
+    chatId,
+    executionId,
+    text,
+  }: {
+    chatId: number;
+    executionId: string;
+    text: string;
+  }) =>
+    sendToCustomer({
+      chat_id: chatId,
+      text,
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text: "تأیید و ثبت",
+              callback_data: `${ACTION_CONFIRM_CALLBACK_PREFIX}${executionId}`,
+            },
+            {
+              text: "لغو",
+              callback_data: `${ACTION_CANCEL_CALLBACK_PREFIX}${executionId}`,
+            },
+          ],
+        ],
+      },
+    });
+
+  const orderActionForCollection = async (collectionId: string) => {
+    const setting = (await listSafeActionSettings(connection.user_id)).find(
+      (item) => item.key === "create_order",
+    );
+    return setting?.enabled &&
+      setting.capabilityAvailable &&
+      setting.configuration?.relatedCollectionId === collectionId
+      ? setting
+      : null;
+  };
+
+  const sendBusinessDataCardsToCustomer = async ({
+    chatId,
+    delivery,
+  }: {
+    chatId: number;
+    delivery: BusinessDataDelivery;
+  }) => {
+    const orderSetting =
+      delivery.collectionKind === "product"
+        ? await orderActionForCollection(delivery.collectionId)
+        : null;
+    const memoryLines: string[] = [];
+    let sent = true;
+
+    for (const record of delivery.records) {
+      const compactRecordId = uuidToCallbackId(record.recordId);
+      const replyMarkup =
+        orderSetting && compactRecordId
+          ? {
+              inline_keyboard: [
+                [
+                  {
+                    text: "خرید",
+                    callback_data: `${BUY_CALLBACK_PREFIX}${compactRecordId}`,
+                  },
+                ],
+              ],
+            }
+          : undefined;
+      const caption = buildBusinessDataCardCaption(record);
+      memoryLines.push(`پیشنهاد: ${businessDataDeliveryRecordTitle(record)}`);
+
+      const imagePath = record.imagePaths.find((path) =>
+        businessDataImagePathBelongsTo({
+          collectionId: delivery.collectionId,
+          path,
+          userId: connection.user_id,
+        }),
+      );
+      const signedUrl = imagePath
+        ? await createBusinessDataImageSignedUrl({
+            admin,
+            path: imagePath,
+            expiresIn: 60 * 60,
+          })
+        : null;
+      let delivered = false;
+      if (signedUrl) {
+        delivered = await telegramPost(token, "sendPhoto", {
+          chat_id: chatId,
+          photo: signedUrl,
+          caption,
+          parse_mode: "HTML",
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+        });
+      }
+      if (!delivered) {
+        delivered = await sendToCustomer({
+          chat_id: chatId,
+          text: caption,
+          parse_mode: "HTML",
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+        });
+      }
+      sent = sent && delivered;
+    }
+
+    return { sent, memoryText: memoryLines.join("\n") };
+  };
+
+  // Handle inline button press
+  if (update.callback_query) {
+    const cq = update.callback_query;
+    const chatId = cq.message?.chat?.id;
+    const messageId = cq.message?.message_id;
+    const data = cq.data;
+
+    // Always answer the callback to remove the loading spinner
+    if (cq.id) {
+      void telegramPost(token, "answerCallbackQuery", {
+        callback_query_id: cq.id,
+      });
+    }
+
+    if (
+      typeof chatId !== "number" ||
+      typeof data !== "string" ||
+      cq.from?.is_bot
+    ) {
+      return NextResponse.json({ ok: true });
+    }
+
+    if (data === "flow_end") {
+      return NextResponse.json({ ok: true });
+    }
+
+    const buyRecordId = parseBuyCallback(data);
+    if (buyRecordId && cq.from && typeof cq.from.id === "number") {
+      const { data: productRecord, error: productError } = await admin
+        .from("business_data_records")
+        .select("collection_id, values")
+        .eq("id", buyRecordId)
+        .eq("user_id", connection.user_id)
+        .eq("status", "active")
+        .maybeSingle();
+      const collectionId = productRecord?.collection_id;
+      const orderSetting =
+        !productError && typeof collectionId === "string"
+          ? await orderActionForCollection(collectionId)
+          : null;
+      const { data: productCollection } = collectionId
+        ? await admin
+            .from("business_data_collections")
+            .select("kind, access_scope, ai_enabled, status")
+            .eq("id", collectionId)
+            .eq("user_id", connection.user_id)
+            .maybeSingle()
+        : { data: null };
+      const { data: titleField } = collectionId
+        ? await admin
+            .from("business_data_fields")
+            .select("key")
+            .eq("collection_id", collectionId)
+            .eq("user_id", connection.user_id)
+            .eq("semantic_role", "title")
+            .maybeSingle()
+        : { data: null };
+      const titleValue =
+        titleField?.key &&
+        productRecord?.values &&
+        typeof productRecord.values === "object" &&
+        !Array.isArray(productRecord.values)
+          ? (productRecord.values as Record<string, unknown>)[titleField.key]
+          : null;
+      const productAvailable =
+        orderSetting &&
+        productCollection?.kind === "product" &&
+        productCollection.access_scope === "public_catalog" &&
+        productCollection.ai_enabled === true &&
+        productCollection.status === "active" &&
+        typeof titleValue === "string" &&
+        titleValue.trim();
+
+      if (!productAvailable) {
+        const sent = await sendToCustomer({
+          chat_id: chatId,
+          text: "امکان سفارش این محصول در حال حاضر فعال نیست.",
+        });
+        return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+      }
+
+      if (typeof messageId === "number") {
+        await telegramPost(token, "editMessageReplyMarkup", {
+          chat_id: chatId,
+          message_id: messageId,
+          reply_markup: { inline_keyboard: [] },
+        });
+      }
+
+      const orderPrompt = buildProductOrderPrompt({
+        recordId: buyRecordId,
+        imagePaths: [],
+        fields: [
+          {
+            label: "نام محصول",
+            role: "title",
+            type: "text",
+            value: titleValue.trim(),
+          },
+        ],
+      });
+      await sendToCustomer({ chat_id: chatId, text: `🛒 ${orderPrompt}` });
+
+      const { data: aiSettings } = await admin
+        .from("ai_assistant_settings")
+        .select("is_enabled, telegram_enabled, human_handoff_enabled")
+        .eq("user_id", connection.user_id)
+        .maybeSingle();
+      if (
+        aiSettings?.is_enabled !== true ||
+        (aiSettings as { telegram_enabled?: boolean }).telegram_enabled ===
+          false
+      ) {
+        const sent = await sendToCustomer({
+          chat_id: chatId,
+          text: "دستیار در حال حاضر خاموش است؛ سفارش شروع نشد.",
+        });
+        return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+      }
+
+      const session = await loadChatSession({
+        connectionId: connection.id,
+        chatId,
+      });
+      const buyReply = await withTelegramProgress({
+        chatId,
+        token,
+        task: (onProgress) =>
+          generateAssistantReply(orderPrompt, connection.user_id, {
+            channel: "telegram",
+            onProgress,
+            handoffEnabled: aiSettings.human_handoff_enabled === true,
+            history: session.turns,
+            actionContext: {
+              channel: "telegram",
+              connectionId: connection.id,
+              customerExternalId: String(cq.from!.id),
+              conversationId: String(chatId),
+              deliveryId:
+                typeof update.update_id === "number"
+                  ? `telegram-buy:${update.update_id}`
+                  : `telegram-buy:${cq.id ?? buyRecordId}`,
+              customerUsername: cq.from?.username,
+              customerDisplayName: cq.from?.first_name,
+            },
+          }),
+      });
+      const replyText =
+        buyReply.text ??
+        "امکان شروع سفارش در حال حاضر نیست؛ کمی بعد دوباره تلاش کنید.";
+      const sent =
+        buyReply.action?.status === "pending_confirmation" &&
+        buyReply.action.executionId &&
+        UUID_RE.test(buyReply.action.executionId)
+          ? await sendActionConfirmationPrompt({
+              chatId,
+              executionId: buyReply.action.executionId,
+              text: replyText,
+            })
+          : await sendAiTextToCustomer(chatId, replyText);
+      await recordChatTurns({
+        connectionId: connection.id,
+        chatId,
+        turns: [
+          { role: "user", text: orderPrompt },
+          { role: "assistant", text: replyText },
+        ],
+      });
+      return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+    }
+
+    const actionConfirmation = parseActionConfirmationCallback(data);
+    const callbackSender = cq.from;
+    if (
+      actionConfirmation &&
+      callbackSender &&
+      typeof callbackSender.id === "number"
+    ) {
+      const confirmation = await withTelegramProgress({
+        chatId,
+        token,
+        task: (onProgress) =>
+          handleActionConfirmation({
+            onProgress,
+            context: {
+              channel: "telegram",
+              connectionId: connection.id,
+              customerExternalId: String(callbackSender.id),
+              conversationId: String(chatId),
+              deliveryId:
+                typeof update.update_id === "number"
+                  ? `telegram-update:${update.update_id}`
+                  : `telegram-callback:${cq.id ?? actionConfirmation.executionId}`,
+              customerUsername: callbackSender.username,
+              customerDisplayName: callbackSender.first_name,
+              userId: connection.user_id,
+              customerMessage: actionConfirmation.message,
+            },
+            expectedExecutionId: actionConfirmation.executionId,
+            message: actionConfirmation.message,
+          }),
+      });
+      if (!confirmation.handled) {
+        return NextResponse.json({ ok: true });
+      }
+
+      // The action ID prevents stale buttons from confirming newer requests;
+      // after a handled choice, remove this exact keyboard to make its final
+      // state visible and avoid duplicate taps.
+      if (typeof messageId === "number") {
+        await telegramPost(token, "editMessageReplyMarkup", {
+          chat_id: chatId,
+          message_id: messageId,
+          reply_markup: { inline_keyboard: [] },
+        });
+      }
+      const replyText =
+        confirmation.text ?? "امکان انجام این درخواست در حال حاضر نیست.";
+      const sent = await sendToCustomer({ chat_id: chatId, text: replyText });
+      await recordChatTurns({
+        connectionId: connection.id,
+        chatId,
+        turns: [{ role: "assistant", text: replyText }],
+      });
+      return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+    }
+
+    // ---- Inbox callbacks ---------------------------------------------------
+    // Customer taps "بله، از پشتیبان بپرس" → forward the request to owner/admin.
+    if (data.startsWith("ask_admin:")) {
+      const conversationId = data.slice("ask_admin:".length);
+      if (UUID_RE.test(conversationId)) {
+        const recipients = await listNotificationRecipients(connection.id);
+        if (recipients.length === 0) {
+          // No owner/admin linked — tell the customer instead of failing
+          // silently.
+          await sendToCustomer({
+            chat_id: chatId,
+            text: "در حال حاضر پشتیبانی در دسترس نیست؛ بعداً دوباره تلاش کنید.",
+          });
+        } else {
+          await forwardConversationToRecipients({
+            connectionId: connection.id,
+            conversationId,
+            token,
+          });
+          // Confirm to the customer that the message was forwarded.
+          await sendToCustomer({
+            chat_id: chatId,
+            text: "پیام شما برای پشتیبان ارسال شد؛ منتظر پاسخ باشید.",
+          });
+        }
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    // Owner/admin taps "پاسخ" on a forwarded request → set pending reply.
+    if (data.startsWith("reply:") && typeof cq.from?.id === "number") {
+      const conversationId = data.slice("reply:".length);
+      if (UUID_RE.test(conversationId)) {
+        await setPendingOwnerReply({
+          connectionId: connection.id,
+          conversationId,
+          adminTelegramId: cq.from.id,
+        });
+        await telegramPost(token, "sendMessage", {
+          chat_id: chatId,
+          text: "لطفاً پاسخ خود را در پیام بعدی بنویسید (۵ دقیقه مهلت دارید):",
+        });
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    // Owner/admin taps "نادیده بگیر" → dismiss the conversation.
+    if (data.startsWith("dismiss:") && typeof cq.from?.id === "number") {
+      const conversationId = data.slice("dismiss:".length);
+      if (UUID_RE.test(conversationId)) {
+        await dismissConversation(conversationId);
+        await telegramPost(token, "sendMessage", {
+          chat_id: chatId,
+          text: "گفتگو نادیده گرفته شد.",
+        });
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    // Customer taps "نه، مشکلی نیست" on the ask-admin prompt → silent dismiss.
+    if (data === "dismiss_customer_ask") {
+      return NextResponse.json({ ok: true });
+    }
+    // ---- End inbox callbacks ----------------------------------------------
+
+    const navigation = parseNavigationCallback(data);
+    if (navigation) {
+      const { data: sourceNode, error: sourceError } = await admin
+        .from("automation_flow_nodes")
+        .select(
+          "id, flow_id, replace_on_button_click, automation_flows!inner(telegram_connection_id)",
+        )
+        .eq("id", navigation.sourceNodeId)
+        .eq("automation_flows.telegram_connection_id", connection.id)
+        .maybeSingle();
+
+      if (sourceError || !sourceNode) {
+        return NextResponse.json({ ok: true });
+      }
+
+      const { data: targetNode, error: targetError } = await admin
+        .from("automation_flow_nodes")
+        .select(FLOW_NODE_SELECT)
+        .eq("id", navigation.targetNodeId)
+        .eq("flow_id", sourceNode.flow_id)
+        .maybeSingle();
+
+      if (targetError || !targetNode) {
+        return NextResponse.json({ ok: true });
+      }
+
+      const sent = await deliverFlowNode({
+        chatId,
+        menuKeyboard,
+        messageId,
+        node: targetNode as NodeRow,
+        previousNodeId: sourceNode.id,
+        replace: sourceNode.replace_on_button_click,
+        token,
+      });
+      return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+    }
+
+    // Keep callbacks from messages sent before the compact navigation format.
+    if (!data.startsWith("flow_node:")) {
+      return NextResponse.json({ ok: true });
+    }
+
+    const nodeId = data.slice("flow_node:".length);
+    if (!UUID_RE.test(nodeId)) return NextResponse.json({ ok: true });
+
+    const { data: node, error: nodeError } = await admin
+      .from("automation_flow_nodes")
+      .select(
+        `${FLOW_NODE_SELECT}, automation_flows!inner(telegram_connection_id)`,
+      )
+      .eq("id", nodeId)
+      .eq("automation_flows.telegram_connection_id", connection.id)
+      .maybeSingle();
+
+    if (nodeError || !node) return NextResponse.json({ ok: true });
+
+    const sent = await deliverFlowNode({
+      chatId,
+      menuKeyboard,
+      node: node as NodeRow,
+      token,
+    });
+    return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+  }
+
+  // Handle regular message
+  const message = update.message;
+  const text = message?.text;
+  const chatId = message?.chat?.id;
+
+  if (
+    message?.from?.is_bot ||
+    typeof text !== "string" ||
+    typeof chatId !== "number"
+  ) {
+    return NextResponse.json({ ok: true });
+  }
+
+  const senderId = message?.from?.id;
+  const senderUsername = message?.from?.username ?? null;
+  const senderFirstName = message?.from?.first_name ?? null;
+
+  // ---- /start with owner-link payload -----------------------------------
+  // When the owner taps the magic link (t.me/<bot>?start=link_owner_<token>),
+  // Telegram sends /start link_owner_<token> as the message text. We validate
+  // the token and record the sender's Telegram id as owner_telegram_id.
+  if (typeof senderId === "number" && text.startsWith("/start ")) {
+    const payload = text.slice("/start ".length).trim();
+    if (payload.startsWith(OWNER_LINK_PREFIX)) {
+      const linkToken = payload.slice(OWNER_LINK_PREFIX.length);
+      if (LINK_TOKEN_RE.test(linkToken)) {
+        // Token is the bot_id itself for now (the magic-link route signs it
+        // with the connection's user_id encoded as base64url; here we simply
+        // trust that the deep link was generated by the dashboard route and
+        // is being used by the owner in a timely fashion — the security
+        // boundary is the bot's own webhook secret already verified above).
+        await admin
+          .from("telegram_connections")
+          .update({
+            owner_telegram_id: senderId,
+            owner_linked_at: new Date().toISOString(),
+          })
+          .eq("id", connection.id);
+        await telegramPost(token, "sendMessage", {
+          chat_id: chatId,
+          text: "✅ تلگرام شما به‌عنوان دریافت‌کنندهٔ پیام‌های پشتیبانی متصل شد.",
+        });
+        return NextResponse.json({ ok: true });
+      }
+    }
+
+    // ---- /start with admin-link payload -----------------------------------
+    // When an invited admin taps t.me/<bot>?start=link_admin_<token>, we
+    // upsert a bot_admins row binding their Telegram id (and username) to
+    // this connection so the webhook treats their messages as admin replies.
+    if (payload.startsWith(ADMIN_LINK_PREFIX)) {
+      const adminToken = payload.slice(ADMIN_LINK_PREFIX.length);
+      if (LINK_TOKEN_RE.test(adminToken) && typeof senderId === "number") {
+        // Never let the owner's own account become a bot_admin row.
+        const { data: existingConnection } = await admin
+          .from("telegram_connections")
+          .select("owner_telegram_id")
+          .eq("id", connection.id)
+          .maybeSingle();
+        const ownerTelegramId = (
+          existingConnection as { owner_telegram_id: number | null } | null
+        )?.owner_telegram_id;
+        if (ownerTelegramId === senderId) {
+          await telegramPost(token, "sendMessage", {
+            chat_id: chatId,
+            text: "شما مالک این ربات هستید و لازم نیست به‌عنوان ادمین اضافه شوید.",
+          });
+          return NextResponse.json({ ok: true });
+        }
+
+        // Upsert the admin row. The unique index on
+        // (telegram_connection_id, admin_telegram_id) makes this idempotent —
+        // a second tap just refreshes the username / linked-at timestamp.
+        const { error: adminUpsertError } = await admin
+          .from("bot_admins")
+          .upsert(
+            {
+              telegram_connection_id: connection.id,
+              user_id: connection.user_id,
+              admin_telegram_id: senderId,
+              admin_username: senderUsername,
+              admin_display_name: senderFirstName,
+              admin_linked_at: new Date().toISOString(),
+            },
+            { onConflict: "telegram_connection_id,admin_telegram_id" },
+          );
+        if (!adminUpsertError) {
+          await telegramPost(token, "sendMessage", {
+            chat_id: chatId,
+            text: "✅ شما به‌عنوان ادمین پشتیبانی اضافه شدید. پیام‌های پشتیبانی به شما هم می‌رسد و با دکمه «پاسخ» مستقیماً جواب بدهید.",
+          });
+        }
+        return NextResponse.json({ ok: true });
+      }
+    }
+
+    // /start carrying a payload we don't recognise — treat it as a plain start
+    // and welcome the customer. Bare /start is handled with the other commands
+    // further down.
+    await sendToCustomer({
+      chat_id: chatId,
+      text: "سلام! چطور می‌توانم کمکتان کنم؟",
+    });
+    return NextResponse.json({ ok: true });
+  }
+
+  // ---- Admin/owner pending reply routing ---------------------------------
+  // If the sender is the owner or a bot admin and they have a pending
+  // reply row, treat their plain message as the answer to deliver to the
+  // customer (not as a customer message for AI/flows).
+  if (typeof senderId === "number" && !text.startsWith("/")) {
+    const senderIsAdmin = await isAdminForConnection(connection.id, senderId);
+    if (senderIsAdmin) {
+      const pendingConvId = await consumePendingOwnerReply({
+        connectionId: connection.id,
+        adminTelegramId: senderId,
+      });
+      if (pendingConvId) {
+        // The customer may be on Instagram: a business with both channels
+        // escalates its Instagram threads through this same bot, so delivery
+        // has to follow the conversation rather than assume Telegram.
+        const conversation = await getConversation(pendingConvId);
+        const delivered = conversation
+          ? await deliverConversationReply({ conversation, text })
+          : false;
+
+        // Recorded only once the customer actually has it, so the dashboard
+        // never shows a thread as answered when the send failed.
+        if (delivered) {
+          await recordOwnerReply({
+            conversationId: pendingConvId,
+            replyText: text,
+            senderTelegramId: senderId,
+          });
+        }
+
+        await telegramPost(token, "sendMessage", {
+          chat_id: chatId,
+          text: delivered
+            ? "✅ پاسخ شما برای مشتری ارسال شد."
+            : "❌ ارسال پاسخ انجام نشد. اگر مشتری در اینستاگرام است، ممکن است مهلت پاسخ‌گویی تمام شده باشد.",
+        });
+        return NextResponse.json({ ok: true });
+      }
+    }
+  }
+
+  const parsedCommand = parseTelegramCommand({
+    botUsername: connection.bot_username,
+    entities: message?.entities,
+    text,
+  });
+  if (parsedCommand.detected && !parsedCommand.keyword) {
+    return NextResponse.json({ ok: true });
+  }
+
+  const triggerType: AutomationTriggerType = parsedCommand.detected
+    ? "command"
+    : "keyword";
+  const keywordNormalized = parsedCommand.keyword ?? normalizeKeyword(text);
+  if (!keywordNormalized) return NextResponse.json({ ok: true });
+
+  // Check flows first
+  const { data: flow, error: flowError } = await admin
+    .from("automation_flows")
+    .select("id")
+    .eq("telegram_connection_id", connection.id)
+    .eq("trigger_type", triggerType)
+    .eq("trigger_keyword_normalized", keywordNormalized)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (flowError) {
+    return NextResponse.json({ error: "Unavailable" }, { status: 503 });
+  }
+
+  if (flow) {
+    const { data: rootNode, error: rootError } = await admin
+      .from("automation_flow_nodes")
+      .select(FLOW_NODE_SELECT)
+      .eq("flow_id", flow.id)
+      .eq("is_root", true)
+      .maybeSingle();
+
+    if (rootError || !rootNode) return NextResponse.json({ ok: true });
+
+    const sent = await deliverFlowNode({
+      chatId,
+      menuKeyboard,
+      node: rootNode as NodeRow,
+      token,
+    });
+    return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+  }
+
+  // A reply-keyboard press arrives as plain text equal to the button label, so
+  // the menu is checked here — after flows, whose keywords the menu editor
+  // refuses to shadow, and before prepared replies.
+  if (!parsedCommand.detected) {
+    const menuButton = await findMenuButton({
+      connectionId: connection.id,
+      labelNormalized: keywordNormalized,
+    });
+
+    if (menuButton?.action_type === "flow" && menuButton.flow_id) {
+      const { data: rootNode } = await admin
+        .from("automation_flow_nodes")
+        .select(`${FLOW_NODE_SELECT}, automation_flows!inner(is_active)`)
+        .eq("flow_id", menuButton.flow_id)
+        .eq("is_root", true)
+        .eq("automation_flows.is_active", true)
+        .maybeSingle();
+
+      if (rootNode) {
+        const sent = await deliverFlowNode({
+          chatId,
+          menuKeyboard,
+          node: rootNode as unknown as NodeRow,
+          token,
+        });
+        return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+      }
+    }
+
+    if (menuButton?.action_type === "reply" && menuButton.automation_id) {
+      const { data: menuReply } = await admin
+        .from("telegram_keyword_automations")
+        .select("reply_text")
+        .eq("id", menuButton.automation_id)
+        .eq("is_active", true)
+        .maybeSingle();
+
+      if (menuReply) {
+        const sent = await sendToCustomer({
+          chat_id: chatId,
+          text: menuReply.reply_text,
+        });
+        return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+      }
+    }
+  }
+
+  // Fall back to simple keyword automations
+  const { data: automation, error: automationError } = await admin
+    .from("telegram_keyword_automations")
+    .select("reply_text")
+    .eq("telegram_connection_id", connection.id)
+    .eq("trigger_type", triggerType)
+    .eq("keyword_normalized", keywordNormalized)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (automationError) {
+    return NextResponse.json({ error: "Unavailable" }, { status: 503 });
+  }
+  if (automation) {
+    const sent = await sendToCustomer({
+      chat_id: chatId,
+      text: automation.reply_text,
+    });
+    return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+  }
+
+  // Slash commands never fall through to AI, including unknown commands. Bare
+  // /start is the exception: with no flow of its own it still deserves a
+  // greeting, and it is where the bot's menu keyboard first appears.
+  if (parsedCommand.detected) {
+    if (parsedCommand.keyword === "/start") {
+      const greeting = buildStartGreeting(
+        await getBusinessPersona(connection.user_id),
+      );
+      const sent = await sendToCustomer({ chat_id: chatId, text: greeting });
+      // Remembered as an assistant turn so the customer's first real question
+      // is not answered with a second introduction.
+      await recordChatTurns({
+        connectionId: connection.id,
+        chatId,
+        turns: [{ role: "assistant", text: greeting }],
+      });
+      return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+    }
+    return NextResponse.json({ ok: true });
+  }
+
+  const { data: aiSettings, error: aiSettingsError } = await admin
+    .from("ai_assistant_settings")
+    .select("is_enabled, telegram_enabled, human_handoff_enabled")
+    .eq("user_id", connection.user_id)
+    .maybeSingle();
+
+  // Fail closed: if settings cannot be verified, do not send the message to AI.
+  if (
+    aiSettingsError ||
+    !aiSettings?.is_enabled ||
+    (aiSettings as { telegram_enabled?: boolean } | null)?.telegram_enabled ===
+      false
+  ) {
+    return NextResponse.json({ ok: true });
+  }
+
+  // Human handoff is opt-in: only when the owner enabled it may the AI route a
+  // customer to the owner/admins. When disabled, no message is escalated —
+  // even one the AI cannot answer.
+  const handoffEnabled =
+    (aiSettings as { human_handoff_enabled?: boolean })
+      .human_handoff_enabled === true;
+
+  const actionContext =
+    typeof update.update_id === "number"
+      ? {
+          channel: "telegram" as const,
+          connectionId: connection.id,
+          customerExternalId: String(senderId ?? chatId),
+          conversationId: String(chatId),
+          deliveryId: `telegram-update:${update.update_id}`,
+          customerUsername: senderUsername,
+          customerDisplayName: senderFirstName,
+        }
+      : undefined;
+
+  if (actionContext) {
+    const confirmation = await withTelegramProgress({
+      chatId,
+      token,
+      task: (onProgress) =>
+        handleActionConfirmation({
+          onProgress,
+          context: {
+            ...actionContext,
+            userId: connection.user_id,
+            customerMessage: text,
+          },
+          message: text,
+        }),
+    });
+    if (confirmation.handled) {
+      const replyText =
+        confirmation.text ?? "امکان انجام این درخواست در حال حاضر نیست.";
+      const sent = await sendToCustomer({ chat_id: chatId, text: replyText });
+      await recordChatTurns({
+        connectionId: connection.id,
+        chatId,
+        turns: [
+          { role: "user", text },
+          { role: "assistant", text: replyText },
+        ],
+      });
+      return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+    }
+  }
+
+  // Explicit request to reach a human. Detected before any LLM call, so we
+  // don't spend a completion on a message that is asking to be escalated. Only
+  // acts when handoff is enabled; otherwise it falls through to a normal reply.
+  if (handoffEnabled && customerRequestedHuman(text)) {
+    const conversation = await upsertConversationForCustomer({
+      channel: "telegram",
+      connectionId: connection.id,
+      userId: connection.user_id,
+      customerExternalId: String(senderId ?? chatId),
+      customerUsername: senderUsername,
+      customerDisplayName: senderFirstName,
+      messageText: text,
+      queuedReason: "customer_request",
+    });
+    await sendAskAdminPrompt({
+      chatId,
+      conversationId: conversation.id,
+      prefaceText: null,
+      token,
+    });
+    return NextResponse.json({ ok: true });
+  }
+
+  const privateIdentity = {
+    channel: "telegram" as const,
+    connectionId: connection.id,
+    customerExternalId: String(senderId ?? chatId),
+  };
+  const privateVerification = await handlePrivateVerificationMessage({
+    identity: privateIdentity,
+    message: text,
+    userId: connection.user_id,
+  }).catch(() => {
+    throw new ProcessingFailure("database_unavailable");
+  });
+  if (privateVerification.handled) {
+    if (
+      !privateVerification.verifiedQuestion ||
+      !privateVerification.collectionKey
+    ) {
+      const sent = await sendToCustomer({
+        chat_id: chatId,
+        text: privateVerification.reply,
+      });
+      return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+    }
+    const verifiedSession = await loadChatSession({
+      connectionId: connection.id,
+      chatId,
+    });
+    const verifiedReply = await withTelegramProgress({
+      chatId,
+      token,
+      task: (onProgress) =>
+        generateAssistantReply(
+          privateVerification.verifiedQuestion!,
+          connection.user_id,
+          {
+            channel: "telegram",
+            onProgress,
+            handoffEnabled,
+            history: verifiedSession.turns,
+            privateAccess: privateIdentity,
+            verifiedPrivateCollectionKey: privateVerification.collectionKey,
+            actionContext,
+          },
+        ),
+    });
+    const sent = verifiedReply.text
+      ? await sendAiTextToCustomer(chatId, verifiedReply.text)
+      : await sendToCustomer({
+          chat_id: chatId,
+          text: "امکان بررسی این درخواست در حال حاضر نیست؛ کمی بعد دوباره تلاش کنید.",
+        });
+    return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+  }
+
+  // Short-term memory: the turns of this chat's open session, or nothing at all
+  // when the customer has been quiet longer than the session window.
+  const session = await loadChatSession({
+    connectionId: connection.id,
+    chatId,
+  });
+
+  const aiReply = await withTelegramProgress({
+    chatId,
+    token,
+    task: (onProgress) =>
+      generateAssistantReply(text, connection.user_id, {
+        channel: "telegram",
+        onProgress,
+        handoffEnabled,
+        history: session.turns,
+        privateAccess: privateIdentity,
+        actionContext,
+      }),
+  });
+
+  /**
+   * Store the exchange once the customer has it. Awaited rather than
+   * fire-and-forget: on serverless the request can be frozen the moment we
+   * return, and a dropped write would cost the next message its context.
+   */
+  const remember = (
+    assistantText: string | null,
+    omitCustomerMessage = false,
+  ) =>
+    recordChatTurns({
+      connectionId: connection.id,
+      chatId,
+      turns: [
+        ...(omitCustomerMessage ? [] : [{ role: "user" as const, text }]),
+        ...(assistantText
+          ? [{ role: "assistant" as const, text: assistantText }]
+          : []),
+      ],
+    });
+
+  // aiReply is { text, needsHuman }. When the AI flagged the question as
+  // needing a human AND handoff is enabled, we create a support conversation
+  // (so the transcript is preserved) and offer the customer an inline
+  // "ask admin?" button instead of sending a guess.
+  if (aiReply.needsHuman) {
+    if (!handoffEnabled) {
+      // Handoff is off — never contact an admin. Tell the customer plainly.
+      const sent = await sendToCustomer({
+        chat_id: chatId,
+        text: "متأسفم، پاسخ این سوال را نمی‌دانم.",
+      });
+      await remember(null);
+      return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+    }
+    const conversation = await upsertConversationForCustomer({
+      channel: "telegram",
+      connectionId: connection.id,
+      userId: connection.user_id,
+      customerExternalId: String(senderId ?? chatId),
+      customerUsername: senderUsername,
+      customerDisplayName: senderFirstName,
+      messageText: text,
+      queuedReason: customerRequestedHuman(text)
+        ? "customer_request"
+        : "ai_unknown",
+    });
+    await sendAskAdminPrompt({
+      chatId,
+      conversationId: conversation.id,
+      prefaceText: aiReply.text,
+      token,
+    });
+    await remember(aiReply.text);
+    return NextResponse.json({ ok: true });
+  }
+
+  const delivery = aiReply.retrieval?.businessData?.delivery;
+  const shouldSendCards = Boolean(
+    delivery &&
+      !aiReply.action &&
+      delivery.records.length > 0 &&
+      (delivery.collectionKind === "product" ||
+        delivery.records.some((record) => record.imagePaths.length > 0)),
+  );
+  const shouldSendAiText =
+    Boolean(aiReply.action) ||
+    !shouldSendCards ||
+    aiReply.retrieval?.intent?.knowledgeNeeded !== false;
+  const textSent = !shouldSendAiText
+    ? true
+    : aiReply.text
+      ? aiReply.action?.status === "pending_confirmation" &&
+        aiReply.action.executionId &&
+        UUID_RE.test(aiReply.action.executionId)
+        ? await sendActionConfirmationPrompt({
+            chatId,
+            executionId: aiReply.action.executionId,
+            text: aiReply.text,
+          })
+        : await sendAiTextToCustomer(chatId, aiReply.text)
+      : false;
+  const cards =
+    shouldSendCards && delivery
+      ? await sendBusinessDataCardsToCustomer({ chatId, delivery })
+      : null;
+  const fallbackAttempted = !textSent && !cards;
+  const fallbackSent = fallbackAttempted
+    ? await sendToCustomer({
+        chat_id: chatId,
+        text: "در حال حاضر امکان پاسخ‌گویی هوشمند نیست؛ کمی بعد دوباره تلاش کنید.",
+      })
+    : true;
+  const sent =
+    (textSent || cards?.sent === true || (fallbackAttempted && fallbackSent)) &&
+    (cards?.sent ?? true);
+  await remember(
+    shouldSendAiText ? aiReply.text : (cards?.memoryText ?? aiReply.text),
+    Boolean(aiReply.retrieval?.privateVerification),
+  );
+  return NextResponse.json({ ok: sent }, { status: sent ? 200 : 502 });
+};

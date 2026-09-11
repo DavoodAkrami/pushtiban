@@ -1,3 +1,4 @@
+import { deliver } from "@/lib/ai/processing/delivery";
 import "server-only";
 
 // ---------------------------------------------------------------------------
@@ -50,7 +51,7 @@ export type PersistentMenuItem = { title: string; payload: string };
  */
 const graphFetch = async (
   url: string,
-  init: RequestInit
+  init: RequestInit,
 ): Promise<Response | null> => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -78,7 +79,7 @@ const reportFailure = async (response: Response | null, context: string) => {
 
   const body = await response.text().catch(() => "");
   console.error(
-    `Instagram ${context} failed (${response.status}): ${body.slice(0, 300)}`
+    `Instagram ${context} failed (${response.status}): ${body.slice(0, 300)}`,
   );
   return false;
 };
@@ -101,18 +102,47 @@ const postMessage = async ({
   igUserId: string;
   token: string;
 }) => {
-  const response = await graphFetch(
-    `${GRAPH_HOST}/${GRAPH_VERSION}/${encodeURIComponent(igUserId)}/messages`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
+  // Read receipts/typing are ephemeral and excluded from customer delivery records.
+  if (body.sender_action) {
+    const response = await graphFetch(
+      `${GRAPH_HOST}/${GRAPH_VERSION}/${encodeURIComponent(igUserId)}/messages`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
       },
-      body: JSON.stringify(body),
-    }
-  );
-  return reportFailure(response, context);
+    );
+    return Boolean(response?.ok);
+  }
+  const result = await deliver({
+    channel: "instagram",
+    type: context,
+    request: { igUserId, body },
+    send: async () => {
+      const response = await graphFetch(
+        `${GRAPH_HOST}/${GRAPH_VERSION}/${encodeURIComponent(igUserId)}/messages`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(body),
+        },
+      );
+      if (!response) return { status: 0, accepted: false };
+      const value = await response.json();
+      return {
+        status: response.status,
+        accepted: response.ok && !value.error && Boolean(value.message_id),
+        messageId: value.message_id ?? null,
+      };
+    },
+  });
+  return result.ok;
 };
 
 /**
@@ -375,18 +405,32 @@ export const replyToComment = async ({
     message: Array.from(text).slice(0, INSTAGRAM_COMMENT_MAX_LENGTH).join(""),
   });
 
-  const response = await graphFetch(
-    `${GRAPH_HOST}/${GRAPH_VERSION}/${encodeURIComponent(commentId)}/replies`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Bearer ${token}`,
-      },
-      body: body.toString(),
-    }
-  );
-  return reportFailure(response, "replyToComment");
+  const result = await deliver({
+    channel: "instagram",
+    type: "comment",
+    request: { commentId, message: body.get("message") },
+    send: async () => {
+      const response = await graphFetch(
+        `${GRAPH_HOST}/${GRAPH_VERSION}/${encodeURIComponent(commentId)}/replies`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Authorization: `Bearer ${token}`,
+          },
+          body: body.toString(),
+        },
+      );
+      if (!response) return { status: 0, accepted: false };
+      const value = await response.json();
+      return {
+        status: response.status,
+        accepted: response.ok && !value.error && Boolean(value.id),
+        messageId: value.id ?? null,
+      };
+    },
+  });
+  return result.ok;
 };
 
 // ---- Media -----------------------------------------------------------------
@@ -418,7 +462,7 @@ export const listMedia = async ({
   const url = new URL(`${GRAPH_HOST}/${GRAPH_VERSION}/me/media`);
   url.searchParams.set(
     "fields",
-    "id,caption,media_type,media_url,thumbnail_url,permalink,timestamp"
+    "id,caption,media_type,media_url,thumbnail_url,permalink,timestamp",
   );
   url.searchParams.set("limit", String(limit));
 
@@ -506,7 +550,7 @@ export const putMessengerProfile = async ({
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(profile),
-    }
+    },
   );
   return reportFailure(response, "putMessengerProfile");
 };
@@ -530,7 +574,7 @@ export const subscribeToWebhookFields = async ({
   token: string;
 }) => {
   const url = new URL(
-    `${GRAPH_HOST}/${GRAPH_VERSION}/${encodeURIComponent(igUserId)}/subscribed_apps`
+    `${GRAPH_HOST}/${GRAPH_VERSION}/${encodeURIComponent(igUserId)}/subscribed_apps`,
   );
   url.searchParams.set("subscribed_fields", fields.join(","));
 

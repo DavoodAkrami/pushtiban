@@ -1,3 +1,6 @@
+import { receiveEvent, processEvent } from "@/lib/ai/processing/worker";
+import { previewScope } from "@/lib/ai/runtime/store";
+import type { AssistantResult } from "@/lib/ai/assistant";
 import { NextResponse, type NextRequest } from "next/server";
 import { generateAssistantReply } from "@/lib/ai/assistant";
 import { markdownToTelegramHtml } from "@/lib/telegram/format";
@@ -58,12 +61,14 @@ const hasValidOrigin = (request: NextRequest) => {
   // Next can build request.url from an internal host while the browser uses
   // the public host. Keep the CSRF check strict by allowing only the request
   // host or its trusted proxy equivalent, with the matching protocol.
-  const allowedOrigins = new Set([
-    requestUrl.origin,
-    requestHost && `${requestUrl.protocol}//${requestHost}`,
-    forwardedHost &&
-      `${forwardedProto || requestUrl.protocol}//${forwardedHost}`,
-  ].filter((value): value is string => Boolean(value)));
+  const allowedOrigins = new Set(
+    [
+      requestUrl.origin,
+      requestHost && `${requestUrl.protocol}//${requestHost}`,
+      forwardedHost &&
+        `${forwardedProto || requestUrl.protocol}//${forwardedHost}`,
+    ].filter((value): value is string => Boolean(value)),
+  );
 
   return allowedOrigins.has(originUrl.origin);
 };
@@ -87,7 +92,7 @@ export const POST = async (request: NextRequest) => {
   if (!hasValidOrigin(request)) {
     return NextResponse.json(
       { error: "درخواست معتبر نیست؛ صفحه را تازه کنید." },
-      { status: 403 }
+      { status: 403 },
     );
   }
 
@@ -98,7 +103,7 @@ export const POST = async (request: NextRequest) => {
   if (!user) {
     return NextResponse.json(
       { error: "نشست شما تمام شده؛ دوباره وارد حساب شوید." },
-      { status: 401 }
+      { status: 401 },
     );
   }
 
@@ -108,7 +113,7 @@ export const POST = async (request: NextRequest) => {
   } catch {
     return NextResponse.json(
       { error: "اطلاعات قابل خواندن نیست." },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -120,7 +125,7 @@ export const POST = async (request: NextRequest) => {
   if (question.length > MAX_QUESTION_CHARS) {
     return NextResponse.json(
       { error: "پیام طولانی‌تر از حد مجاز است." },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -139,18 +144,42 @@ export const POST = async (request: NextRequest) => {
           "دستیار خاموش است. برای آزمایش، ابتدا «پاسخ‌گویی هوشمند» را روشن کنید.",
         assistantDisabled: true,
       },
-      { status: 409 }
+      { status: 409 },
     );
   }
 
-  const sessionId = typeof body.sessionId === "string" && /^[a-f0-9-]{36}$/i.test(body.sessionId) ? body.sessionId : crypto.randomUUID();
+  const sessionId =
+    typeof body.sessionId === "string" &&
+    /^[a-f0-9-]{36}$/i.test(body.sessionId)
+      ? body.sessionId
+      : crypto.randomUUID();
   const handoffEnabled = settings?.human_handoff_enabled === true;
 
-  const result = await generateAssistantReply(question, user.id, {
-    handoffEnabled,
-    previewSession: sessionId,
-    history: parseHistory(body.history),
-  });
+  let completed: AssistantResult | undefined;
+  try {
+    const id = await receiveEvent({
+      scope: previewScope(user.id, sessionId),
+      externalId: crypto.randomUUID(),
+      type: "preview",
+      payload: {},
+      replayable: false,
+    });
+    await processEvent(id, async () => {
+      completed = await generateAssistantReply(question, user.id, {
+        handoffEnabled,
+        previewSession: sessionId,
+        history: parseHistory(body.history),
+      });
+    });
+  } catch {
+    /* Persistence fails closed; the owner can retry. */
+  }
+  if (!completed)
+    return NextResponse.json(
+      { error: "پردازش در دسترس نیست؛ لطفاً دوباره تلاش کنید." },
+      { status: 503 },
+    );
+  const result = completed;
   const retrieval = result.retrieval
     ? {
         ...result.retrieval,
@@ -172,7 +201,7 @@ export const POST = async (request: NextRequest) => {
           "دستیار در دسترس نیست — سهمیهٔ این ماه پر شده یا مدیر سایت هوش مصنوعی را موقتاً خاموش کرده است.",
         blocked: true,
       },
-      { status: 429 }
+      { status: 429 },
     );
   }
 

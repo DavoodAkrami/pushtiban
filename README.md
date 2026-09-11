@@ -63,7 +63,8 @@ declined the message. The pipeline is the same on every channel:
   Two gates in addition to the master switch: `ai_assistant_settings.instagram_enabled`
   (owner, defaults true) and the platform kill switch in `ai_global_settings`.
   Memory lives in `instagram_chat_sessions`; the 30-minute session window, the
-  turn cap (4 / 600 chars) and the fail-open behaviour are identical to Telegram.
+  turn cap (4 / 600 chars) and best-effort reads are identical to Telegram.
+  Phase 3 memory writes are journaled and fail closed on persistence errors.
   The model writes Markdown; Instagram renders none of it, so the reply is
   flattened to plain text with `markdownToPlainText` (`src/lib/instagram/format.ts`)
   before sending.
@@ -417,7 +418,7 @@ controls cannot authorize a reply or an Action confirmation. The Action server
 rechecks the same global, owner, and channel controls immediately before it
 creates or confirms a mutation; a revoked control fails its pending action.
 Quotas block only new model calls, never a confirmation that has already passed
-those controls. Every completion is logged to `ai_usage_log` by `logAiUsage()`,
+those controls. Every durable completion is reconciled into `ai_usage_log` through its usage reservation; non-runtime diagnostics retain `logAiUsage()`,
 which feeds the admin usage charts and the sidebar's remaining-message count.
 
 Structured database retrieval is not AI usage and creates no token log. The
@@ -553,7 +554,7 @@ and start only when at least 5 seconds remain in the shared deadline. A
 tool-schema failure receives one plain-text retry across all providers, rather
 than repeatedly consuming the remaining budget. Timeouts return a clear
 temporary-delay reply instead of claiming that the customer's message exceeded
-a limit. Database/delivery reconciliation is still Phase 3.
+a limit. Phase 3 adds the persistence and reconciliation boundaries described below.
 Logged actual provider usage is separate from conservative reservations and
 continues in `ai_usage_log`. Exhaustion returns a deterministic Persian retry
 message and a failed event; it cannot silently start another model call.
@@ -566,7 +567,7 @@ feed a future SSE, HTTP-stream or SDK transport without changing orchestration.
 
 Telegram's `progress.ts` consumes that display text, sends one message, and edits
 it at most once per 900 ms during normal progress. Fast transitions are coalesced;
-terminal failure is always displayed. Successful progress is removed before the
+terminal failure is displayed during processing. Progress is removed before the
 existing final delivery path sends text, cards or confirmation buttons. Progress
 transport failures never suppress canonical results. This AI flow uses no typing
 indicator. Instagram retains its own presentation. Preview returns the safe
@@ -579,6 +580,86 @@ Run `npm run test:ai-harness-phase-2` for deterministic runtime/channel tests.
 PGlite 0.5.8 installed separately (see `docs/ai-harness-phase-2.md`). The SQL file
 is not deployed by these tests. Apply it in the SQL Editor and confirm before
 using this branch with live channels.
+
+### Phase 3 durable processing (local; deployment and approval pending)
+
+`supabase/ai-processing.sql` and `src/lib/ai/processing/` add a service-only
+processing layer around the existing planner/runtime. The webhook routes delegate
+to `src/lib/telegram/processor.ts` and `src/lib/instagram/processor.ts`. Authenticated
+receipts are inserted before returning HTTP 200; persistence failure returns a
+non-success response. Next.js `after()` starts a first attempt after acknowledgement.
+It is an accelerator, not a durable queue or a guarantee that background work finishes.
+
+The hierarchy is `ai_runtime_conversations` → `ai_inbound_events` →
+`ai_processing_runs` → `ai_run_events`, `ai_outbound_deliveries` and
+`ai_usage_reservations`. Runs also reference `business_action_executions`.
+Receipt uniqueness is `(channel, connection_id, external_id)`. Event states are
+`ready`, `processing`, `retryable_failed`, `completed`, `permanently_failed` and
+`delivery_unknown`. A 150-second lease with an unpredictable owner token fences
+state changes and internal mutation transactions. Claims lock only the relevant
+conversation. Telegram update IDs order queued arrivals; a late lower update
+cannot overwrite an already-started later update. Instagram uses database receipt
+sequence because its message IDs do not prove message order. No claim promises
+ordering for events that have not arrived yet.
+
+Each event has at most four worker attempts over 30 minutes. Transient failures
+use 5/10/20-second exponential delays with 20% jitter. Unresolved Action executions
+wait 150 seconds so their existing two-minute stale-execution policy can apply.
+Authorization, validation, expiry, exhausted budgets and unknown non-idempotent
+sends do not trigger blind retries. Completed public responses are checkpointed;
+a delivery retry does not call the model again. TaskDraft saves, chat-memory writes
+and customer inbox appends use fenced transactional journals to prevent duplicate
+transitions. Recovery rechecks current controls, confirmation and business rules.
+
+The original `RunBudget` limits and absolute 55-second deadline survive recovery.
+Counters and conservative token reservations are written **before** provider or
+capability work. A restart does not reset them. After the deadline, new AI work
+terminates with the existing deterministic timeout reply. Previously completed
+answers and an already-linked, idempotent Action can be reconciled without a fresh
+model budget. No arbitrary model instructions or hidden reasoning are resumed.
+
+Outbound records use `pending`, `sending`, `delivered`, `retryable_failed`,
+`permanently_failed` and `unknown`. Network failures, malformed acknowledgements,
+and uncertain server errors become `unknown` for non-idempotent sends. A known
+429 can retry; known 4xx rejection permits the existing formatting/card fallback.
+Telegram/Instagram do not expose a reliable general lookup by our delivery ID,
+so ambiguous sends stay unresolved. Telegram progress creation stores its message
+ID; retries reuse that ID. Normal completion removes progress before the answer.
+Known terminal progress has a separate bounded cleanup claim. A progress send
+whose message ID was never acknowledged cannot be reliably deleted.
+
+Usage reservations serialize on the business-limit row. The existing billing
+unit is preserved: successful `chat` completions count as messages; `intent`
+completions consume tokens. Provider-reported input, cached input where available,
+and output are reconciled atomically into the reservation and `ai_usage_log`.
+Missing measurements are null/unknown, never invented zeros. An unmeasured call
+retains its conservative reservation for quota admission. Embeddings have separate
+run-linked measurements and do not silently change the existing billing unit.
+Live and preview runs both use this boundary; quota/database failure fails closed.
+No extra model call or prompt content is added for persistence.
+
+Minimized replay inputs and completed public responses are encrypted with the
+existing server encryption helper. Verification submissions detected by an active
+challenge, standalone codes, or secret-labelled text are omitted and processed
+from the immediate request only. Such input is not automatically replayed after
+interruption; it requires a fresh customer submission. Private answers are not
+cached for replay. Operational trace rows contain codes, timings/references and
+provider/model/capability identifiers, not message content, credentials, prompts,
+private proof values or hidden reasoning. Recovery cleanup removes payloads and
+checkpoints after 30 minutes, while deduplication tombstones and safe audit metadata
+remain. Known progress cleanup retains encrypted routing data until resolved or
+its four attempts are exhausted.
+
+**Deployment prerequisite:** manually run `supabase/ai-processing.sql`, configure
+server-only `CRON_SECRET`, and arrange a scheduler to call
+`GET /api/internal/ai-recovery` with `Authorization: Bearer <CRON_SECRET>`.
+Each invocation scans at most 30 due events and processes one, plus one terminal
+progress cleanup. No scheduler or production schema has been installed by this
+branch. Scheduler cadence bounds recovery latency and backlog throughput.
+
+See `docs/ai-harness-phase-3.md` for test evidence, limitations, SQL queries and
+manual acceptance steps. Run `npm run test:ai-harness-phase-3` and
+`npm run test:ai-processing-sql` using the same external PGlite dependency as Phase 2.
 
 ## Notes
 

@@ -711,7 +711,7 @@ try {
   );
   assert(
     !fs
-      .readFileSync("src/app/api/telegram/webhook/[botId]/route.ts", "utf8")
+      .readFileSync("src/lib/telegram/processor.ts", "utf8")
       .includes('action: "typing"'),
   );
   console.log(

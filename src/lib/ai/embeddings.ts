@@ -1,3 +1,5 @@
+import { reserveUsage, reconcileUsage } from "./processing/usage";
+import { currentRun, tokenUpperBound } from "./runtime/budget";
 import "server-only";
 import { reserveEmbedding, requestTimeout } from "./runtime/budget";
 
@@ -15,6 +17,7 @@ const EMBEDDING_TIMEOUT_MS = 8_000;
 
 type EmbeddingResponse = {
   data: Array<{ embedding?: number[] }>;
+  usage?: { prompt_tokens?: number; total_tokens?: number };
 };
 
 /**
@@ -69,13 +72,34 @@ export const embedQuery = async (text: string): Promise<number[] | null> => {
   if (!client) return null;
 
   reserveEmbedding(text);
-  const response = (await client.embeddings.create({
-    model: EMBEDDINGS_MODEL,
-    input: text,
-    dimensions: EMBEDDINGS_DIMENSIONS,
-  }, { maxRetries: 0, timeout: requestTimeout(EMBEDDING_TIMEOUT_MS) })) as unknown as EmbeddingResponse;
+  const reservation = await reserveUsage(
+    currentRun(),
+    "embedding",
+    "openai",
+    EMBEDDINGS_MODEL,
+    tokenUpperBound(text),
+  );
+  try {
+    const response = (await client.embeddings.create(
+      {
+        model: EMBEDDINGS_MODEL,
+        input: text,
+        dimensions: EMBEDDINGS_DIMENSIONS,
+      },
+      { maxRetries: 0, timeout: requestTimeout(EMBEDDING_TIMEOUT_MS) },
+    )) as unknown as EmbeddingResponse;
 
-  return response.data?.[0]?.embedding ?? null;
+    await reconcileUsage(
+      reservation,
+      response.usage?.prompt_tokens === undefined
+        ? null
+        : { prompt_tokens: response.usage.prompt_tokens, completion_tokens: 0 },
+    );
+    return response.data?.[0]?.embedding ?? null;
+  } catch (error) {
+    await reconcileUsage(reservation, null);
+    throw error;
+  }
 };
 
 /**
@@ -83,7 +107,7 @@ export const embedQuery = async (text: string): Promise<number[] | null> => {
  * up to 2048 inputs per request; we keep it conservative.
  */
 export const embedChunks = async (
-  chunks: string[]
+  chunks: string[],
 ): Promise<number[][] | null> => {
   if (!chunks.length) return [];
   const client = getEmbeddingsClient();

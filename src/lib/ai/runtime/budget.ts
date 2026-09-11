@@ -1,3 +1,4 @@
+import { updateProcessing } from "../processing/context";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type {
@@ -145,9 +146,7 @@ export const recordModelUsage = (usage?: {
 export const requestTimeout = (maximum: number) => {
   const run = currentRun();
   checkDeadline(run);
-  return run
-    ? Math.min(maximum, remainingRunMs(run))
-    : maximum;
+  return run ? Math.min(maximum, remainingRunMs(run)) : maximum;
 };
 export const emitProgress = async (
   code: ProgressCode,
@@ -168,6 +167,12 @@ export const emitProgress = async (
     timestamp: new Date().toISOString(),
   };
   active.events.push(event);
+  // Operational persistence is authoritative; presentation remains best-effort.
+  await updateProcessing({
+    runtime: active.run,
+    stage: code,
+    ...(operation ? { capability: operation } : {}),
+  });
   // A presentation failure must never suppress canonical results.
   try {
     await active.sink?.(event);

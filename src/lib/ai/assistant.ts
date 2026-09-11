@@ -1,3 +1,7 @@
+import {
+  rethrowProcessingFailure,
+  classifyFailure,
+} from "./processing/failures";
 import "server-only";
 import { boundedCompletion } from "./runtime/provider";
 import {
@@ -6,7 +10,11 @@ import {
   requestTimeout,
   RunBudgetExceeded,
 } from "./runtime/budget";
-import { CONTEXT_POLICY, taskContext, buildConversationContext } from "./runtime/context";
+import {
+  CONTEXT_POLICY,
+  taskContext,
+  buildConversationContext,
+} from "./runtime/context";
 import { runConversation, runtimeConversation } from "./runtime/orchestrator";
 import { handleRuntimeAction } from "./runtime/action";
 import { conversationScope, previewScope } from "./runtime/store";
@@ -72,7 +80,7 @@ const CHANNEL_MESSAGE_MAX_LENGTH: Record<AssistantChannel, number> = {
 /** Used when RAG retrieval fails — persona still applies, context does not. */
 const buildFallbackSystemPrompt = (
   persona: BusinessPersona,
-  options: { continuingSession?: boolean }
+  options: { continuingSession?: boolean },
 ): string =>
   [
     buildPersonaIdentity(persona),
@@ -98,7 +106,8 @@ type Provider = {
 };
 
 const isTimeoutError = (error: unknown) =>
-  error instanceof Error && /(?:timed out|timeout|aborted|deadline)/iu.test(error.message);
+  error instanceof Error &&
+  /(?:timed out|timeout|aborted|deadline)/iu.test(error.message);
 
 const completionAbort = () => {
   const controller = new AbortController();
@@ -125,17 +134,20 @@ const requestCompletion = async ({
   const { controller, timeout } = completionAbort();
 
   try {
-    const completion = await boundedCompletion(client,
+    const completion = await boundedCompletion(
+      client,
       {
         model,
         messages,
         max_tokens: 700,
         stream: false,
       },
-      { signal: controller.signal }
+      { signal: controller.signal },
+      false,
+      usage?.provider,
     );
     if (usage) {
-      void logAiUsage({
+      await logAiUsage({
         userId: usage.userId,
         kind: "chat",
         provider: usage.provider,
@@ -174,7 +186,8 @@ const requestCompletionWithEscalation = async ({
   const { controller, timeout } = completionAbort();
 
   try {
-    const completion = await boundedCompletion(client,
+    const completion = await boundedCompletion(
+      client,
       {
         model,
         messages,
@@ -183,11 +196,13 @@ const requestCompletionWithEscalation = async ({
         max_tokens: 700,
         stream: false,
       },
-      { signal: controller.signal }
+      { signal: controller.signal },
+      false,
+      usage?.provider,
     );
 
     if (usage) {
-      void logAiUsage({
+      await logAiUsage({
         userId: usage.userId,
         kind: "chat",
         provider: usage.provider,
@@ -204,10 +219,10 @@ const requestCompletionWithEscalation = async ({
     if (toolCalls && toolCalls.length > 0) {
       const functionCalls = toolCalls.filter(
         (call): call is ChatCompletionMessageFunctionToolCall =>
-          call.type === "function"
+          call.type === "function",
       );
       const escalateCall = functionCalls.find(
-        (call) => call.function?.name === "escalate_to_admin"
+        (call) => call.function?.name === "escalate_to_admin",
       );
       if (escalateCall) {
         let preface: string | null = null;
@@ -224,7 +239,8 @@ const requestCompletionWithEscalation = async ({
     }
 
     const content = choice.message.content?.trim();
-    if (content) return { text: truncate(content, maxLength), needsHuman: false };
+    if (content)
+      return { text: truncate(content, maxLength), needsHuman: false };
     return null;
   } finally {
     clearTimeout(timeout);
@@ -297,7 +313,14 @@ export type AssistantResult = {
   action?: {
     key?: string;
     executionId?: string;
-    status: "collecting" | "pending_confirmation" | "executing" | "succeeded" | "failed" | "expired" | "rejected";
+    status:
+      | "collecting"
+      | "pending_confirmation"
+      | "executing"
+      | "succeeded"
+      | "failed"
+      | "expired"
+      | "rejected";
   };
   /**
    * What retrieval found for this message. The channel webhooks ignore it — it
@@ -375,11 +398,8 @@ const generateReply = async (
     history?: ChatTurn[];
     privateAccess?: PrivateAccessIdentity;
     verifiedPrivateCollectionKey?: string | null;
-    actionContext?: Omit<
-      ActionExecutionContext,
-      "userId" | "customerMessage"
-    >;
-  } = {}
+    actionContext?: Omit<ActionExecutionContext, "userId" | "customerMessage">;
+  } = {},
 ): Promise<AssistantResult> => {
   const maxLength = CHANNEL_MESSAGE_MAX_LENGTH[options.channel ?? "telegram"];
 
@@ -393,14 +413,16 @@ const generateReply = async (
   const previousUserMessage = [...history]
     .reverse()
     .find((turn) => turn.role === "user")?.text;
-  const actionConversation = draftContext || (history.length
-    ? JSON.stringify(
-        history.slice(-4).map((turn) => ({
-          role: turn.role,
-          text: turn.text.slice(0, 240),
-        }))
-      ).slice(0, 1_200)
-    : undefined);
+  const actionConversation =
+    draftContext ||
+    (history.length
+      ? JSON.stringify(
+          history.slice(-4).map((turn) => ({
+            role: turn.role,
+            text: turn.text.slice(0, 240),
+          })),
+        ).slice(0, 1_200)
+      : undefined);
   const customerIntentContext = [
     ...history
       .filter((turn) => turn.role === "user")
@@ -417,7 +439,9 @@ const generateReply = async (
   // every single message.
   const escalationAvailable = options.handoffEnabled !== false;
   const actionCapabilities = await describeAvailableActions({
-    actionContextAvailable: Boolean(options.actionContext || options.previewSession),
+    actionContextAvailable: Boolean(
+      options.actionContext || options.previewSession,
+    ),
     handoffEnabled: options.handoffEnabled === true,
     userId,
   });
@@ -437,7 +461,7 @@ const generateReply = async (
   if (userId) {
     const limits = await checkAiLimits(userId);
     if (!limits.allowed) {
-      console.warn(`AI reply blocked for ${userId}: ${limits.reason}`);
+      console.warn(`AI reply blocked: ${limits.reason}`);
       return { text: null, needsHuman: false };
     }
   }
@@ -457,15 +481,12 @@ const generateReply = async (
           verifiedPrivateCollectionKey: options.verifiedPrivateCollectionKey,
           actionCapabilities: actionCapabilities || undefined,
         }).catch((error: unknown) => {
+          rethrowProcessingFailure(error);
           if (error instanceof RunBudgetExceeded) throw error;
           retrievalTimedOut ||= isTimeoutError(error);
-          const message =
-            error instanceof Error
-              ? error.message.slice(0, 200)
-              : "Unknown error";
           console.error(
             "Assistant RAG retrieval failed; using fallback:",
-            message
+            classifyFailure(error),
           );
           return null;
         })
@@ -485,10 +506,22 @@ const generateReply = async (
     userId &&
     (options.actionContext || options.previewSession)
   ) {
-    const action = await handleRuntimeAction(retrieval.actionRequest, {
-      ...(options.actionContext ?? { channel: "telegram", connectionId: userId, customerExternalId: userId, conversationId: options.previewSession!, deliveryId: `preview:${crypto.randomUUID()}` }),
-      userId, customerMessage: question, customerIntentContext,
-    }, Boolean(options.previewSession));
+    const action = await handleRuntimeAction(
+      retrieval.actionRequest,
+      {
+        ...(options.actionContext ?? {
+          channel: "telegram",
+          connectionId: userId,
+          customerExternalId: userId,
+          conversationId: options.previewSession!,
+          deliveryId: `preview:${crypto.randomUUID()}`,
+        }),
+        userId,
+        customerMessage: question,
+        customerIntentContext,
+      },
+      Boolean(options.previewSession),
+    );
     if (action.handled) {
       return {
         text: action.text,
@@ -511,7 +544,7 @@ const generateReply = async (
 
   const relevantActionFollowUp = describeRelevantActionFollowUp(
     actionCapabilities,
-    customerIntentContext
+    customerIntentContext,
   );
   if (relevantActionFollowUp) {
     systemPrompt = [
@@ -526,7 +559,12 @@ const generateReply = async (
 
   // The session's recent turns sit between the system prompt and the new
   // question, so the model reads them as what they are: earlier messages.
-  const messages: ChatCompletionMessageParam[] = buildConversationContext(systemPrompt, history, safeQuestion, runtimeConversation()?.draft ?? null);
+  const messages: ChatCompletionMessageParam[] = buildConversationContext(
+    systemPrompt,
+    history,
+    safeQuestion,
+    runtimeConversation()?.draft ?? null,
+  );
 
   // The site admin can pin one chat model in /dashboard/admin/settings. It
   // overrides the env var for whichever provider owns that model id, and that
@@ -556,7 +594,7 @@ const generateReply = async (
   ];
   if (pinnedProvider) {
     providers.sort((a, b) =>
-      a.id === pinnedProvider ? -1 : b.id === pinnedProvider ? 1 : 0
+      a.id === pinnedProvider ? -1 : b.id === pinnedProvider ? 1 : 0,
     );
   }
 
@@ -581,11 +619,13 @@ const generateReply = async (
         });
         if (text) return { text, needsHuman: false, retrieval };
       } catch (error) {
+        rethrowProcessingFailure(error);
         if (error instanceof RunBudgetExceeded) throw error;
         providerTimedOut ||= isTimeoutError(error);
-        const message =
-          error instanceof Error ? error.message.slice(0, 200) : "Unknown error";
-        console.error(`AI provider ${provider.id} failed:`, message);
+        console.error(
+          `AI provider ${provider.id} failed:`,
+          classifyFailure(error),
+        );
       }
       continue;
     }
@@ -600,13 +640,12 @@ const generateReply = async (
         usage,
       });
     } catch (error) {
+      rethrowProcessingFailure(error);
       if (error instanceof RunBudgetExceeded) throw error;
       providerTimedOut ||= isTimeoutError(error);
-      const message =
-        error instanceof Error ? error.message.slice(0, 200) : "Unknown error";
       console.error(
         `AI provider ${provider.id} failed with tools:`,
-        message
+        classifyFailure(error),
       );
       // Some models reject the `tools` parameter entirely. One plain-text
       // retry across all providers preserves a useful fallback without
@@ -625,6 +664,7 @@ const generateReply = async (
         });
         if (text) return { text, needsHuman: false, retrieval };
       } catch (error) {
+        rethrowProcessingFailure(error);
         if (error instanceof RunBudgetExceeded) throw error;
         providerTimedOut ||= isTimeoutError(error);
       }
@@ -645,9 +685,24 @@ const generateReply = async (
 };
 
 /** Shared orchestration entry point for live channels and isolated preview. */
-export const generateAssistantReply = async (...args: Parameters<typeof generateReply>): Promise<AssistantResult> => {
+export const generateAssistantReply = async (
+  ...args: Parameters<typeof generateReply>
+): Promise<AssistantResult> => {
   const [question, userId, options = {}] = args;
-  const scope = userId && options.actionContext ? conversationScope({ ...options.actionContext, userId, customerMessage: question })
-    : userId && options.previewSession ? previewScope(userId, options.previewSession) : undefined;
-  return runConversation({ scope, message: question, onProgress: options.onProgress, execute: () => generateReply(...args) });
+  const scope =
+    userId && options.actionContext
+      ? conversationScope({
+          ...options.actionContext,
+          userId,
+          customerMessage: question,
+        })
+      : userId && options.previewSession
+        ? previewScope(userId, options.previewSession)
+        : undefined;
+  return runConversation({
+    scope,
+    message: question,
+    onProgress: options.onProgress,
+    execute: () => generateReply(...args),
+  });
 };

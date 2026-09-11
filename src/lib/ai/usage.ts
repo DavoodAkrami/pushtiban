@@ -1,3 +1,4 @@
+import { currentProcessing } from "./processing/context";
 import "server-only";
 
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -5,8 +6,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 // ---------------------------------------------------------------------------
 // Platform-wide AI settings + per-business usage/limits.
 // Backed by supabase/admin.sql (ai_global_settings, ai_usage_log,
-// ai_business_limits). Every read here FAILS OPEN with defaults so the
-// assistant keeps working before the SQL script has been run.
+// ai_business_limits). Reporting can use defaults; quota admission fails closed.
 // ---------------------------------------------------------------------------
 
 export type GlobalAiSettings = {
@@ -100,6 +100,7 @@ export const logAiUsage = async ({
   model: string;
   usage: UsageTokens | null | undefined;
 }): Promise<void> => {
+  if (currentProcessing()) return; // The provider boundary already reconciled this run atomically.
   const prompt = Math.max(0, Math.floor(usage?.prompt_tokens ?? 0));
   const completion = Math.max(0, Math.floor(usage?.completion_tokens ?? 0));
   const total = Math.max(
@@ -276,7 +277,7 @@ export const getUsageSeries = async ({
 export type AiLimitCheck = {
   allowed: boolean;
   /** Which gate rejected the call — for logging only, never user-facing. */
-  reason: "blocked" | "tokens" | "messages" | null;
+  reason: "blocked" | "tokens" | "messages" | "unavailable" | null;
 };
 
 /** First instant of the current calendar month (UTC). */
@@ -390,19 +391,19 @@ export const getBusinessUsageSnapshot = async (
 };
 
 /**
- * Check whether a business may make another AI call this month. Fails open:
- * missing tables / RPC errors allow the call rather than silencing every bot.
+ * Cheap admission check. Missing quota data fails closed. The durable provider
+ * boundary additionally reserves quota atomically immediately before each call.
  */
 export const checkAiLimits = async (userId: string): Promise<AiLimitCheck> => {
   try {
     const admin = createAdminClient();
-    const { data: limits } = await admin
+    const { data: limits, error: limitsError } = await admin
       .from("ai_business_limits")
       .select("monthly_token_limit, monthly_message_limit, ai_blocked")
       .eq("user_id", userId)
       .maybeSingle();
 
-    if (!limits) return { allowed: true, reason: null };
+    if (limitsError || !limits) return { allowed: false, reason: "unavailable" };
     if (limits.ai_blocked === true) return { allowed: false, reason: "blocked" };
 
     const tokenLimit = limits.monthly_token_limit as number | null;
@@ -411,10 +412,11 @@ export const checkAiLimits = async (userId: string): Promise<AiLimitCheck> => {
       return { allowed: true, reason: null };
     }
 
-    const { data: totals } = await admin.rpc("ai_usage_totals", {
+    const { data: totals, error: totalsError } = await admin.rpc("ai_usage_totals", {
       for_user: userId,
       since: monthStartIso(),
     });
+    if (totalsError || !totals) return { allowed: false, reason: "unavailable" };
     const row = Array.isArray(totals) ? totals[0] : totals;
     const usedTokens = Number(row?.total_tokens ?? 0);
     const usedMessages = Number(row?.chat_count ?? 0);
@@ -427,6 +429,6 @@ export const checkAiLimits = async (userId: string): Promise<AiLimitCheck> => {
     }
     return { allowed: true, reason: null };
   } catch {
-    return { allowed: true, reason: null };
+    return { allowed: false, reason: "unavailable" };
   }
 };

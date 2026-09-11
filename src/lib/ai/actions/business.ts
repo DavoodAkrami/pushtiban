@@ -1,3 +1,4 @@
+import { currentProcessing, processingRpc, leaseArgs, assertLease } from "../processing/context";
 import "server-only";
 
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -769,6 +770,8 @@ const internalRpc = async (
     | "business_data_cancel_action",
   parameters: Record<string, unknown>
 ) => {
+  if (currentProcessing() && name !== "business_data_check_availability_action")
+    return processingRpc<Record<string, unknown>>("ai_processing_mutate", { ...leaseArgs(), p_operation: name, p_arguments: parameters });
   const { data, error } = await createAdminClient().rpc(name, parameters);
   if (error || !isPlainObject(data)) {
     throw new Error("Internal Business Data action failed.");
@@ -997,6 +1000,7 @@ const createReservationWrite = async (
   }
   const source = externalSourceFor(configuration);
   const credentials = await credentialsFor(context, configuration);
+  await assertLease();
   const existing = await existingActionWrite(context, configuration, credentials);
   if (existing) return { reference: existing, status: "created" };
   const availabilityConfiguration = await resolveBusinessActionConfiguration(
@@ -1318,6 +1322,7 @@ const createOrderWrite = async (
   }
   const source = externalSourceFor(configuration);
   const credentials = await credentialsFor(context, configuration);
+  await assertLease();
   const existing = await existingActionWrite(context, configuration, credentials);
   if (existing) {
     return {
@@ -1555,6 +1560,7 @@ const cancelWrite = (actionKey: "cancel_reservation" | "cancel_order") =>
       throw new Error("Cancellation mapping unavailable.");
     }
     const credentials = await credentialsFor(context, configuration);
+    await assertLease();
     await updateSupabaseActionRow({
       credentials,
       tableName: source.tableName,

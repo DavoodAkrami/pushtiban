@@ -10,8 +10,8 @@ const read = (...segments) =>
 const sql = read("supabase", "business-data.sql");
 const privateAccess = read("src", "lib", "business-data", "private-access.ts");
 const rag = read("src", "lib", "ai", "rag.ts");
-const telegram = read("src", "app", "api", "telegram", "webhook", "[botId]", "route.ts");
-const instagram = read("src", "app", "api", "instagram", "webhook", "route.ts");
+const telegram = read("src", "lib", "telegram", "processor.ts");
+const instagram = read("src", "lib", "instagram", "processor.ts");
 
 const cases = [
   "correct order + correct phone",

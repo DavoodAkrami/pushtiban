@@ -571,21 +571,10 @@ const connectorSource = read("src", "lib", "business-data", "supabase-connector.
 const actionPanelSource = read("src", "components", "dashboard", "action-settings-panel.tsx");
 const assistantSource = read("src", "lib", "ai", "assistant.ts");
 const telegramSource = read(
-  "src",
-  "app",
-  "api",
-  "telegram",
-  "webhook",
-  "[botId]",
-  "route.ts"
+  "src", "lib", "telegram", "processor.ts"
 );
 const instagramSource = read(
-  "src",
-  "app",
-  "api",
-  "instagram",
-  "webhook",
-  "route.ts"
+  "src", "lib", "instagram", "processor.ts"
 );
 
 assert.match(registrySource, /key: "create_support_request"/);

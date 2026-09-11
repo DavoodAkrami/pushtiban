@@ -1,3 +1,4 @@
+import { currentProcessing, leaseArgs, operationKey, processingRpc } from "./processing/context";
 import "server-only";
 
 import { decryptSecret } from "@/lib/crypto/secret-box";
@@ -228,6 +229,10 @@ export const upsertConversationForCustomer = async ({
   queuedReason: SupportConversationRow["queued_reason"];
   actionExecutionId?: string;
 }): Promise<SupportConversationRow> => {
+  if (currentProcessing()) return processingRpc<SupportConversationRow>("ai_processing_inbox", {
+    ...leaseArgs(), p_key: operationKey("inbox"), p_customer: customerExternalId, p_text: messageText,
+    p_reason: queuedReason, p_username: customerUsername ?? null, p_display: customerDisplayName ?? null, p_execution: actionExecutionId ?? null,
+  });
   const existing = await findOpenConversation({
     channel,
     connectionId,

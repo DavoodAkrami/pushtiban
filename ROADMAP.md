@@ -1,5 +1,26 @@
 # نقشهٔ راه محصول — Pushtiban Roadmap
 
+## AI harness Phase 3 — durable processing (local implementation; approval pending)
+
+Implemented and locally validated on `codex/ai-harness-phase-3`; the items remain
+unchecked until deployment and manual channel acceptance. See
+`docs/ai-harness-phase-3.md` for evidence, limitations and the deployment checklist.
+
+- [ ] Persist minimized inbound events before acknowledging Telegram/Instagram;
+      deduplicate with database keys and process through bounded recoverable claims.
+- [ ] Serialize each conversation, fence expired workers, retain TaskDraft CAS,
+      and define late-event ordering without claiming impossible network ordering.
+- [ ] Persist run budgets before paid work, safe checkpoints, action references,
+      sanitized stage traces, and bounded transient retry/backoff.
+- [ ] Record each outbound operation independently, recover known Telegram
+      progress IDs, and leave ambiguous sends unresolved without blind resends.
+- [ ] Atomically reserve existing token/chat quotas, reconcile measured provider
+      usage, and retain conservative reservations for unknown usage.
+- [ ] Add an authenticated bounded recovery endpoint, retention cleanup, local
+      database/crash/concurrency regression tests, cost/latency evidence, and a
+      Phase 3 report with deployment and manual acceptance instructions.
+
+
 This is the product source of truth. Work like a product manager: **before
 building, add the feature here; when it ships (built + verified), tick it.**
 Keep entries short and user-facing — implementation detail belongs in the PR,

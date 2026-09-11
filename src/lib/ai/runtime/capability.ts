@@ -1,3 +1,5 @@
+import { assertLease, persistBudget, trace } from "../processing/context";
+import { currentRun } from "./budget";
 import type { AgentDecision, CapabilityContract } from "./contracts";
 import { checkDeadline, emitProgress, takeStep } from "./budget";
 /** The runtime, never the model, owns capability authorization and termination. */
@@ -10,8 +12,12 @@ export const invokeCapability = async <I, O>(
   if (!parsed.success || !(await contract.authorize()))
     return contract.safeFailure;
   checkDeadline();
+  await persistBudget(currentRun());
+  await assertLease();
   await emitProgress("tool_started", contract.progress);
+  await trace("capability_started", { capability: contract.name });
   const result = await contract.execute(parsed.data);
+  await trace("capability_completed", { capability: contract.name });
   await emitProgress("tool_completed", contract.progress);
   return result;
 };

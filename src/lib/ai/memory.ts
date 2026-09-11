@@ -1,3 +1,5 @@
+import { currentProcessing, leaseArgs, operationKey, processingRpc } from "./processing/context";
+import { rethrowProcessingFailure } from "./processing/failures";
 import "server-only";
 
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -204,6 +206,10 @@ export const recordChatTurns = async ({
       })),
     ].slice(-STORED_MAX_TURNS);
 
+    if (currentProcessing()) {
+      await processingRpc("ai_processing_memory", { ...leaseArgs(), p_key: operationKey("memory"), p_chat: String(chatId), p_turns: next });
+      return;
+    }
     await admin.from(table).upsert(
       {
         [connectionColumn]: connectionId,
@@ -213,7 +219,8 @@ export const recordChatTurns = async ({
       },
       { onConflict: `${connectionColumn},${chatColumn}` }
     );
-  } catch {
+  } catch (error) {
+    rethrowProcessingFailure(error);
     // Memory is an optimization; never let it break the conversation.
   }
 };

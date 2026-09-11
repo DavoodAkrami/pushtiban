@@ -11,13 +11,9 @@ export const createTelegramProgress = (
 ) => {
   let id: number | null = null;
   let lastEdit = 0;
-  let latest: RunProgressEvent | null = null;
-  let failed = false;
   let attempted = false;
   return {
     consume: async (event: RunProgressEvent) => {
-      latest = event;
-      if (event.code === "failed") failed = true;
       try {
         if (!attempted) {
           attempted = true;
@@ -37,10 +33,9 @@ export const createTelegramProgress = (
     finish: async () => {
       if (id === null) return;
       try {
-        if (failed && latest) await transport.edit(id, latest.display_text);
-        else await transport.remove(id);
+        await transport.remove(id);
       } catch {
-        /* Phase 3 owns delivery reconciliation. */
+        /* Durable delivery retains unresolved cleanup for the recovery worker. */
       }
     },
   };
